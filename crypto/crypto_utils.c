@@ -106,7 +106,7 @@ extern uint64_t lzma_crc64_8bchk(const uint8_t *buf, uint64_t size,
 int
 HMAC_CTX_copy(HMAC_CTX *dctx, HMAC_CTX *sctx)
 {
-	if (!EVP_MD_CTX_copy(&dctx->i_ctx, &sctx->i_ctx))
+	if (!EVP_MD_CTX_copy(dctx->i_ctx, sctx->i_ctx))
 		return (0);
 	if (!EVP_MD_CTX_copy(&dctx->o_ctx, &sctx->o_ctx))
 		return (0);
@@ -128,13 +128,12 @@ PKCS5_PBKDF2_HMAC(const char *pass, int passlen,
 	unsigned char digtmp[EVP_MAX_MD_SIZE], *p, itmp[4];
 	int cplen, j, k, tkeylen, mdlen;
 	unsigned long i = 1;
-	HMAC_CTX hctx;
 
 	mdlen = EVP_MD_size(digest);
 	if (mdlen < 0)
 		return 0;
 
-	HMAC_CTX_init(&hctx);
+	HMAC_CTX *hctx = HMAC_CTX_new();
 	p = out;
 	tkeylen = keylen;
 	if(!pass)
@@ -154,10 +153,10 @@ PKCS5_PBKDF2_HMAC(const char *pass, int passlen,
 		itmp[1] = (unsigned char)((i >> 16) & 0xff);
 		itmp[2] = (unsigned char)((i >> 8) & 0xff);
 		itmp[3] = (unsigned char)(i & 0xff);
-		HMAC_Init_ex(&hctx, pass, passlen, digest, NULL);
-		HMAC_Update(&hctx, salt, saltlen);
-		HMAC_Update(&hctx, itmp, 4);
-		HMAC_Final(&hctx, digtmp, NULL);
+		HMAC_Init_ex(hctx, pass, passlen, digest, NULL);
+		HMAC_Update(hctx, salt, saltlen);
+		HMAC_Update(hctx, itmp, 4);
+		HMAC_Final(hctx, digtmp, NULL);
 		memcpy(p, digtmp, cplen);
 		for(j = 1; j < iter; j++)
 		{
@@ -170,7 +169,7 @@ PKCS5_PBKDF2_HMAC(const char *pass, int passlen,
 		++i;
 		p+= cplen;
 	}
-	HMAC_CTX_cleanup(&hctx);
+	HMAC_CTX_free(hctx);
 	return (1);
 }
 #endif
@@ -482,13 +481,12 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 
 	} else if (cksum == CKSUM_SHA256 || cksum == CKSUM_CRC64) {
 		if (cksum_provider == PROVIDER_OPENSSL) {
-			HMAC_CTX *ctx = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
+			HMAC_CTX *ctx = HMAC_CTX_new();
 			if (!ctx) return (-1);
-			HMAC_CTX_init(ctx);
 			HMAC_Init_ex(ctx, cctx->pkey, cctx->keylen, EVP_sha256(), NULL);
 			mctx->mac_ctx = ctx;
 
-			ctx = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
+			ctx = HMAC_CTX_new();
 			if (!ctx) {
 				free(mctx->mac_ctx);
 				return (-1);
@@ -515,13 +513,12 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		}
 	} else if (cksum == CKSUM_SHA512) {
 		if (cksum_provider == PROVIDER_OPENSSL) {
-			HMAC_CTX *ctx = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
+			HMAC_CTX *ctx = HMAC_CTX_new();
 			if (!ctx) return (-1);
-			HMAC_CTX_init(ctx);
 			HMAC_Init_ex(ctx, cctx->pkey, cctx->keylen, EVP_sha512(), NULL);
 			mctx->mac_ctx = ctx;
 
-			ctx = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
+			ctx = HMAC_CTX_new();
 			if (!ctx) {
 				free(mctx->mac_ctx);
 				return (-1);
@@ -716,8 +713,8 @@ hmac_cleanup(mac_ctx_t *mctx)
 
 	} else if (cksum == CKSUM_SHA256 || cksum == CKSUM_SHA512 || cksum == CKSUM_CRC64) {
 		if (cksum_provider == PROVIDER_OPENSSL) {
-			HMAC_CTX_cleanup((HMAC_CTX *)(mctx->mac_ctx));
-			HMAC_CTX_cleanup((HMAC_CTX *)(mctx->mac_ctx_reinit));
+			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
+			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx_reinit));
 		} else {
 			memset(mctx->mac_ctx, 0, sizeof (HMAC_SHA512_Context));
 			memset(mctx->mac_ctx_reinit, 0, sizeof (HMAC_SHA512_Context));
