@@ -8,24 +8,22 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2024 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
@@ -44,6 +42,14 @@ struct ProbabilityCounter
 
 public:
 
+    static INLINE void UpdateBit(unsigned int bit, short & probability, const int threshold0, const int adaptationRate0, const int threshold1, const int adaptationRate1)
+    {
+        int delta0 = probability * adaptationRate0 - ((4096 - threshold0) * adaptationRate0 - 4095);
+        int delta1 = probability * adaptationRate1 - (threshold1 * adaptationRate1);
+        
+        probability = probability - ((bit ? delta1 : delta0) >> 12);
+    }
+
     static INLINE void UpdateBit0(short & probability, const int threshold, const int adaptationRate)
     {
         probability = probability + (((4096 - threshold - probability) * adaptationRate) >> 12);
@@ -54,6 +60,15 @@ public:
         probability = probability - (((probability - threshold) * adaptationRate) >> 12);
     };
 
+    template <int R> static INLINE void UpdateBit(unsigned int bit, short & probability, const int threshold0, const int threshold1)
+    {
+        probability = probability - ((probability - (bit ? threshold1 : threshold0)) >> R);
+    }
+
+    template <int R> static INLINE void UpdateBit(short & probability, const int threshold)
+    {
+        probability = probability - ((probability - threshold) >> R);
+    };
 };
 
 struct ProbabilityMixer

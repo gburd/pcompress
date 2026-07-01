@@ -8,24 +8,22 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2024 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
@@ -64,15 +62,25 @@ private:
 
     INLINE void OutputShort(unsigned short s)
     {
+#ifndef LIBBSC_NO_UNALIGNED_ACCESS
         *ari_output++ = s;
+#else
+        memcpy(ari_output++, &s, sizeof(unsigned short));
+#endif
     };
 
     INLINE unsigned short InputShort()
     {
+#ifndef LIBBSC_NO_UNALIGNED_ACCESS
         return *ari_input++;
+#else
+        unsigned short s;
+        memcpy(&s, ari_input++, sizeof(unsigned short));
+        return s;
+#endif
     };
 
-    INLINE void ShiftLow()
+    NOINLINE unsigned int ShiftLowSlow()
     {
         if (ari.u.low32 < 0xffff0000U || ari.u.carry)
         {
@@ -85,6 +93,24 @@ private:
             ari_cache = ari.u.low32 >> 16; ari.u.carry = 0;
         } else ari_ffnum++;
         ari.u.low32 <<= 16;
+
+        return ari_range << 16;
+    }
+
+    NOINLINE unsigned int ShiftLow()
+    {
+        unsigned int ari_low32 = ari.u.low32;
+
+        if (!ari_ffnum && ari_low32 < 0xffff0000U)
+        {
+            OutputShort(ari_cache + ari.u.carry);
+
+            ari_cache = ari_low32 >> 16; ari.low = (unsigned int)(ari_low32 << 16);
+
+            return ari_range << 16;
+        }
+
+        return ShiftLowSlow();
     }
 
 public:
@@ -107,27 +133,47 @@ public:
 
     INLINE int FinishEncoder()
     {
+        if (ari_range < 0x10000)
+        {
+            ShiftLow();
+        }
+
         ShiftLow(); ShiftLow(); ShiftLow();
         return (int)(ari_output - ari_outputStart) * sizeof(ari_output[0]);
     }
 
-    INLINE void EncodeBit0(int probability)
+    template <int P = 12> INLINE void EncodeBit0(int probability)
     {
-        ari_range = (ari_range >> 12) * probability;
         if (ari_range < 0x10000)
         {
-            ari_range <<= 16; ShiftLow();
+            ari_range = ShiftLow();
         }
+
+        ari_range = (ari_range >> P) * probability;
     }
 
-    INLINE void EncodeBit1(int probability)
+    template <int P = 12> INLINE void EncodeBit1(int probability)
     {
-        unsigned int range = (ari_range >> 12) * probability;
-        ari.low += range; ari_range -= range;
         if (ari_range < 0x10000)
         {
-            ari_range <<= 16; ShiftLow();
+            ari_range = ShiftLow();
         }
+
+        unsigned int range = (ari_range >> P) * probability;
+        ari.low += range; ari_range -= range;
+    }
+
+    template <int P = 12> INLINE void EncodeBit(unsigned int bit, int probability)
+    {
+        if (ari_range < 0x10000)
+        {
+            ari_range = ShiftLow();
+        }
+
+        unsigned int range = (ari_range >> P) * probability;
+
+        ari.low   = ari.low + ((~bit + 1u) & range);
+        ari_range = range   + ((~bit + 1u) & (ari_range - range - range));
     }
 
     INLINE void EncodeBit(unsigned int bit)
@@ -161,24 +207,41 @@ public:
         ari_code  = (ari_code << 16) | InputShort();
     };
 
-    INLINE int DecodeBit(int probability)
+    template <int P = 12> INLINE int PeakBit(int probability)
     {
-        unsigned int range = (ari_range >> 12) * probability;
-        if (ari_code >= range)
-        {
-            ari_code -= range; ari_range -= range;
-            if (ari_range < 0x10000)
-            {
-                ari_range <<= 16; ari_code = (ari_code << 16) | InputShort();
-            }
-            return 1;
-        }
-        ari_range = range;
         if (ari_range < 0x10000)
         {
             ari_range <<= 16; ari_code = (ari_code << 16) | InputShort();
         }
-        return 0;
+
+        return ari_code >= (ari_range >> P) * probability;
+    }
+
+    template <int P = 12> INLINE int DecodeBit(int probability)
+    {
+        if (ari_range < 0x10000)
+        {
+            ari_range <<= 16; ari_code = (ari_code << 16) | InputShort();
+        }
+
+        unsigned int range = (ari_range >> P) * probability;
+        int bit = ari_code >= range;
+
+        ari_range = bit ? ari_range - range : range;
+        ari_code  = bit ? ari_code  - range : ari_code;
+
+        return bit;
+    }
+
+    template <int P = 12> INLINE void DecodeBit0(int probability)
+    {
+        ari_range = (ari_range >> P) * probability;
+    }
+
+    template <int P = 12> INLINE void DecodeBit1(int probability)
+    {
+        unsigned int range = (ari_range >> P) * probability;
+        ari_code -= range; ari_range -= range;
     }
 
     INLINE unsigned int DecodeBit()
@@ -205,7 +268,6 @@ public:
         }
         return word;
     }
-
 };
 
 #endif

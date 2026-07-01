@@ -8,24 +8,22 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2024 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
@@ -36,18 +34,6 @@ See also the bsc and libbsc web site:
 #define _LIBBSC_CODER_TABLES_H
 
 #include "../../platform/platform.h"
-
-static const int bsc_log2_table[256] =
-{
-   -1,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
-    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7
-};
 
 static const short bsc_stretch_table[4097] =
 {
@@ -1858,19 +1844,6 @@ static const unsigned char model_run_state_table[8192] =
       43, 219, 219, 127,  99,   0,   0,   0,  97, 151, 219, 195,   0,   0,   0,   0,  85, 156, 219, 182,   0,   0,   0,   0,  85, 156, 219, 146,   0,   0,   0,   0,
       85, 170, 219, 171,   0,   0,   0,   0,  94, 170, 219,   1,   0,   0,   0,   0,  94, 170, 219, 140,   0,   0,   0,   0,  94, 170, 219, 248,   0,   0,   0,   0,
 };
-
-static INLINE int bsc_log2_256(const int n)
-{
-    return bsc_log2_table[n];
-}
-
-static INLINE int bsc_log2(const int n)
-{
-    if (n < 0x100)     return 0  + bsc_log2_table[n >>  0];
-    if (n < 0x10000)   return 8  + bsc_log2_table[n >>  8];
-    if (n < 0x1000000) return 16 + bsc_log2_table[n >> 16];
-    return 24 + bsc_log2_table[n >> 24];
-}
 
 static INLINE int bsc_stretch(const int p)
 {

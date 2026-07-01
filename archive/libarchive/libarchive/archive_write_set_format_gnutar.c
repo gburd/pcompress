@@ -27,8 +27,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_write_set_format_gnu_tar.c 191579 2009-04-27 18:35:03Z gastal $");
-
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -46,6 +44,7 @@ __FBSDID("$FreeBSD: head/lib/libarchive/archive_write_set_format_gnu_tar.c 19157
 #include "archive_entry_locale.h"
 #include "archive_private.h"
 #include "archive_write_private.h"
+#include "archive_write_set_format_private.h"
 
 struct gnutar {
 	uint64_t	entry_bytes_remaining;
@@ -119,9 +118,9 @@ static const char template_header[] = {
 	'0','0','0','0','0','0', '0','\0',
 	/* gid, null termination: 8 bytes */
 	'0','0','0','0','0','0', '0','\0',
-	/* size, space termation: 12 bytes */
+	/* size, space termination: 12 bytes */
 	'0','0','0','0','0','0','0','0','0','0','0', '\0',
-	/* mtime, space termation: 12 bytes */
+	/* mtime, space termination: 12 bytes */
 	'0','0','0','0','0','0','0','0','0','0','0', '\0',
 	/* Initial checksum value: 8 spaces */
 	' ',' ',' ',' ',' ',' ',' ',' ',
@@ -175,7 +174,7 @@ archive_write_set_format_gnutar(struct archive *_a)
 	struct archive_write *a = (struct archive_write *)_a;
 	struct gnutar *gnutar;
 
-	gnutar = (struct gnutar *)calloc(1, sizeof(*gnutar));
+	gnutar = calloc(1, sizeof(*gnutar));
 	if (gnutar == NULL) {
 		archive_set_error(&a->archive, ENOMEM,
 		    "Can't allocate gnutar data");
@@ -297,7 +296,7 @@ archive_write_gnutar_header(struct archive_write *a,
 	/* Only regular files (not hardlinks) have data. */
 	if (archive_entry_hardlink(entry) != NULL ||
 	    archive_entry_symlink(entry) != NULL ||
-	    !(archive_entry_filetype(entry) == AE_IFREG))
+	    archive_entry_filetype(entry) != AE_IFREG)
 		archive_entry_set_size(entry, 0);
 
 	if (AE_IFDIR == archive_entry_filetype(entry)) {
@@ -339,7 +338,7 @@ archive_write_gnutar_header(struct archive_write *a,
 		 * case getting WCS failed. On POSIX, this is a
 		 * normal operation.
 		 */
-		if (p != NULL && p[strlen(p) - 1] != '/') {
+		if (p != NULL && p[0] != '\0' && p[strlen(p) - 1] != '/') {
 			struct archive_string as;
 
 			archive_string_init(&as);
@@ -368,7 +367,7 @@ archive_write_gnutar_header(struct archive_write *a,
 	}
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
-	/* Make sure the path separators in pahtname, hardlink and symlink
+	/* Make sure the path separators in pathname, hardlink and symlink
 	 * are all slash '/', not the Windows path separator '\'. */
 	entry_main = __la_win_entry_in_posix_pathseparator(entry);
 	if (entry_main == NULL) {
@@ -388,7 +387,7 @@ archive_write_gnutar_header(struct archive_write *a,
 	if (r != 0) {
 		if (errno == ENOMEM) {
 			archive_set_error(&a->archive, ENOMEM,
-			    "Can't allocate memory for Pathame");
+			    "Can't allocate memory for pathname");
 			ret = ARCHIVE_FATAL;
 			goto exit_write_header;
 		}
@@ -467,7 +466,7 @@ archive_write_gnutar_header(struct archive_write *a,
 		}
 	}
 	if (gnutar->linkname_length > GNUTAR_linkname_size) {
-		size_t todo = gnutar->linkname_length;
+		size_t length = gnutar->linkname_length + 1;
 		struct archive_entry *temp = archive_entry_new2(&a->archive);
 
 		/* Uname/gname here don't really matter since no one reads them;
@@ -476,19 +475,20 @@ archive_write_gnutar_header(struct archive_write *a,
 		archive_entry_set_gname(temp, "wheel");
 
 		archive_entry_set_pathname(temp, "././@LongLink");
-		archive_entry_set_size(temp, gnutar->linkname_length + 1);
+		archive_entry_set_size(temp, length);
 		ret = archive_format_gnutar_header(a, buff, temp, 'K');
+		archive_entry_free(temp);
 		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
 		ret = __archive_write_output(a, buff, 512);
-		if(ret < ARCHIVE_WARN)
+		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
-		archive_entry_free(temp);
-		/* Write as many 512 bytes blocks as needed to write full name. */
-		ret = __archive_write_output(a, gnutar->linkname, todo);
-		if(ret < ARCHIVE_WARN)
+		/* Write name and trailing null byte. */
+		ret = __archive_write_output(a, gnutar->linkname, length);
+		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
-		ret = __archive_write_nulls(a, 0x1ff & (-(ssize_t)todo));
+		/* Pad to 512 bytes */
+		ret = __archive_write_nulls(a, 0x1ff & (-(ssize_t)length));
 		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
 	}
@@ -496,7 +496,7 @@ archive_write_gnutar_header(struct archive_write *a,
 	/* If pathname is longer than 100 chars we need to add an 'L' header. */
 	if (gnutar->pathname_length > GNUTAR_name_size) {
 		const char *pathname = gnutar->pathname;
-		size_t todo = gnutar->pathname_length;
+		size_t length = gnutar->pathname_length + 1;
 		struct archive_entry *temp = archive_entry_new2(&a->archive);
 
 		/* Uname/gname here don't really matter since no one reads them;
@@ -505,24 +505,25 @@ archive_write_gnutar_header(struct archive_write *a,
 		archive_entry_set_gname(temp, "wheel");
 
 		archive_entry_set_pathname(temp, "././@LongLink");
-		archive_entry_set_size(temp, gnutar->pathname_length + 1);
+		archive_entry_set_size(temp, length);
 		ret = archive_format_gnutar_header(a, buff, temp, 'L');
+		archive_entry_free(temp);
 		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
 		ret = __archive_write_output(a, buff, 512);
 		if(ret < ARCHIVE_WARN)
 			goto exit_write_header;
-		archive_entry_free(temp);
-		/* Write as many 512 bytes blocks as needed to write full name. */
-		ret = __archive_write_output(a, pathname, todo);
+		/* Write pathname + trailing null byte. */
+		ret = __archive_write_output(a, pathname, length);
 		if(ret < ARCHIVE_WARN)
 			goto exit_write_header;
-		ret = __archive_write_nulls(a, 0x1ff & (-(ssize_t)todo));
+		/* Pad to multiple of 512 bytes. */
+		ret = __archive_write_nulls(a, 0x1ff & (-(ssize_t)length));
 		if (ret < ARCHIVE_WARN)
 			goto exit_write_header;
 	}
 
-	if (archive_entry_hardlink(entry) != NULL) {
+	if (archive_entry_hardlink_is_set(entry)) {
 		tartype = '1';
 	} else
 		switch (archive_entry_filetype(entry)) {
@@ -532,17 +533,9 @@ archive_write_gnutar_header(struct archive_write *a,
 		case AE_IFBLK: tartype = '4' ; break;
 		case AE_IFDIR: tartype = '5' ; break;
 		case AE_IFIFO: tartype = '6' ; break;
-		case AE_IFSOCK:
-			archive_set_error(&a->archive,
-			    ARCHIVE_ERRNO_FILE_FORMAT,
-			    "tar format cannot archive socket");
-			ret = ARCHIVE_FAILED;
-			goto exit_write_header;
-		default:
-			archive_set_error(&a->archive,
-			    ARCHIVE_ERRNO_FILE_FORMAT,
-			    "tar format cannot archive this (mode=0%lo)",
-			    (unsigned long)archive_entry_mode(entry));
+		default: /* AE_IFSOCK and unknown */
+			__archive_write_entry_filetype_unsupported(
+                            &a->archive, entry, "gnutar");
 			ret = ARCHIVE_FAILED;
 			goto exit_write_header;
 		}
@@ -563,8 +556,7 @@ archive_write_gnutar_header(struct archive_write *a,
 	gnutar->entry_bytes_remaining = archive_entry_size(entry);
 	gnutar->entry_padding = 0x1ff & (-(int64_t)gnutar->entry_bytes_remaining);
 exit_write_header:
-	if (entry_main)
-		archive_entry_free(entry_main);
+	archive_entry_free(entry_main);
 	return (ret);
 }
 
@@ -644,18 +636,18 @@ archive_format_gnutar_header(struct archive_write *a, char h[512],
 	format_octal(archive_entry_mode(entry) & 07777,
 	    h + GNUTAR_mode_offset, GNUTAR_mode_size);
 
-	/* TODO: How does GNU tar handle large UIDs? */
-	if (format_octal(archive_entry_uid(entry),
-	    h + GNUTAR_uid_offset, GNUTAR_uid_size)) {
+	/* GNU tar supports base-256 here, so should never overflow. */
+	if (format_number(archive_entry_uid(entry), h + GNUTAR_uid_offset,
+		GNUTAR_uid_size, GNUTAR_uid_max_size)) {
 		archive_set_error(&a->archive, ERANGE,
 		    "Numeric user ID %jd too large",
 		    (intmax_t)archive_entry_uid(entry));
 		ret = ARCHIVE_FAILED;
 	}
 
-	/* TODO: How does GNU tar handle large GIDs? */
-	if (format_octal(archive_entry_gid(entry),
-	    h + GNUTAR_gid_offset, GNUTAR_gid_size)) {
+	/* GNU tar supports base-256 here, so should never overflow. */
+	if (format_number(archive_entry_gid(entry), h + GNUTAR_gid_offset,
+		GNUTAR_gid_size, GNUTAR_gid_max_size)) {
 		archive_set_error(&a->archive, ERANGE,
 		    "Numeric group ID %jd too large",
 		    (intmax_t)archive_entry_gid(entry));

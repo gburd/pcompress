@@ -1,0 +1,15 @@
+[submodule "lz4"]
+	path = lz4
+	url = https://github.com/lz4/lz4.git
+[submodule "bsc"]
+	path = bsc
+	url = https://github.com/IlyaGrebnov/libbsc.git
+[submodule "zstd"]
+	path = zstd
+	url = https://github.com/facebook/zstd.git
+[submodule "archive/libarchive"]
+	path = archive/libarchive
+	url = https://github.com/libarchive/libarchive.git
+[submodule "wavpack"]
+	path = wavpack
+	url = https://github.com/dbry/WavPack.git

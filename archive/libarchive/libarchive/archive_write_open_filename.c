@@ -24,7 +24,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_write_open_filename.c 191165 2009-04-17 00:39:35Z kientzle $");
 
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
@@ -62,6 +61,7 @@ struct write_file_data {
 };
 
 static int	file_close(struct archive *, void *);
+static int	file_free(struct archive *, void *);
 static int	file_open(struct archive *, void *);
 static ssize_t	file_write(struct archive *, void *, const void *buff, size_t);
 static int	open_filename(struct archive *, int, const void *);
@@ -98,7 +98,7 @@ open_filename(struct archive *a, int mbs_fn, const void *filename)
 	struct write_file_data *mine;
 	int r;
 
-	mine = (struct write_file_data *)calloc(1, sizeof(*mine));
+	mine = calloc(1, sizeof(*mine));
 	if (mine == NULL) {
 		archive_set_error(a, ENOMEM, "No memory");
 		return (ARCHIVE_FATAL);
@@ -118,13 +118,13 @@ open_filename(struct archive *a, int mbs_fn, const void *filename)
 			    (const char *)filename);
 		else
 			archive_set_error(a, ARCHIVE_ERRNO_MISC,
-			    "Can't convert '%S' to MBS",
+			    "Can't convert '%ls' to MBS",
 			    (const wchar_t *)filename);
 		return (ARCHIVE_FAILED);
 	}
 	mine->fd = -1;
-	return (archive_write_open(a, mine,
-		file_open, file_write, file_close));
+	return (archive_write_open2(a, mine,
+		    file_open, file_write, file_close, file_free));
 }
 
 static int
@@ -170,7 +170,7 @@ file_open(struct archive *a, void *client_data)
 		else {
 			archive_mstring_get_wcs(a, &mine->filename, &wcs);
 			archive_set_error(a, errno,
-			    "Can't convert '%S' to MBS", wcs);
+			    "Can't convert '%ls' to MBS", wcs);
 		}
 		return (ARCHIVE_FATAL);
 	}
@@ -181,7 +181,7 @@ file_open(struct archive *a, void *client_data)
 		if (mbs != NULL)
 			archive_set_error(a, errno, "Failed to open '%s'", mbs);
 		else
-			archive_set_error(a, errno, "Failed to open '%S'", wcs);
+			archive_set_error(a, errno, "Failed to open '%ls'", wcs);
 		return (ARCHIVE_FATAL);
 	}
 
@@ -189,7 +189,7 @@ file_open(struct archive *a, void *client_data)
 		if (mbs != NULL)
 			archive_set_error(a, errno, "Couldn't stat '%s'", mbs);
 		else
-			archive_set_error(a, errno, "Couldn't stat '%S'", wcs);
+			archive_set_error(a, errno, "Couldn't stat '%ls'", wcs);
 		return (ARCHIVE_FATAL);
 	}
 
@@ -243,7 +243,26 @@ file_close(struct archive *a, void *client_data)
 	struct write_file_data	*mine = (struct write_file_data *)client_data;
 
 	(void)a; /* UNUSED */
-	close(mine->fd);
+
+	if (mine == NULL)
+		return (ARCHIVE_FATAL);
+
+	if (mine->fd >= 0)
+		close(mine->fd);
+
+	return (ARCHIVE_OK);
+}
+
+static int
+file_free(struct archive *a, void *client_data)
+{
+	struct write_file_data	*mine = (struct write_file_data *)client_data;
+
+	(void)a; /* UNUSED */
+
+	if (mine == NULL)
+		return (ARCHIVE_OK);
+
 	archive_mstring_clean(&mine->filename);
 	free(mine);
 	return (ARCHIVE_OK);

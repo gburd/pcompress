@@ -25,7 +25,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_write_set_format_shar.c 189438 2009-03-06 05:58:56Z kientzle $");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -42,6 +41,7 @@ __FBSDID("$FreeBSD: head/lib/libarchive/archive_write_set_format_shar.c 189438 2
 #include "archive_entry.h"
 #include "archive_private.h"
 #include "archive_write_private.h"
+#include "archive_write_set_format_private.h"
 
 struct shar {
 	int			 dump;
@@ -113,12 +113,11 @@ archive_write_set_format_shar(struct archive *_a)
 	if (a->format_free != NULL)
 		(a->format_free)(a);
 
-	shar = (struct shar *)malloc(sizeof(*shar));
+	shar = calloc(1, sizeof(*shar));
 	if (shar == NULL) {
 		archive_set_error(&a->archive, ENOMEM, "Can't allocate shar data");
 		return (ARCHIVE_FATAL);
 	}
-	memset(shar, 0, sizeof(*shar));
 	archive_string_init(&shar->work);
 	archive_string_init(&shar->quoted_name);
 	a->format_data = shar;
@@ -170,8 +169,7 @@ archive_write_shar_header(struct archive_write *a, struct archive_entry *entry)
 	}
 
 	/* Save the entry for the closing. */
-	if (shar->entry)
-		archive_entry_free(shar->entry);
+	archive_entry_free(shar->entry);
 	shar->entry = archive_entry_clone(entry);
 	name = archive_entry_pathname(entry);
 
@@ -196,8 +194,8 @@ archive_write_shar_header(struct archive_write *a, struct archive_entry *entry)
 		archive_entry_set_size(entry, 0);
 		if (archive_entry_hardlink(entry) == NULL &&
 		    archive_entry_symlink(entry) == NULL) {
-			archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
-			    "shar format cannot archive this");
+			__archive_write_entry_filetype_unsupported(
+			    &a->archive, entry, "shar");
 			return (ARCHIVE_WARN);
 		}
 	}
@@ -211,6 +209,10 @@ archive_write_shar_header(struct archive_write *a, struct archive_entry *entry)
 	if (archive_entry_filetype(entry) != AE_IFDIR) {
 		/* Try to create the dir. */
 		p = strdup(name);
+		if (p == NULL) {
+			archive_set_error(&a->archive, ENOMEM, "Out of memory");
+			return (ARCHIVE_FATAL);
+		}
 		pp = strrchr(p, '/');
 		/* If there is a / character, try to create the dir. */
 		if (pp != NULL) {
@@ -290,10 +292,13 @@ archive_write_shar_header(struct archive_write *a, struct archive_entry *entry)
 			    "mkdir -p %s > /dev/null 2>&1\n",
 			    shar->quoted_name.s);
 			/* Record that we just created this directory. */
-			if (shar->last_dir != NULL)
-				free(shar->last_dir);
+			free(shar->last_dir);
 
 			shar->last_dir = strdup(name);
+			if (shar->last_dir == NULL) {
+				archive_set_error(&a->archive, ENOMEM, "Out of memory");
+				return (ARCHIVE_FATAL);
+			}
 			/* Trim a trailing '/'. */
 			pp = strrchr(shar->last_dir, '/');
 			if (pp != NULL && pp[1] == '\0')
@@ -548,6 +553,7 @@ archive_write_shar_finish_entry(struct archive_write *a)
 				archive_strcat(&shar->work, ":");
 				shar_quote(&shar->work, g, 1);
 			}
+			archive_strcat(&shar->work, " ");
 			shar_quote(&shar->work,
 			    archive_entry_pathname(shar->entry), 1);
 			archive_strcat(&shar->work, "\n");

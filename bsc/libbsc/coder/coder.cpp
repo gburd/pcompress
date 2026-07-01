@@ -8,24 +8,22 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2025 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
@@ -53,17 +51,37 @@ int bsc_coder_init(int features)
 
 static INLINE int bsc_coder_num_blocks(int n)
 {
-    if (n <       256 * 1024)   return 1;
-    if (n <  4 * 1024 * 1024)   return 2;
-    if (n < 16 * 1024 * 1024)   return 4;
+    struct entry { int blocks; int threshold; };
 
-    return 8;
+    static const struct entry break_points[] =
+    {
+        { 128, 128 * 128 * 65536 },
+        {  96,  96 * 96 * 65536 },
+        {  64,  64 * 64 * 65536 },
+        {  48,  48 * 48 * 65536 },
+        {  32,  32 * 32 * 65536 },
+        {  24,  24 * 24 * 65536 },
+        {  16,  16 * 16 * 65536 },
+        {  12,  12 * 12 * 65536 },
+        {   8,   8 * 8 * 65536 },
+        {   6,   6 * 6 * 65536 },
+        {   4,   4 * 4 * 65536 },
+        {   2,   2 * 2 * 65536 },
+    };
+
+    for (int i = 0; i < sizeof(break_points) / sizeof(break_points[0]); i += 1)
+    {
+        if (n >= break_points[i].threshold) { return break_points[i].blocks; }
+    }
+
+    return 1;
 }
 
 int bsc_coder_encode_block(const unsigned char * input, unsigned char * output, int inputSize, int outputSize, int coder)
 {
     if (coder == LIBBSC_CODER_QLFC_STATIC)   return bsc_qlfc_static_encode_block  (input, output, inputSize, outputSize);
     if (coder == LIBBSC_CODER_QLFC_ADAPTIVE) return bsc_qlfc_adaptive_encode_block(input, output, inputSize, outputSize);
+    if (coder == LIBBSC_CODER_QLFC_FAST)     return bsc_qlfc_fast_encode_block    (input, output, inputSize, outputSize);
 
     return LIBBSC_BAD_PARAMETER;
 }
@@ -141,8 +159,8 @@ int bsc_coder_compress_serial(const unsigned char * input, unsigned char * outpu
             result = inputSize; memcpy(output + outputPtr, input + inputStart, inputSize);
         }
 
-        *(int *)(output + 1 + 8 * blockId + 0) = inputSize;
-        *(int *)(output + 1 + 8 * blockId + 4) = result;
+        memcpy(output + 1 + 8 * blockId + 0, &inputSize, sizeof(int));
+        memcpy(output + 1 + 8 * blockId + 4, &result, sizeof(int));
 
         outputPtr += result;
     }
@@ -163,7 +181,7 @@ int bsc_coder_compress_parallel(const unsigned char * input, unsigned char * out
         int nBlocks = bsc_coder_num_blocks(n);
         int result  = LIBBSC_NO_ERROR;
 
-        int numThreads = omp_get_max_threads();
+        int numThreads = omp_get_max_threads() / omp_get_num_threads();
         if (numThreads > nBlocks) numThreads = nBlocks;
 
         output[0] = nBlocks;
@@ -180,41 +198,26 @@ int bsc_coder_compress_parallel(const unsigned char * input, unsigned char * out
                     bsc_coder_split_blocks(input, n, nBlocks, compressedStart, compressedSize);
                 }
 
-                #pragma omp for schedule(dynamic)
+                #pragma omp for ordered schedule(dynamic, 1)
                 for (int blockId = 0; blockId < nBlocks; ++blockId)
                 {
                     int blockStart   = compressedStart[blockId];
                     int blockSize    = compressedSize[blockId];
+                    int outputPtr    = 1 + 8 * nBlocks;
 
                     compressionResult[blockId] = bsc_coder_encode_block(input + blockStart, buffer + blockStart, blockSize, blockSize, coder);
                     if (compressionResult[blockId] < LIBBSC_NO_ERROR) compressionResult[blockId] = blockSize;
 
-                    *(int *)(output + 1 + 8 * blockId + 0) = blockSize;
-                    *(int *)(output + 1 + 8 * blockId + 4) = compressionResult[blockId];
-                }
+                    memcpy(output + 1 + 8 * blockId + 0, &blockSize, sizeof(int));
+                    memcpy(output + 1 + 8 * blockId + 4, &compressionResult[blockId], sizeof(int));
 
-                #pragma omp single
-                {
-                    result = 1 + 8 * nBlocks;
-                    for (int blockId = 0; blockId < nBlocks; ++blockId)
+                    #pragma omp ordered
                     {
-                        result += compressionResult[blockId];
+                        for (int p = 0; p < blockId; ++p) { outputPtr += compressionResult[p]; }
                     }
 
-                    if (result >= n) result = LIBBSC_NOT_COMPRESSIBLE;
-                }
-
-                if (result >= LIBBSC_NO_ERROR)
-                {
-                    #pragma omp for schedule(dynamic)
-                    for (int blockId = 0; blockId < nBlocks; ++blockId)
+                    if (outputPtr + compressionResult[blockId] < n)
                     {
-                        int blockStart   = compressedStart[blockId];
-                        int blockSize    = compressedSize[blockId];
-
-                        int outputPtr = 1 + 8 * nBlocks;
-                        for (int p = 0; p < blockId; ++p) outputPtr += compressionResult[p];
-
                         if (compressionResult[blockId] != blockSize)
                         {
                             memcpy(output + outputPtr, buffer + blockStart, compressionResult[blockId]);
@@ -223,6 +226,12 @@ int bsc_coder_compress_parallel(const unsigned char * input, unsigned char * out
                         {
                             memcpy(output + outputPtr, input + blockStart, compressionResult[blockId]);
                         }
+                    }
+
+                    if (blockId == nBlocks - 1)
+                    {
+                        result = outputPtr + compressionResult[blockId];
+                        if (result >= n) result = LIBBSC_NOT_COMPRESSIBLE;
                     }
                 }
             }
@@ -239,7 +248,7 @@ int bsc_coder_compress_parallel(const unsigned char * input, unsigned char * out
 
 int bsc_coder_compress(const unsigned char * input, unsigned char * output, int n, int coder, int features)
 {
-    if ((coder != LIBBSC_CODER_QLFC_STATIC) && (coder != LIBBSC_CODER_QLFC_ADAPTIVE))
+    if ((coder != LIBBSC_CODER_QLFC_STATIC) && (coder != LIBBSC_CODER_QLFC_ADAPTIVE) && (coder != LIBBSC_CODER_QLFC_FAST))
     {
         return LIBBSC_BAD_PARAMETER;
     }
@@ -261,13 +270,14 @@ int bsc_coder_decode_block(const unsigned char * input, unsigned char * output, 
 {
     if (coder == LIBBSC_CODER_QLFC_STATIC)   return bsc_qlfc_static_decode_block  (input, output);
     if (coder == LIBBSC_CODER_QLFC_ADAPTIVE) return bsc_qlfc_adaptive_decode_block(input, output);
+    if (coder == LIBBSC_CODER_QLFC_FAST)     return bsc_qlfc_fast_decode_block    (input, output);
 
     return LIBBSC_BAD_PARAMETER;
 }
 
 int bsc_coder_decompress(const unsigned char * input, unsigned char * output, int coder, int features)
 {
-    if ((coder != LIBBSC_CODER_QLFC_STATIC) && (coder != LIBBSC_CODER_QLFC_ADAPTIVE))
+    if ((coder != LIBBSC_CODER_QLFC_STATIC) && (coder != LIBBSC_CODER_QLFC_ADAPTIVE) && (coder != LIBBSC_CODER_QLFC_FAST))
     {
         return LIBBSC_BAD_PARAMETER;
     }
@@ -282,18 +292,29 @@ int bsc_coder_decompress(const unsigned char * input, unsigned char * output, in
 
 #ifdef LIBBSC_OPENMP
 
-    if (features & LIBBSC_FEATURE_MULTITHREADING)
+    int numThreads = omp_get_max_threads() / omp_get_num_threads();
+    if (numThreads > nBlocks) numThreads = nBlocks;
+
+    if ((numThreads > 1) && (features & LIBBSC_FEATURE_MULTITHREADING))
     {
-        #pragma omp parallel for schedule(dynamic)
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(numThreads)
         for (int blockId = 0; blockId < nBlocks; ++blockId)
         {
-            int inputPtr  = 0; for (int p = 0; p < blockId; ++p) inputPtr  += *(int *)(input + 1 + 8 * p + 4);
-            int outputPtr = 0; for (int p = 0; p < blockId; ++p) outputPtr += *(int *)(input + 1 + 8 * p + 0);
+            int inputPtr  = 0; int inputSize;
+            int outputPtr = 0; int outputSize;
 
             inputPtr += 1 + 8 * nBlocks;
 
-            int inputSize  = *(int *)(input + 1 + 8 * blockId + 4);
-            int outputSize = *(int *)(input + 1 + 8 * blockId + 0);
+            for (int p = 0; p < blockId; ++p)
+            {
+                memcpy(&inputSize , input + 1 + 8 * p + 4, sizeof(int));
+                memcpy(&outputSize, input + 1 + 8 * p + 0, sizeof(int));
+
+                inputPtr += inputSize; outputPtr += outputSize;
+            }
+
+            memcpy(&inputSize , input + 1 + 8 * blockId + 4, sizeof(int));
+            memcpy(&outputSize, input + 1 + 8 * blockId + 0, sizeof(int));
 
             if (inputSize != outputSize)
             {
@@ -312,13 +333,21 @@ int bsc_coder_decompress(const unsigned char * input, unsigned char * output, in
     {
         for (int blockId = 0; blockId < nBlocks; ++blockId)
         {
-            int inputPtr  = 0; for (int p = 0; p < blockId; ++p) inputPtr  += *(int *)(input + 1 + 8 * p + 4);
-            int outputPtr = 0; for (int p = 0; p < blockId; ++p) outputPtr += *(int *)(input + 1 + 8 * p + 0);
+            int inputPtr  = 0; int inputSize;
+            int outputPtr = 0; int outputSize;
 
             inputPtr += 1 + 8 * nBlocks;
 
-            int inputSize  = *(int *)(input + 1 + 8 * blockId + 4);
-            int outputSize = *(int *)(input + 1 + 8 * blockId + 0);
+            for (int p = 0; p < blockId; ++p)
+            {
+                memcpy(&inputSize , input + 1 + 8 * p + 4, sizeof(int));
+                memcpy(&outputSize, input + 1 + 8 * p + 0, sizeof(int));
+
+                inputPtr += inputSize; outputPtr += outputSize;
+            }
+
+            memcpy(&inputSize , input + 1 + 8 * blockId + 4, sizeof(int));
+            memcpy(&outputSize, input + 1 + 8 * blockId + 0, sizeof(int));
 
             if (inputSize != outputSize)
             {

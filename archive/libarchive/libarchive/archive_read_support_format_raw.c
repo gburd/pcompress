@@ -23,7 +23,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_read_support_format_raw.c 201107 2009-12-28 03:25:33Z kientzle $");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -62,7 +61,7 @@ archive_read_support_format_raw(struct archive *_a)
 	archive_check_magic(_a, ARCHIVE_READ_MAGIC,
 	    ARCHIVE_STATE_NEW, "archive_read_support_format_raw");
 
-	info = (struct raw_info *)calloc(1, sizeof(*info));
+	info = calloc(1, sizeof(*info));
 	if (info == NULL) {
 		archive_set_error(&a->archive, ENOMEM,
 		    "Can't allocate raw_info data");
@@ -78,7 +77,9 @@ archive_read_support_format_raw(struct archive *_a)
 	    archive_read_format_raw_read_data,
 	    archive_read_format_raw_read_data_skip,
 	    NULL,
-	    archive_read_format_raw_cleanup);
+	    archive_read_format_raw_cleanup,
+	    NULL,
+	    NULL);
 	if (r != ARCHIVE_OK)
 		free(info);
 	return (r);
@@ -118,7 +119,9 @@ archive_read_format_raw_read_header(struct archive_read *a,
 	archive_entry_set_filetype(entry, AE_IFREG);
 	archive_entry_set_perm(entry, 0644);
 	/* I'm deliberately leaving most fields unset here. */
-	return (ARCHIVE_OK);
+
+	/* Let the filter fill out any fields it might have. */
+	return __archive_read_header(a, entry);
 }
 
 static int

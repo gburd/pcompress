@@ -2,12 +2,12 @@
 2010-03-12 : Igor Pavlov : Public domain
 This code is based on PPMd var.H (2001): Dmitry Shkarin : Public domain */
 
+#ifndef ARCHIVE_PPMD_PRIVATE_H_INCLUDED
+#define ARCHIVE_PPMD_PRIVATE_H_INCLUDED
+
 #ifndef __LIBARCHIVE_BUILD
 #error This header is only to be used internally to libarchive.
 #endif
-
-#ifndef ARCHIVE_PPMD_PRIVATE_H_INCLUDED
-#define ARCHIVE_PPMD_PRIVATE_H_INCLUDED
 
 #include <stddef.h>
 
@@ -69,13 +69,6 @@ typedef struct
   void (*Write)(void *p, Byte b);
 } IByteOut;
 
-
-typedef struct
-{
-  void *(*Alloc)(void *p, size_t size);
-  void (*Free)(void *p, void *address); /* address can be 0 */
-} ISzAlloc;
-
 /*** End defined in Types.h ***/
 /*** Begin defined in CpuArch.h ***/
 
@@ -116,8 +109,12 @@ typedef struct
   Byte Count;  /* Count to next change of Shift */
 } CPpmd_See;
 
-#define Ppmd_See_Update(p)  if ((p)->Shift < PPMD_PERIOD_BITS && --(p)->Count == 0) \
-    { (p)->Summ <<= 1; (p)->Count = (Byte)(3 << (p)->Shift++); }
+#define Ppmd_See_Update(p) do {						\
+	if ((p)->Shift < PPMD_PERIOD_BITS && --(p)->Count == 0) {	\
+		(p)->Summ <<= 1;					\
+		(p)->Count = (Byte)(3 << (p)->Shift++);			\
+    	}								\
+} while (0)
 
 typedef struct
 {
@@ -151,8 +148,12 @@ typedef
   #endif
   CPpmd_Byte_Ref;
 
-#define PPMD_SetAllBitsIn256Bytes(p) \
-  { unsigned j; for (j = 0; j < 256 / sizeof(p[0]); j += 8) { \
-  p[j+7] = p[j+6] = p[j+5] = p[j+4] = p[j+3] = p[j+2] = p[j+1] = p[j+0] = ~(size_t)0; }}
+#define PPMD_SetAllBitsIn256Bytes(p) do {				\
+	unsigned j;							\
+	for (j = 0; j < 256 / sizeof(p[0]); j += 8) {			\
+		p[j+7] = p[j+6] = p[j+5] = p[j+4] =			\
+		    p[j+3] = p[j+2] = p[j+1] = p[j+0] = ~(size_t)0;	\
+	}								\
+} while (0)
 
 #endif

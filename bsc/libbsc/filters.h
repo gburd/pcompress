@@ -8,24 +8,22 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2024 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
@@ -37,6 +35,22 @@ See also the bsc and libbsc web site:
 
 #define LIBBSC_CONTEXTS_FOLLOWING    1
 #define LIBBSC_CONTEXTS_PRECEDING    2
+
+#ifndef LIBBSC_API
+  #ifdef _WIN32
+    #ifdef LIBBSC_SHARED
+      #ifdef LIBBSC_EXPORTS
+        #define LIBBSC_API __declspec(dllexport)
+      #else
+        #define LIBBSC_API __declspec(dllimport)
+      #endif
+    #else
+      #define LIBBSC_API
+    #endif
+  #else
+    #define LIBBSC_API
+  #endif
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,7 +65,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return The number of segments if no error occurred, error code otherwise.
     */
-    int bsc_detect_segments(const unsigned char * input, int n, int * segments, int k, int features);
+    LIBBSC_API int bsc_detect_segments(const unsigned char * input, int n, int * segments, int k, int features);
 
     /**
     * Autodetects order of contexts for better compression of binary files.
@@ -60,7 +74,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return The detected contexts order if no error occurred, error code otherwise.
     */
-    int bsc_detect_contextsorder(const unsigned char * input, int n, int features);
+    LIBBSC_API int bsc_detect_contextsorder(const unsigned char * input, int n, int features);
 
     /**
     * Reverses memory block to change order of contexts.
@@ -69,7 +83,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return LIBBSC_NO_ERROR if no error occurred, error code otherwise.
     */
-    int bsc_reverse_block(unsigned char * T, int n, int features);
+    LIBBSC_API int bsc_reverse_block(unsigned char * T, int n, int features);
 
     /**
     * Autodetects record size for better compression of multimedia files.
@@ -78,7 +92,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return The size of record if no error occurred, error code otherwise.
     */
-    int bsc_detect_recordsize(const unsigned char * input, int n, int features);
+    LIBBSC_API int bsc_detect_recordsize(const unsigned char * input, int n, int features);
 
     /**
     * Reorders memory block for specific size of record (Forward transform).
@@ -88,7 +102,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return LIBBSC_NO_ERROR if no error occurred, error code otherwise.
     */
-    int bsc_reorder_forward(unsigned char * T, int n, int recordSize, int features);
+    LIBBSC_API int bsc_reorder_forward(unsigned char * T, int n, int recordSize, int features);
 
     /**
     * Reorders memory block for specific size of record (Reverse transform).
@@ -98,7 +112,7 @@ extern "C" {
     * @param features   - the set of additional features.
     * @return LIBBSC_NO_ERROR if no error occurred, error code otherwise.
     */
-    int bsc_reorder_reverse(unsigned char * T, int n, int recordSize, int features);
+    LIBBSC_API int bsc_reorder_reverse(unsigned char * T, int n, int recordSize, int features);
 
 #ifdef __cplusplus
 }

@@ -8,42 +8,25 @@
 This file is a part of bsc and/or libbsc, a program and a library for
 lossless, block-sorting data compression.
 
-Copyright (c) 2009-2012 Ilya Grebnov <ilya.grebnov@gmail.com>
+   Copyright (c) 2009-2025 Ilya Grebnov <ilya.grebnov@gmail.com>
 
-See file AUTHORS for a full list of contributors.
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-The bsc and libbsc is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 3 of the License, or (at your
-option) any later version.
+       http://www.apache.org/licenses/LICENSE-2.0
 
-The bsc and libbsc is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public
-License for more details.
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 
-You should have received a copy of the GNU Lesser General Public License
-along with the bsc and libbsc. If not, see http://www.gnu.org/licenses/.
-
-Please see the files COPYING and COPYING.LIB for full copyright information.
+Please see the file LICENSE for full copyright information and file AUTHORS
+for full list of contributors.
 
 See also the bsc and libbsc web site:
   http://libbsc.com/ for more information.
-
---*/
-
-/*--
-
-Sort Transform is patented by Michael Schindler under US patent 6,199,064.
-However for research purposes this algorithm is included in this software.
-So if you are of the type who should worry about this (making money) worry away.
-The author shall have no liability with respect to the infringement of
-copyrights, trade secrets or any patents by this software. In no event will
-the author be liable for any lost revenue or profits or other special,
-indirect and consequential damages.
-
-Sort Transform is disabled by default and can be enabled by defining the
-preprocessor macro LIBBSC_SORT_TRANSFORM_SUPPORT at compile time.
 
 --*/
 
@@ -88,8 +71,8 @@ int paramEnableCUDA               = 0;
 int paramEnableSegmentation       = 0;
 int paramEnableReordering         = 0;
 int paramEnableLZP                = 1;
-int paramLZPHashSize              = 16;
-int paramLZPMinLen                = 128;
+int paramLZPHashSize              = LIBBSC_DEFAULT_LZPHASHSIZE;
+int paramLZPMinLen                = LIBBSC_DEFAULT_LZPMINLEN;
 
 int paramFeatures()
 {
@@ -117,17 +100,293 @@ int paramFeatures()
     #define BSC_FILEOFFSET long
 #endif
 
-#if defined(WIN32) || defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__) || defined(__BORLANDC__) || defined(_MSC_VER)
-  #include <windows.h>
-  double BSC_CLOCK() { return 0.001 * GetTickCount(); }
-#elif defined (__unix) || defined (__linux__) || defined (__QNX__) || defined (_AIX)  || defined (__NetBSD__) || defined(macintosh) || defined (_MAC)
-  #include <sys/time.h>
-  double BSC_CLOCK() { timeval tv; gettimeofday(&tv, 0); return tv.tv_sec + tv.tv_usec * 0.000001; }
+#ifdef _WIN32
+    #include <windows.h>
+
+    static unsigned long long bsc_now_ns() 
+    {
+        static LARGE_INTEGER freq = { 0 };
+        if (freq.QuadPart == 0)
+        {
+            QueryPerformanceFrequency(&freq);
+        }
+
+        LARGE_INTEGER counter;
+        QueryPerformanceCounter(&counter);
+
+        unsigned long long ticks = (unsigned long long)counter.QuadPart;
+        unsigned long long frequency = (unsigned long long)freq.QuadPart;
+        unsigned long long whole_seconds = ticks / frequency;
+        unsigned long long remainder_ticks = ticks % frequency;
+        unsigned long long ns = whole_seconds * 1000000000ull;
+        unsigned long long fractional_ns = (remainder_ticks * 1000000000ull) / frequency;
+
+        return ns + fractional_ns;
+    }
 #else
-  double BSC_CLOCK() { return (double)clock() / CLOCKS_PER_SEC; }
+    #include <time.h>
+    #include <sys/time.h>
+
+    static unsigned long long bsc_now_ns()
+    {
+        struct timespec ts;
+        struct timeval  tv;
+
+#ifdef CLOCK_UPTIME_RAW
+        if (clock_gettime(CLOCK_UPTIME_RAW, &ts) == 0)
+        {
+            return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+        }
+#endif
+
+#ifdef CLOCK_MONOTONIC_RAW
+        if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == 0)
+        {
+            return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+        }
+#endif
+
+#ifdef CLOCK_MONOTONIC
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        {
+            return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+        }
+#endif
+
+        gettimeofday(&tv, NULL);
+
+        return (unsigned long long)tv.tv_sec * 1000000000ull + (unsigned long long)tv.tv_usec * 1000ull;
+     }
 #endif
 
 int segmentedBlock[256];
+
+void compression_omp(char * input_name, FILE * fInput, BSC_FILEOFFSET& inFileSize, char * output_name,  FILE * fOutput, BSC_FILEOFFSET& outFileSize, int& segmentationStart, int& segmentationEnd)
+{
+    unsigned char * buffer = (unsigned char *)bsc_malloc(paramBlockSize + LIBBSC_HEADER_SIZE);
+    if (buffer == NULL)
+    {
+#ifdef LIBBSC_OPENMP
+        #pragma omp critical(print)
+#endif
+        {
+
+            fprintf(stderr, "Not enough memory! Please check README file for more information.\n");
+            exit(2);
+        }
+    }
+
+    while (true)
+    {
+        BSC_FILEOFFSET  blockOffset     = 0;
+        int             dataSize        = 0;
+
+#ifdef LIBBSC_OPENMP
+        #pragma omp critical(input)
+#endif
+        {
+            if ((feof(fInput) == 0) && (BSC_FTELL(fInput) != inFileSize))
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp master
+#endif
+                {
+                    double progress = (100.0 * (double)BSC_FTELL(fInput)) / inFileSize;
+                    fprintf(stdout, "\rCompressing %.55s(%02d%%)", input_name, (int)progress);
+                    fflush(stdout);
+                }
+
+                blockOffset = BSC_FTELL(fInput);
+
+                int currentBlockSize = paramBlockSize;
+                if (paramEnableSegmentation)
+                {
+                    if (segmentationEnd - segmentationStart > 1) currentBlockSize = segmentedBlock[segmentationStart];
+                }
+
+                dataSize = (int)fread(buffer, 1, currentBlockSize, fInput);
+                if (dataSize <= 0)
+                {
+                    fprintf(stderr, "\nIO error on file: %s!\n", input_name);
+                    exit(1);
+                }
+
+                if (paramEnableSegmentation)
+                {
+                    bool bSegmentation = false;
+
+                    if (segmentationStart == segmentationEnd) bSegmentation = true;
+                    if ((segmentationEnd - segmentationStart == 1) && (dataSize != segmentedBlock[segmentationStart])) bSegmentation = true;
+
+                    if (bSegmentation)
+                    {
+                        segmentationStart = 0; segmentationEnd = bsc_detect_segments(buffer, dataSize, segmentedBlock, 256, paramFeatures());
+                        if (segmentationEnd <= LIBBSC_NO_ERROR)
+                        {
+                            switch (segmentationEnd)
+                            {
+                                case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                                default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                            }
+                            exit(2);
+                        }
+                    }
+
+                    int newDataSize = segmentedBlock[segmentationStart++];
+                    if (dataSize != newDataSize)
+                    {
+                        BSC_FILEOFFSET pos = BSC_FTELL(fInput) - dataSize + newDataSize;
+                        BSC_FSEEK(fInput, pos, SEEK_SET);
+                        dataSize = newDataSize;
+                    }
+                }
+            }
+        }
+
+        if (dataSize == 0) break;
+
+        signed char recordSize = 1;
+        if (paramEnableReordering)
+        {
+            recordSize = bsc_detect_recordsize(buffer, dataSize, paramFeatures());
+            if (recordSize < LIBBSC_NO_ERROR)
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp critical(print)
+#endif
+                {
+                    switch (recordSize)
+                    {
+                        case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                        default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                    }
+                    exit(2);
+                }
+            }
+            if (recordSize > 1)
+            {
+                int result = bsc_reorder_forward(buffer, dataSize, recordSize, paramFeatures());
+                if (result != LIBBSC_NO_ERROR)
+                {
+#ifdef LIBBSC_OPENMP
+                    #pragma omp critical(print)
+#endif
+                    {
+                        switch (result)
+                        {
+                            case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                            default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                        }
+                        exit(2);
+                    }
+                }
+            }
+        }
+
+        signed char sortingContexts = paramSortingContexts;
+        if (paramSortingContexts == LIBBSC_CONTEXTS_AUTODETECT)
+        {
+            sortingContexts = bsc_detect_contextsorder(buffer, dataSize, paramFeatures());
+            if (sortingContexts < LIBBSC_NO_ERROR)
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp critical(print)
+#endif
+                {
+                    switch (sortingContexts)
+                    {
+                        case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory!\n"); break;
+                        default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                    }
+                    exit(2);
+                }
+            }
+        }
+        if (sortingContexts == LIBBSC_CONTEXTS_PRECEDING)
+        {
+            int result = bsc_reverse_block(buffer, dataSize, paramFeatures());
+            if (result != LIBBSC_NO_ERROR)
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp critical(print)
+#endif
+                {
+                    fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                    exit(2);
+                }
+            }
+        }
+
+        int blockSize = bsc_compress(buffer, buffer, dataSize, paramLZPHashSize, paramLZPMinLen, paramBlockSorter, paramCoder, paramFeatures());
+        if (blockSize == LIBBSC_NOT_COMPRESSIBLE)
+        {
+#ifdef LIBBSC_OPENMP
+            #pragma omp critical(input)
+#endif
+            {
+                sortingContexts = LIBBSC_CONTEXTS_FOLLOWING; recordSize = 1;
+
+                BSC_FILEOFFSET pos = BSC_FTELL(fInput);
+                {
+                    BSC_FSEEK(fInput, blockOffset, SEEK_SET);
+                    if (dataSize != (int)fread(buffer, 1, dataSize, fInput))
+                    {
+                        fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                        exit(2);
+                    }
+                }
+                BSC_FSEEK(fInput, pos, SEEK_SET);
+            }
+
+            blockSize = bsc_store(buffer, buffer, dataSize, paramFeatures());
+        }
+        if (blockSize < LIBBSC_NO_ERROR)
+        {
+#ifdef LIBBSC_OPENMP
+            #pragma omp critical(print)
+#endif
+            {
+                switch (blockSize)
+                {
+                    case LIBBSC_NOT_ENOUGH_MEMORY       : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                    case LIBBSC_NOT_SUPPORTED           : fprintf(stderr, "\nSpecified compression method is not supported on this platform!\n"); break;
+                    case LIBBSC_GPU_ERROR               : fprintf(stderr, "\nGeneral GPU failure! Please check README file for more information.\n"); break;
+                    case LIBBSC_GPU_NOT_SUPPORTED       : fprintf(stderr, "\nYour GPU is not supported! Please check README file for more information.\n"); break;
+                    case LIBBSC_GPU_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough GPU memory! Please check README file for more information.\n"); break;
+
+                    default                             : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                }
+                exit(2);
+            }
+        }
+
+#ifdef LIBBSC_OPENMP
+        #pragma omp critical(output)
+#endif
+        {
+            BSC_BLOCK_HEADER header = {blockOffset, recordSize, sortingContexts};
+
+            if (fwrite(&header, sizeof(BSC_BLOCK_HEADER), 1, fOutput) != 1)
+            {
+                fprintf(stderr, "\nIO error on file: %s!\n", output_name);
+                exit(1);
+            }
+
+            outFileSize += (int)(sizeof(BSC_BLOCK_HEADER));
+
+            if ((int)fwrite(buffer, 1, blockSize, fOutput) != blockSize)
+            {
+                fprintf(stderr, "\nIO error on file: %s!\n", output_name);
+                exit(1);
+            }
+
+            outFileSize += (int)(blockSize);
+        }
+
+    }
+
+    bsc_free(buffer);
+}
 
 void Compression(char * argv[])
 {
@@ -157,8 +416,10 @@ void Compression(char * argv[])
         exit(1);
     }
 
-    BSC_FILEOFFSET fileSize = BSC_FTELL(fInput);
-    if (fileSize < 0)
+    BSC_FILEOFFSET inFileSize = BSC_FTELL(fInput);
+    BSC_FILEOFFSET outFileSize = 0;
+
+    if (inFileSize < 0)
     {
         fprintf(stderr, "IO error on file: %s!\n", argv[2]);
         exit(1);
@@ -170,9 +431,9 @@ void Compression(char * argv[])
         exit(1);
     }
 
-    if (paramBlockSize > fileSize)
+    if (paramBlockSize > inFileSize)
     {
-        paramBlockSize = (int)fileSize;
+        paramBlockSize = (int)inFileSize;
     }
 
     if (fwrite(bscFileSign, sizeof(bscFileSign), 1, fOutput) != 1)
@@ -181,257 +442,226 @@ void Compression(char * argv[])
         exit(1);
     }
 
-    int nBlocks = paramBlockSize > 0 ? (int)((fileSize + paramBlockSize - 1) / paramBlockSize) : 0;
+    outFileSize += (int)(sizeof(bscFileSign));
+
+    int nBlocks = paramBlockSize > 0 ? (int)((inFileSize + paramBlockSize - 1) / paramBlockSize) : 0;
     if (fwrite(&nBlocks, sizeof(nBlocks), 1, fOutput) != 1)
     {
         fprintf(stderr, "IO error on file: %s!\n", argv[3]);
         exit(1);
     }
 
-    double startTime = BSC_CLOCK();
+    outFileSize += (int)(sizeof(nBlocks));
 
-#ifdef LIBBSC_OPENMP
-
-    int numThreads = 1;
-    if (paramEnableParallelProcessing)
-    {
-        numThreads = omp_get_max_threads();
-        if (numThreads <= nBlocks) paramEnableMultiThreading = 0;
-        if (numThreads >= nBlocks) numThreads = nBlocks;
-    }
-
-#endif
+    unsigned long long startTime = bsc_now_ns();
 
     int segmentationStart = 0, segmentationEnd = 0;
 
 #ifdef LIBBSC_OPENMP
-    #pragma omp parallel num_threads(numThreads) if(numThreads > 1)
+    int numThreads = 1;
+    if (paramEnableParallelProcessing)
+    {
+        numThreads = omp_get_max_threads();
+        if (numThreads >= 2 * nBlocks)
+        { 
+#if defined(_OPENMP) && _OPENMP >= 201811
+            omp_set_max_active_levels(2);
+#elif defined(_OPENMP)
+            omp_set_nested(1);
+#endif
+        }
+
+        if (numThreads < 2 * nBlocks) paramEnableMultiThreading = 0;
+        if (numThreads > 1 * nBlocks) numThreads = nBlocks;
+    }
+
+    if (numThreads > 1)
+    {
+        #pragma omp parallel num_threads(numThreads)
+        {
+            compression_omp(argv[2], fInput, inFileSize, argv[4], fOutput, outFileSize, segmentationStart, segmentationEnd);
+        }
+    }
+    else
 #endif
     {
-        unsigned char * buffer = (unsigned char *)bsc_malloc(paramBlockSize + LIBBSC_HEADER_SIZE);
-        if (buffer == NULL)
+        compression_omp(argv[2], fInput, inFileSize, argv[4], fOutput, outFileSize, segmentationStart, segmentationEnd);
+    }
+
+    startTime = bsc_now_ns() - startTime;
+
+    fprintf(stdout, "\r%.55s encoded %.0f => %.0f in %.3fs (%.2f MB/s)\n", argv[2], (double)inFileSize, (double)outFileSize, (double)startTime / 1e9, ((double)inFileSize) * 1000.0 / (double)startTime);
+
+    fclose(fInput); fclose(fOutput);
+}
+
+void decompression_omp(char * input_name, FILE * fInput, BSC_FILEOFFSET& inFileSize, char * output_name, FILE * fOutput, BSC_FILEOFFSET& outFileSize)
+{
+    int bufferSize = -1; unsigned char * buffer = NULL;
+
+    while (true)
+    {
+        BSC_FILEOFFSET  blockOffset     = 0;
+
+        signed char     sortingContexts = 0;
+        signed char     recordSize      = 0;
+        int             blockSize       = 0;
+        int             dataSize        = 0;
+
+#ifdef LIBBSC_OPENMP
+        #pragma omp critical(input)
+#endif
+        {
+            if ((feof(fInput) == 0) && (BSC_FTELL(fInput) != inFileSize))
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp master
+#endif
+                {
+                    double progress = (100.0 * (double)BSC_FTELL(fInput)) / inFileSize;
+                    fprintf(stdout, "\rDecompressing %.55s(%02d%%)", input_name, (int)progress);
+                    fflush(stdout);
+                }
+
+                BSC_BLOCK_HEADER header = {0, 0, 0};
+                if (fread(&header, sizeof(BSC_BLOCK_HEADER), 1, fInput) != 1)
+                {
+                    fprintf(stderr, "\nUnexpected end of file: %s!\n", input_name);
+                    exit(1);
+                }
+
+                recordSize = header.recordSize;
+                if (recordSize < 1)
+                {
+                    fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
+                    exit(2);
+                }
+
+                sortingContexts = header.sortingContexts;
+                if ((sortingContexts != LIBBSC_CONTEXTS_FOLLOWING) && (sortingContexts != LIBBSC_CONTEXTS_PRECEDING))
+                {
+                    fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
+                    exit(2);
+                }
+
+                blockOffset = (BSC_FILEOFFSET)header.blockOffset;
+
+                unsigned char bscBlockHeader[LIBBSC_HEADER_SIZE];
+
+                if (fread(bscBlockHeader, LIBBSC_HEADER_SIZE, 1, fInput) != 1)
+                {
+                    fprintf(stderr, "\nUnexpected end of file: %s!\n", input_name);
+                    exit(1);
+                }
+
+                if (bsc_block_info(bscBlockHeader, LIBBSC_HEADER_SIZE, &blockSize, &dataSize, paramFeatures()) != LIBBSC_NO_ERROR)
+                {
+                    fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
+                    exit(2);
+                }
+
+                if ((blockSize > bufferSize) || (dataSize > bufferSize))
+                {
+                    if (blockSize > bufferSize) bufferSize = blockSize;
+                    if (dataSize  > bufferSize) bufferSize = dataSize;
+
+                    if (buffer != NULL) { bsc_free(buffer); } buffer = (unsigned char *)bsc_malloc(bufferSize);
+                }
+
+                if (buffer == NULL)
+                {
+                    fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n");
+                    exit(2);
+                }
+
+                memcpy(buffer, bscBlockHeader, LIBBSC_HEADER_SIZE);
+
+                if (fread(buffer + LIBBSC_HEADER_SIZE, blockSize - LIBBSC_HEADER_SIZE, 1, fInput) != 1)
+                {
+                    fprintf(stderr, "\nUnexpected end of file: %s!\n", input_name);
+                    exit(1);
+                }
+            }
+        }
+
+        if (dataSize == 0) break;
+
+        int result = bsc_decompress(buffer, blockSize, buffer, dataSize, paramFeatures());
+        if (result < LIBBSC_NO_ERROR)
         {
 #ifdef LIBBSC_OPENMP
             #pragma omp critical(print)
 #endif
             {
+                switch (result)
+                {
+                    case LIBBSC_DATA_CORRUPT            : fprintf(stderr, "\nThe compressed data is corrupted!\n"); break;
+                    case LIBBSC_NOT_ENOUGH_MEMORY       : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                    case LIBBSC_GPU_ERROR               : fprintf(stderr, "\nGeneral GPU failure! Please check README file for more information.\n"); break;
+                    case LIBBSC_GPU_NOT_SUPPORTED       : fprintf(stderr, "\nYour GPU is not supported! Please check README file for more information.\n"); break;
+                    case LIBBSC_GPU_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough GPU memory! Please check README file for more information.\n"); break;
 
-                fprintf(stderr, "Not enough memory! Please check README file for more information.\n");
+                    default                             : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                }
                 exit(2);
             }
         }
 
-        while (true)
+        if (sortingContexts == LIBBSC_CONTEXTS_PRECEDING)
         {
-            BSC_FILEOFFSET  blockOffset     = 0;
-            int             dataSize        = 0;
-
-#ifdef LIBBSC_OPENMP
-            #pragma omp critical(input)
-#endif
-            {
-                if ((feof(fInput) == 0) && (BSC_FTELL(fInput) != fileSize))
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp master
-#endif
-                    {
-                        double progress = (100.0 * (double)BSC_FTELL(fInput)) / fileSize;
-                        fprintf(stdout, "\rCompressing %.55s(%02d%%)", argv[2], (int)progress);
-                        fflush(stdout);
-                    }
-
-                    blockOffset = BSC_FTELL(fInput);
-
-                    int currentBlockSize = paramBlockSize;
-                    if (paramEnableSegmentation)
-                    {
-                        if (segmentationEnd - segmentationStart > 1) currentBlockSize = segmentedBlock[segmentationStart];
-                    }
-
-                    dataSize = (int)fread(buffer, 1, currentBlockSize, fInput);
-                    if (dataSize <= 0)
-                    {
-                        fprintf(stderr, "\nIO error on file: %s!\n", argv[2]);
-                        exit(1);
-                    }
-
-                    if (paramEnableSegmentation)
-                    {
-                        bool bSegmentation = false;
-
-                        if (segmentationStart == segmentationEnd) bSegmentation = true;
-                        if ((segmentationEnd - segmentationStart == 1) && (dataSize != segmentedBlock[segmentationStart])) bSegmentation = true;
-
-                        if (bSegmentation)
-                        {
-                            segmentationStart = 0; segmentationEnd = bsc_detect_segments(buffer, dataSize, segmentedBlock, 256, paramFeatures());
-                            if (segmentationEnd <= LIBBSC_NO_ERROR)
-                            {
-                                switch (segmentationEnd)
-                                {
-                                    case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                                    default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                                }
-                                exit(2);
-                            }
-                        }
-
-                        int newDataSize = segmentedBlock[segmentationStart++];
-                        if (dataSize != newDataSize)
-                        {
-                            BSC_FILEOFFSET pos = BSC_FTELL(fInput) - dataSize + newDataSize;
-                            BSC_FSEEK(fInput, pos, SEEK_SET);
-                            dataSize = newDataSize;
-                        }
-                    }
-                }
-            }
-
-            if (dataSize == 0) break;
-
-            signed char recordSize = 1;
-            if (paramEnableReordering)
-            {
-                recordSize = bsc_detect_recordsize(buffer, dataSize, paramFeatures());
-                if (recordSize < LIBBSC_NO_ERROR)
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp critical(print)
-#endif
-                    {
-                        switch (recordSize)
-                        {
-                            case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                            default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                        }
-                        exit(2);
-                    }
-                }
-                if (recordSize > 1)
-                {
-                    int result = bsc_reorder_forward(buffer, dataSize, recordSize, paramFeatures());
-                    if (result != LIBBSC_NO_ERROR)
-                    {
-#ifdef LIBBSC_OPENMP
-                        #pragma omp critical(print)
-#endif
-                        {
-                            switch (result)
-                            {
-                                case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                                default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                            }
-                            exit(2);
-                        }
-                    }
-                }
-            }
-
-            signed char sortingContexts = paramSortingContexts;
-            if (paramSortingContexts == LIBBSC_CONTEXTS_AUTODETECT)
-            {
-                sortingContexts = bsc_detect_contextsorder(buffer, dataSize, paramFeatures());
-                if (sortingContexts < LIBBSC_NO_ERROR)
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp critical(print)
-#endif
-                    {
-                        switch (sortingContexts)
-                        {
-                            case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory!\n"); break;
-                            default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                        }
-                        exit(2);
-                    }
-                }
-            }
-            if (sortingContexts == LIBBSC_CONTEXTS_PRECEDING)
-            {
-                int result = bsc_reverse_block(buffer, dataSize, paramFeatures());
-                if (result != LIBBSC_NO_ERROR)
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp critical(print)
-#endif
-                    {
-                        fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                        exit(2);
-                    }
-                }
-            }
-
-            int blockSize = bsc_compress(buffer, buffer, dataSize, paramLZPHashSize, paramLZPMinLen, paramBlockSorter, paramCoder, paramFeatures());
-            if (blockSize == LIBBSC_NOT_COMPRESSIBLE)
-            {
-#ifdef LIBBSC_OPENMP
-                #pragma omp critical(input)
-#endif
-                {
-                    sortingContexts = LIBBSC_CONTEXTS_FOLLOWING; recordSize = 1;
-
-                    BSC_FILEOFFSET pos = BSC_FTELL(fInput);
-                    {
-                        BSC_FSEEK(fInput, blockOffset, SEEK_SET);
-                        if (dataSize != (int)fread(buffer, 1, dataSize, fInput))
-                        {
-                            fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                            exit(2);
-                        }
-                    }
-                    BSC_FSEEK(fInput, pos, SEEK_SET);
-                }
-
-                blockSize = bsc_store(buffer, buffer, dataSize, paramFeatures());
-            }
-            if (blockSize < LIBBSC_NO_ERROR)
+            result = bsc_reverse_block(buffer, dataSize, paramFeatures());
+            if (result != LIBBSC_NO_ERROR)
             {
 #ifdef LIBBSC_OPENMP
                 #pragma omp critical(print)
 #endif
                 {
-                    switch (blockSize)
-                    {
-                        case LIBBSC_NOT_ENOUGH_MEMORY       : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                        case LIBBSC_NOT_SUPPORTED           : fprintf(stderr, "\nSpecified compression method is not supported on this platform!\n"); break;
-                        case LIBBSC_GPU_ERROR               : fprintf(stderr, "\nGeneral GPU failure! Please check README file for more information.\n"); break;
-                        case LIBBSC_GPU_NOT_SUPPORTED       : fprintf(stderr, "\nYour GPU is not supported! Please check README file for more information.\n"); break;
-                        case LIBBSC_GPU_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough GPU memory! Please check README file for more information.\n"); break;
+                    fprintf(stderr, "\nInternal program error, please contact the author!\n");
+                    exit(2);
+                }
+            }
+        }
 
-                        default                             : fprintf(stderr, "\nInternal program error, please contact the author!\n");
+        if (recordSize > 1)
+        {
+            result = bsc_reorder_reverse(buffer, dataSize, recordSize, paramFeatures());
+            if (result != LIBBSC_NO_ERROR)
+            {
+#ifdef LIBBSC_OPENMP
+                #pragma omp critical(print)
+#endif
+                {
+                    switch (result)
+                    {
+                        case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
+                        default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
                     }
                     exit(2);
                 }
             }
-
-#ifdef LIBBSC_OPENMP
-            #pragma omp critical(output)
-#endif
-            {
-                BSC_BLOCK_HEADER header = {blockOffset, recordSize, sortingContexts};
-
-                if (fwrite(&header, sizeof(BSC_BLOCK_HEADER), 1, fOutput) != 1)
-                {
-                    fprintf(stderr, "\nIO error on file: %s!\n", argv[3]);
-                    exit(1);
-                }
-
-                if ((int)fwrite(buffer, 1, blockSize, fOutput) != blockSize)
-                {
-                    fprintf(stderr, "\nIO error on file: %s!\n", argv[3]);
-                    exit(1);
-                }
-            }
-
         }
 
-        bsc_free(buffer);
+#ifdef LIBBSC_OPENMP
+        #pragma omp critical(output)
+#endif
+        {
+            if (BSC_FSEEK(fOutput, blockOffset, SEEK_SET))
+            {
+                fprintf(stderr, "\nIO error on file: %s!\n", output_name);
+                exit(1);
+            }
+
+            if ((int)fwrite(buffer, 1, dataSize, fOutput) != dataSize)
+            {
+                fprintf(stderr, "\nIO error on file: %s!\n", output_name);
+                exit(1);
+            }
+
+            outFileSize += (int)(dataSize);
+        }
     }
 
-    fprintf(stdout, "\r%.55s compressed %.0f into %.0f in %.3f seconds.\n", argv[2], (double)fileSize, (double)BSC_FTELL(fOutput), BSC_CLOCK() - startTime);
-
-    fclose(fInput); fclose(fOutput);
+    if (buffer != NULL) bsc_free(buffer);
 }
 
 void Decompression(char * argv[])
@@ -456,8 +686,10 @@ void Decompression(char * argv[])
         exit(1);
     }
 
-    BSC_FILEOFFSET fileSize = BSC_FTELL(fInput);
-    if (fileSize < 0)
+    BSC_FILEOFFSET inFileSize = BSC_FTELL(fInput);
+    BSC_FILEOFFSET outFileSize = 0;
+
+    if (inFileSize < 0)
     {
         fprintf(stderr, "IO error on file: %s!\n", argv[2]);
         exit(1);
@@ -490,184 +722,37 @@ void Decompression(char * argv[])
         exit(1);
     }
 
-    double startTime = BSC_CLOCK();
+    unsigned long long startTime = bsc_now_ns();
 
 #ifdef LIBBSC_OPENMP
-
     int numThreads = 1;
     if (paramEnableParallelProcessing)
     {
         numThreads = omp_get_max_threads();
-        if (numThreads <= nBlocks) paramEnableMultiThreading = 0;
-        if (numThreads >= nBlocks) numThreads = nBlocks;
-    }
-
-    #pragma omp parallel num_threads(numThreads) if(numThreads > 1)
+        if (numThreads >= 2 * nBlocks)
+        { 
+#if defined(_OPENMP) && _OPENMP >= 201811
+            omp_set_max_active_levels(2);
+#elif defined(_OPENMP)
+            omp_set_nested(1);
 #endif
-    {
-        int bufferSize = -1; unsigned char * buffer = NULL;
-
-        while (true)
-        {
-            BSC_FILEOFFSET  blockOffset     = 0;
-
-            signed char     sortingContexts = 0;
-            signed char     recordSize      = 0;
-            int             blockSize       = 0;
-            int             dataSize        = 0;
-
-#ifdef LIBBSC_OPENMP
-            #pragma omp critical(input)
-#endif
-            {
-                if ((feof(fInput) == 0) && (BSC_FTELL(fInput) != fileSize))
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp master
-#endif
-                    {
-                        double progress = (100.0 * (double)BSC_FTELL(fInput)) / fileSize;
-                        fprintf(stdout, "\rDecompressing %.55s(%02d%%)", argv[2], (int)progress);
-                        fflush(stdout);
-                    }
-
-                    BSC_BLOCK_HEADER header = {0, 0, 0};
-                    if (fread(&header, sizeof(BSC_BLOCK_HEADER), 1, fInput) != 1)
-                    {
-                        fprintf(stderr, "\nUnexpected end of file: %s!\n", argv[2]);
-                        exit(1);
-                    }
-
-                    recordSize = header.recordSize;
-                    if (recordSize < 1)
-                    {
-                        fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
-                        exit(2);
-                    }
-
-                    sortingContexts = header.sortingContexts;
-                    if ((sortingContexts != LIBBSC_CONTEXTS_FOLLOWING) && (sortingContexts != LIBBSC_CONTEXTS_PRECEDING))
-                    {
-                        fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
-                        exit(2);
-                    }
-
-                    blockOffset = (BSC_FILEOFFSET)header.blockOffset;
-
-                    unsigned char bscBlockHeader[LIBBSC_HEADER_SIZE];
-
-                    if (fread(bscBlockHeader, LIBBSC_HEADER_SIZE, 1, fInput) != 1)
-                    {
-                        fprintf(stderr, "\nUnexpected end of file: %s!\n", argv[2]);
-                        exit(1);
-                    }
-
-                    if (bsc_block_info(bscBlockHeader, LIBBSC_HEADER_SIZE, &blockSize, &dataSize, paramFeatures()) != LIBBSC_NO_ERROR)
-                    {
-                        fprintf(stderr, "\nThis is not bsc archive or invalid compression method!\n");
-                        exit(2);
-                    }
-
-                    if ((blockSize > bufferSize) || (dataSize > bufferSize))
-                    {
-                        if (blockSize > bufferSize) bufferSize = blockSize;
-                        if (dataSize  > bufferSize) bufferSize = dataSize;
-
-                        if (buffer != NULL) bsc_free(buffer); buffer = (unsigned char *)bsc_malloc(bufferSize);
-                    }
-
-                    if (buffer == NULL)
-                    {
-                        fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n");
-                        exit(2);
-                    }
-
-                    memcpy(buffer, bscBlockHeader, LIBBSC_HEADER_SIZE);
-
-                    if (fread(buffer + LIBBSC_HEADER_SIZE, blockSize - LIBBSC_HEADER_SIZE, 1, fInput) != 1)
-                    {
-                        fprintf(stderr, "\nUnexpected end of file: %s!\n", argv[2]);
-                        exit(1);
-                    }
-                }
-            }
-
-            if (dataSize == 0) break;
-
-            int result = bsc_decompress(buffer, blockSize, buffer, dataSize, paramFeatures());
-            if (result < LIBBSC_NO_ERROR)
-            {
-#ifdef LIBBSC_OPENMP
-                #pragma omp critical(print)
-#endif
-                {
-                    switch (result)
-                    {
-                        case LIBBSC_DATA_CORRUPT            : fprintf(stderr, "\nThe compressed data is corrupted!\n"); break;
-                        case LIBBSC_NOT_ENOUGH_MEMORY       : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                        case LIBBSC_GPU_ERROR               : fprintf(stderr, "\nGeneral GPU failure! Please check README file for more information.\n"); break;
-                        case LIBBSC_GPU_NOT_SUPPORTED       : fprintf(stderr, "\nYour GPU is not supported! Please check README file for more information.\n"); break;
-                        case LIBBSC_GPU_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough GPU memory! Please check README file for more information.\n"); break;
-
-                        default                             : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                    }
-                    exit(2);
-                }
-            }
-
-            if (sortingContexts == LIBBSC_CONTEXTS_PRECEDING)
-            {
-                result = bsc_reverse_block(buffer, dataSize, paramFeatures());
-                if (result != LIBBSC_NO_ERROR)
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp critical(print)
-#endif
-                    {
-                        fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                        exit(2);
-                    }
-                }
-            }
-
-            if (recordSize > 1)
-            {
-                result = bsc_reorder_reverse(buffer, dataSize, recordSize, paramFeatures());
-                if (result != LIBBSC_NO_ERROR)
-                {
-#ifdef LIBBSC_OPENMP
-                    #pragma omp critical(print)
-#endif
-                    {
-                        switch (result)
-                        {
-                            case LIBBSC_NOT_ENOUGH_MEMORY   : fprintf(stderr, "\nNot enough memory! Please check README file for more information.\n"); break;
-                            default                         : fprintf(stderr, "\nInternal program error, please contact the author!\n");
-                        }
-                        exit(2);
-                    }
-                }
-            }
-
-#ifdef LIBBSC_OPENMP
-            #pragma omp critical(output)
-#endif
-            {
-                if (BSC_FSEEK(fOutput, blockOffset, SEEK_SET))
-                {
-                    fprintf(stderr, "\nIO error on file: %s!\n", argv[3]);
-                    exit(1);
-                }
-
-                if ((int)fwrite(buffer, 1, dataSize, fOutput) != dataSize)
-                {
-                    fprintf(stderr, "\nIO error on file: %s!\n", argv[3]);
-                    exit(1);
-                }
-            }
         }
 
-        if (buffer != NULL) bsc_free(buffer);
+        if (numThreads < 2 * nBlocks) paramEnableMultiThreading = 0;
+        if (numThreads > 1 * nBlocks) numThreads = nBlocks;
+    }
+
+    if (numThreads > 1)
+    {
+        #pragma omp parallel num_threads(numThreads) if(numThreads > 1)
+        {
+            decompression_omp(argv[2], fInput, inFileSize, argv[3], fOutput, outFileSize);
+        }
+    }
+    else
+#endif
+    {
+        decompression_omp(argv[2], fInput, inFileSize, argv[3], fOutput, outFileSize);
     }
 
     if (BSC_FSEEK(fOutput, 0, SEEK_END))
@@ -676,21 +761,30 @@ void Decompression(char * argv[])
         exit(1);
     }
 
-    fprintf(stdout, "\r%.55s decompressed %.0f into %.0f in %.3f seconds.\n", argv[2], (double)fileSize, (double)BSC_FTELL(fOutput), BSC_CLOCK() - startTime);
+    startTime = bsc_now_ns() - startTime;
+
+    fprintf(stdout, "\r%.55s decoded %.0f => %.0f in %.3fs (%.2f MB/s)\n", argv[2], (double)inFileSize, (double)outFileSize, (double)startTime / 1e9, ((double)outFileSize) * 1000.0 / (double)startTime);
 
     fclose(fInput); fclose(fOutput);
 }
 
 void ShowUsage(void)
 {
+#if !defined(BSC_DECOMPRESSION_ONLY)
     fprintf(stdout, "Usage: bsc <e|d> inputfile outputfile <options>\n\n");
+#elif defined(LIBBSC_CUDA_SUPPORT) || defined(_WIN32) || defined(LIBBSC_OPENMP)
+    fprintf(stdout, "Usage: bsc d inputfile outputfile <options>\n\n");
+#else
+    fprintf(stdout, "Usage: bsc d inputfile outputfile\n\n");
+#endif
 
+#if !defined(BSC_DECOMPRESSION_ONLY)
     fprintf(stdout, "Block sorting options:\n");
-    fprintf(stdout, "  -b<size> Block size in megabytes, default: -b25\n");
-    fprintf(stdout, "             minimum: -b1, maximum: -b1024\n");
+    fprintf(stdout, "  -b<size> Block size in megabytes or bytes (for size 10000+), default: -b25\n");
+    fprintf(stdout, "             minimum: -b1, maximum: -b2047\n");
     fprintf(stdout, "  -m<algo> Block sorting algorithm, default: -m0\n");
     fprintf(stdout, "             -m0 Burrows Wheeler Transform (default)\n");
-#ifdef LIBBSC_SORT_TRANSFORM_SUPPORT
+#ifndef LIBBSC_NO_SORT_TRANSFORM
     fprintf(stdout, "             -m3..8 Sort Transform of order n\n");
 #endif
     fprintf(stdout, "  -c<ctx>  Contexts for sorting, default: -cf\n");
@@ -698,6 +792,7 @@ void ShowUsage(void)
     fprintf(stdout, "             -cp Preceding contexts\n");
     fprintf(stdout, "             -ca Autodetect (experimental)\n");
     fprintf(stdout, "  -e<algo> Entropy encoding algorithm, default: -e1\n");
+    fprintf(stdout, "             -e0 Fast Quantized Local Frequency Coding\n");
     fprintf(stdout, "             -e1 Static Quantized Local Frequency Coding (default)\n");
     fprintf(stdout, "             -e2 Adaptive Quantized Local Frequency Coding (best compression)\n");
    
@@ -706,12 +801,14 @@ void ShowUsage(void)
     fprintf(stdout, "  -s       Enable segmentation (adaptive block size), default: disable\n");
     fprintf(stdout, "  -r       Enable structured data reordering, default: disable\n");
     fprintf(stdout, "  -l       Enable Lempel-Ziv preprocessing, default: enable\n");
-    fprintf(stdout, "  -H<size> LZP dictionary size in bits, default: -H16\n");
+    fprintf(stdout, "  -H<size> LZP dictionary size in bits, default: -H%d\n", LIBBSC_DEFAULT_LZPHASHSIZE);
     fprintf(stdout, "             minimum: -H10, maximum: -H28\n");
-    fprintf(stdout, "  -M<size> LZP minimum match length, default: -M128\n");
-    fprintf(stdout, "             minimum: -M4, maximum: -M255\n");
+    fprintf(stdout, "  -M<size> LZP minimum match length, default: -M%d\n", LIBBSC_DEFAULT_LZPMINLEN);
+    fprintf(stdout, "             minimum: -M4, maximum: -M255\n\n");
+#endif
 
-    fprintf(stdout, "\nPlatform specific options:\n");
+#if defined(LIBBSC_CUDA_SUPPORT) || defined(_WIN32) || defined(LIBBSC_OPENMP)
+    fprintf(stdout, "Platform specific options:\n");
 #ifdef LIBBSC_CUDA_SUPPORT
     fprintf(stdout, "  -G       Enable Sort Transform acceleration on NVIDIA GPU, default: disable\n");
 #endif
@@ -720,10 +817,15 @@ void ShowUsage(void)
 #endif
 #ifdef LIBBSC_OPENMP
     fprintf(stdout, "  -t       Disable parallel blocks processing, default: enable\n");
-    fprintf(stdout, "  -T       Disable multi-core systems support, default: enable\n");
+    fprintf(stdout, "  -T       Disable multithreading (-T<num> sets num threads), default: enable\n");
+#endif
+    fprintf(stdout, "\n");
 #endif
 
-    fprintf(stdout,"\nOptions may be combined into one, like -b128p -m5e1\n");
+#if !defined(BSC_DECOMPRESSION_ONLY) || defined(LIBBSC_CUDA_SUPPORT) || defined(_WIN32) || defined(LIBBSC_OPENMP)
+    fprintf(stdout,"Options may be combined into one, like -b128p -m5e1\n");
+#endif
+
     exit(0);
 }
 
@@ -741,8 +843,8 @@ void ProcessSwitch(char * s)
             case 'b':
             {
                 char * strNum = s; while ((*s >= '0') && (*s <= '9')) s++;
-                paramBlockSize = atoi(strNum) * 1024 * 1024;
-                if ((paramBlockSize < 1024 * 1024) || (paramBlockSize > 1024 * 1024 * 1024)) ShowUsage();
+                paramBlockSize = atoi(strNum); if (paramBlockSize < 10000) paramBlockSize *= 1024 * 1024;
+                if ((paramBlockSize < 10000) || (paramBlockSize > 2047 * 1024 * 1024)) ShowUsage();
                 break;
             }
 
@@ -753,7 +855,7 @@ void ProcessSwitch(char * s)
                 {
                     case 0   : paramBlockSorter = LIBBSC_BLOCKSORTER_BWT; break;
 
-#ifdef LIBBSC_SORT_TRANSFORM_SUPPORT
+#ifndef LIBBSC_NO_SORT_TRANSFORM
                     case 3   : paramBlockSorter = LIBBSC_BLOCKSORTER_ST3; break;
                     case 4   : paramBlockSorter = LIBBSC_BLOCKSORTER_ST4; break;
                     case 5   : paramBlockSorter = LIBBSC_BLOCKSORTER_ST5; break;
@@ -783,6 +885,7 @@ void ProcessSwitch(char * s)
             {
                 switch (*s++)
                 {
+                    case '0' : paramCoder = LIBBSC_CODER_QLFC_FAST;     break;
                     case '1' : paramCoder = LIBBSC_CODER_QLFC_STATIC;   break;
                     case '2' : paramCoder = LIBBSC_CODER_QLFC_ADAPTIVE; break;
                     default  : ShowUsage();
@@ -814,7 +917,14 @@ void ProcessSwitch(char * s)
 
 #ifdef LIBBSC_OPENMP
             case 't': paramEnableParallelProcessing = 0; break;
-            case 'T': paramEnableParallelProcessing = paramEnableMultiThreading = 0; break;
+            case 'T':
+            {
+                char * strNum = s; while ((*s >= '0') && (*s <= '9')) s++;
+                int numThreads = atoi(strNum);
+                if (numThreads > 1) omp_set_num_threads(numThreads);
+                if (numThreads < 2) paramEnableParallelProcessing = paramEnableMultiThreading = 0;
+                break;
+            }
 #endif
 
 #ifdef LIBBSC_CUDA_SUPPORT
@@ -852,14 +962,15 @@ void ProcessCommandline(int argc, char * argv[])
 
 int main(int argc, char * argv[])
 {
-    fprintf(stdout, "This is bsc, Block Sorting Compressor. Version 3.1.0. 8 July 2012.\n");
-    fprintf(stdout, "Copyright (c) 2009-2012 Ilya Grebnov <Ilya.Grebnov@gmail.com>.\n\n");
-
-#if defined(_OPENMP) && defined(__INTEL_COMPILER)
-
+#if defined(LIBBSC_OPENMP)
+    omp_set_dynamic(0);
+#if defined(__INTEL_COMPILER)
     kmp_set_warnings_off();
-
 #endif
+#endif
+
+    fprintf(stdout, "This is bsc, Block Sorting Compressor. Version %s, 9 September 2025.\n", LIBBSC_VERSION_STRING);
+    fprintf(stdout, "Copyright (c) 2009-2025 Ilya Grebnov <Ilya.Grebnov@gmail.com>.\n\n");
 
     ProcessCommandline(argc, argv);
 
@@ -871,7 +982,9 @@ int main(int argc, char * argv[])
 
     switch (*argv[1])
     {
+#if !defined(BSC_DECOMPRESSION_ONLY)
         case 'e' : case 'E' : Compression(argv); break;
+#endif
         case 'd' : case 'D' : Decompression(argv); break;
         default  : ShowUsage();
     }

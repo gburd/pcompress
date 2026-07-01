@@ -24,7 +24,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_read_support_format_all.c 174991 2007-12-30 04:58:22Z kientzle $");
 
 #include "archive.h"
 #include "archive_private.h"
@@ -61,16 +60,18 @@ archive_read_support_format_all(struct archive *a)
 	archive_read_support_format_mtree(a);
 	archive_read_support_format_tar(a);
 	archive_read_support_format_xar(a);
+	archive_read_support_format_warc(a);
 
 	/*
 	 * Install expensive bidders last.  By doing them last, we
 	 * increase the chance that a high bid from someone else will
 	 * make it unnecessary for these to do anything at all.
 	 */
-	/* These three have potentially large look-ahead. */
+	/* These have potentially large look-ahead. */
 	archive_read_support_format_7zip(a);
 	archive_read_support_format_cab(a);
 	archive_read_support_format_rar(a);
+	archive_read_support_format_rar5(a);
 	archive_read_support_format_iso9660(a);
 	/* Seek is really bad, since it forces the read-ahead
 	 * logic to discard buffered data. */
