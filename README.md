@@ -8,11 +8,11 @@ Comments, suggestions, code, rants etc are welcome.
 
 Pcompress is an archiver that also does compression and decompression in
 parallel by splitting input data into chunks. It has a modular structure
-and includes support for multiple algorithms like LZMA, Bzip2, PPMD, etc,
-with SKEIN/SHA checksums for data integrity. Compression algorithms are
-selected based on the file type to maximize compression gains using a file
-and data anaylis based adaptive technique. It also includes various data
-transformation filters to improve compression.
+and includes support for multiple algorithms like LZMA, Bzip2, PPMD,
+Zstandard, LZ4, etc, with BLAKE2/SHA checksums for data integrity.
+Compression algorithms are selected based on the file type to maximize
+compression gains using a file and data analysis based adaptive technique.
+It also includes various data transformation filters to improve compression.
 
 It also implements Variable Block Deduplication and Delta Compression
 features based on a Polynomial Fingerprinting scheme. Delta Compression
@@ -33,6 +33,35 @@ Pcompress also supports encryption via AES, Salsa20 and uses Scrypt from
 Tarsnap for Password Based Key generation. A unique key is generated per
 session even if the same password is used and HMAC is used to do authentication.
 
+Modernization Status (v4.x)
+===========================
+
+The v4.x branch includes build system modernization, new algorithm support,
+and multi-architecture groundwork while maintaining backward compatibility
+with the existing `.pz` file format.
+
+  Completed:
+  - Zstandard (zstd) compression algorithm integrated with level mapping
+    and multi-threaded compression support
+  - Dependencies converted to git submodules (LZ4, libbsc, Zstandard,
+    libarchive, WavPack); LZMA SDK remains vendored (see docs/DEPENDENCIES.md)
+  - Build system portability improvements (POSIX sh, pkg-config, Nix support)
+  - OpenSSL compatibility hardened: supports 1.1.1, 3.0, 3.1+ with
+    version detection macros and deprecation warning suppression
+  - Zero warnings from project-owned source code (including zero
+    OpenSSL deprecation warnings on 3.x)
+  - Platform-agnostic CPU feature detection abstraction (utils/cpu_features.h)
+  - Comprehensive developer documentation (docs/)
+  - Testing framework with unit, integration, fuzz, and benchmark suites
+
+  In Progress:
+  - ARM64/NEON optimized code paths for BLAKE2 and xxHash
+  - CI/CD pipeline with GitHub Actions
+  - Cross-platform validation (macOS, FreeBSD)
+
+See `docs/MIGRATION_v4.md` for upgrade details and `docs/ARCHITECTURE.md`
+for the system design overview.
+
 LICENSING
 =========
 
@@ -42,6 +71,71 @@ MPLv2 license is made available as a download. This is updated
 periodically. Since Pcompress also integrates a bunch of third-party
 software a few features may be missing in the MPLv2 licensed version
 because of the upstream software being LGPL licensed originally.
+
+Third-Party Dependency Licenses
+-------------------------------
+
+| Component      | License            | Usage                          |
+|----------------|--------------------|--------------------------------|
+| OpenSSL        | Apache-2.0         | Cryptographic primitives       |
+| zlib           | zlib License       | Zlib/gzip compression          |
+| libbz2         | BSD-style          | Bzip2 compression              |
+| libarchive     | BSD                | PAX archive handling           |
+| Libbsc         | Apache-2.0 / LGPL | Block-sorting compressor       |
+| LZMA SDK       | Public Domain      | LZMA and PPMD compression      |
+| Zstandard      | BSD-3-Clause       | Fast balanced compression      |
+| LZ4            | BSD-2-Clause       | Fast compression               |
+| LZFX           | BSD                | Fast compression               |
+| Scrypt         | BSD (Tarsnap)      | Password-based key derivation  |
+| PackJPG        | LGPLv3             | JPEG recompression filter      |
+| WavPack        | BSD                | WAV audio recompression filter |
+| bsdiff         | BSD                | Binary delta compression       |
+| xxHash         | BSD                | Non-cryptographic hashing      |
+| Keccak (SHA-3) | Public Domain      | SHA-3 checksums                |
+| BLAKE2         | CC0 / Apache-2.0   | Fast checksums (default)       |
+| Skein          | Public Domain      | Cryptographic hash             |
+
+See the COPYING and COPYING.LESSER files for the full LGPL license text.
+
+OpenSSL Version Requirements
+----------------------------
+
+Pcompress requires OpenSSL for cryptographic operations (AES encryption,
+HMAC authentication, SHA-2 checksums, and key derivation via Scrypt/PBKDF2).
+
+| Version        | Status               | Notes                                |
+|----------------|----------------------|--------------------------------------|
+| OpenSSL < 1.1.1| Not supported        | Build will fail with #error          |
+| OpenSSL 1.1.1  | Supported (minimum)  | LTS release, all APIs available      |
+| OpenSSL 3.0.x  | Supported            | Low-level APIs deprecated but functional; warnings suppressed |
+| OpenSSL 3.1+   | Supported (recommended) | Provider architecture stabilized  |
+| LibreSSL       | Not tested           | May work but is not a supported target |
+
+The build uses `crypto/ossl_compat.h` for version detection and compatibility
+shims. Runtime version mismatches (e.g., compiled against 3.x but linked
+against 1.1.x) are detected at startup and cause a fatal error.
+
+To check your OpenSSL version: `openssl version` or `pkg-config --modversion openssl`.
+
+Documentation
+=============
+
+Developer documentation is available in the `docs/` directory:
+
+- `docs/ARCHITECTURE.md` -- System design, component overview, data flow
+- `docs/ADDING_ALGORITHMS.md` -- Guide for adding new compression algorithms
+- `docs/SIMD_OPTIMIZATION.md` -- SIMD dispatch patterns and porting guide
+- `docs/PORTING.md` -- Porting to new architectures (ARM64, RISC-V)
+- `docs/PERFORMANCE.md` -- Algorithm selection matrix and tuning guide
+- `docs/TESTING.md` -- Testing framework, test categories, CI integration
+- `docs/DEPENDENCIES.md` -- Dependency management and submodule details
+- `docs/NIX.md` -- Building and developing with Nix flakes
+- `docs/MIGRATION_v4.md` -- Migration guide from v3.x to v4.x
+
+API documentation can be generated from Doxygen comments in the public headers:
+
+    cd docs && doxygen Doxyfile
+    # Output in docs/api/html/
 
 Links of Interest
 =================
@@ -199,6 +293,13 @@ Compression Algorithms
               Effective Levels: 1 - 9
     bzip2   - Slow, much better compression than Zlib.
               Effective Levels: 1 - 9
+
+    zstd    - Zstandard. Fast, very good compression ratio. Provides an excellent
+              balance between speed and compression, sitting between LZ4 and
+              LZMA. Supports multi-threaded compression natively via the -t flag.
+              Effective Levels: 1 - 14
+              Levels 1-3 are fast (LZ4-competitive), 4-6 are balanced, 7-9 are
+              high compression, 10-14 are ultra (LZMA-competitive).
 
     lzma    - Very slow. Extreme compression. Recommended: Use lzmaMt variant mentioned
               below.

@@ -1,0 +1,38 @@
+# Doxyfile for Pcompress API Documentation
+
+PROJECT_NAME           = "Pcompress"
+PROJECT_NUMBER         = "4.0"
+PROJECT_BRIEF          = "Chunked parallel multi-algorithm compression utility"
+OUTPUT_DIRECTORY       = docs/api
+INPUT                  = pcompress.h allocator.h meta_stream.h \
+                         utils/utils.h crypto/crypto_utils.h \
+                         rabin/rabin_dedup.h archive/pc_archive.h \
+                         archive/pc_arc_filter.h \
+                         filters/analyzer/analyzer.h \
+                         utils/cpuid.h \
+                         utils/cpu_features.h
+FILE_PATTERNS          = *.h *.c
+RECURSIVE              = NO
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+HTML_OUTPUT            = html
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+SORT_MEMBER_DOCS       = NO
+JAVADOC_AUTOBRIEF      = YES
+STRIP_FROM_PATH        = .
+STRIP_FROM_INC_PATH    = . utils crypto rabin archive filters/analyzer
+INCLUDE_PATH           = . utils crypto rabin rabin/global archive \
+                         filters/analyzer lzma crypto/blake2 crypto/skein \
+                         crypto/keccak crypto/sha2 crypto/scrypt crypto/aes \
+                         crypto/xsalsa20 filters/lzp filters/delta2 \
+                         filters/dispack filters/transpose filters/packjpg \
+                         filters/packpnm lzfx lz4 bsdiff
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES
+SOURCE_BROWSER         = YES
+VERBATIM_HEADERS       = YES
+QUIET                  = YES
