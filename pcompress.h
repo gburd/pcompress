@@ -23,6 +23,24 @@
  *
  */
 
+/**
+ * @file pcompress.h
+ * @brief Public API for the Pcompress compression library.
+ *
+ * This header defines the main data structures and functions for using
+ * Pcompress as a library (libpcompress). It provides chunked parallel
+ * multi-algorithm lossless compression and decompression with support for
+ * archiving, deduplication, encryption, and various pre-processing filters.
+ *
+ * Typical usage:
+ * @code
+ *   pc_ctx_t *pctx = create_pc_context();
+ *   init_pc_context(pctx, argc, argv);
+ *   start_pcompress(pctx);
+ *   destroy_pc_context(pctx);
+ * @endcode
+ */
+
 #ifndef	_PCOMPRESS_H
 #define	_PCOMPRESS_H
 
@@ -39,18 +57,21 @@ extern "C" {
 #include <filters/analyzer/analyzer.h>
 #include <meta_stream.h>
 
-#define	CHUNK_FLAG_SZ	1
-#define	ALGO_SZ		8
-#define	MIN_CHUNK	2048
-#define	VERSION		10
-#define	FLAG_DEDUP	1
-#define	FLAG_DEDUP_FIXED	2
-#define	FLAG_SINGLE_CHUNK	4
-#define FLAG_META_STREAM	4096
-#define	FLAG_ARCHIVE	2048
-#define	UTILITY_VERSION	"3.1"
-#define	MASK_CRYPTO_ALG	0x30
-#define	MAX_LEVEL	14
+/** @name File Format Constants */
+/**@{*/
+#define	CHUNK_FLAG_SZ	1       /**< Size of chunk flag field in bytes. */
+#define	ALGO_SZ		8       /**< Size of algorithm name field in file header. */
+#define	MIN_CHUNK	2048    /**< Minimum allowed chunk size in bytes. */
+#define	VERSION		10      /**< Current file format version number. */
+#define	FLAG_DEDUP	1       /**< File flag: Rabin deduplication enabled. */
+#define	FLAG_DEDUP_FIXED	2 /**< File flag: fixed-block deduplication enabled. */
+#define	FLAG_SINGLE_CHUNK	4 /**< File flag: entire file in one chunk. */
+#define FLAG_META_STREAM	4096 /**< File flag: metadata streams present. */
+#define	FLAG_ARCHIVE	2048    /**< File flag: archive mode (PAX). */
+#define	UTILITY_VERSION	"3.1"   /**< Human-readable utility version string. */
+#define	MASK_CRYPTO_ALG	0x30    /**< Bitmask for crypto algorithm in flags. */
+#define	MAX_LEVEL	14      /**< Maximum compression level. */
+/**@}*/
 
 #ifndef _MPLV2_LICENSE_
 #define	LICENSE_STRING "LGPLv3"
@@ -96,12 +117,33 @@ extern "C" {
  * fastest algo at our disposal for these cases.
  */
 #define	ADAPT_COMPRESS_LZ4	5
+#define	ADAPT_COMPRESS_ZSTD	6
 #define	CHDR_ALGO_MASK	7
 #define	CHDR_ALGO(x) (((x)>>4) & CHDR_ALGO_MASK)
 
+/** @name Buffer Size Helpers */
+/**@{*/
 extern uint32_t zlib_buf_extra(uint64_t buflen);
 extern int lz4_buf_extra(uint64_t buflen);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_buf_extra(uint64_t buflen);
+#endif
+/**@}*/
 
+/**
+ * @name Compression Functions
+ * All compression functions share the same signature.
+ * @param src       Input buffer to compress.
+ * @param srclen    Length of the input buffer.
+ * @param dst       Output buffer for compressed data (pre-allocated).
+ * @param destlen   On input, size of dst. On output, actual compressed size.
+ * @param level     Compression level (1-14).
+ * @param chdr      Chunk header byte (adaptive mode flags).
+ * @param btype     Data type hint from analyzer (DATA_TEXT, DATA_BINARY, etc.).
+ * @param data      Algorithm-private state from the corresponding init function.
+ * @return 0 on success, -1 on failure.
+ */
+/**@{*/
 extern int zlib_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *destlen, int level, uchar_t chdr, int btype, void *data);
 extern int lzma_compress(void *src, uint64_t srclen, void *dst,
@@ -118,7 +160,26 @@ extern int lz4_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
 extern int none_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_compress(void *src, uint64_t srclen, void *dst,
+	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#endif
+/**@}*/
 
+/**
+ * @name Decompression Functions
+ * All decompression functions share the same signature as compression functions.
+ * @param src       Input buffer with compressed data.
+ * @param srclen    Length of compressed data.
+ * @param dst       Output buffer for decompressed data (pre-allocated).
+ * @param dstlen    On input, size of dst. On output, actual decompressed size.
+ * @param level     Compression level used during compression.
+ * @param chdr      Chunk header byte.
+ * @param btype     Data type hint.
+ * @param data      Algorithm-private state.
+ * @return 0 on success, -1 on failure.
+ */
+/**@{*/
 extern int zlib_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
 extern int lzma_decompress(void *src, uint64_t srclen, void *dst,
@@ -135,7 +196,24 @@ extern int lz4_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
 extern int none_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_decompress(void *src, uint64_t srclen, void *dst,
+	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#endif
+/**@}*/
 
+/**
+ * @name Algorithm Init Functions
+ * Initialize algorithm-specific state before compression or decompression.
+ * @param data          Output: pointer to allocated algorithm-private state.
+ * @param level         In/out: compression level (may be clamped to valid range).
+ * @param nthreads      Number of worker threads.
+ * @param chunksize     Chunk size in bytes.
+ * @param file_version  File format version for backward compatibility.
+ * @param op            COMPRESS or DECOMPRESS.
+ * @return 0 on success, -1 on failure.
+ */
+/**@{*/
 extern int adapt_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		      int file_version, compress_op_t op);
 extern int adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
@@ -154,8 +232,23 @@ extern int lz4_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		    int file_version, compress_op_t op);
 extern int none_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		     int file_version, compress_op_t op);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
+		     int file_version, compress_op_t op);
+#endif
+/**@}*/
+
+/** Set the data analyzer context for adaptive compression mode. */
 extern void adapt_set_analyzer_ctx(void *data, analyzer_ctx_t *actx);
 
+/**
+ * @name Algorithm Properties Functions
+ * Populate algo_props_t with buffer requirements and threading capabilities.
+ * @param data       Output: algorithm properties structure.
+ * @param level      Compression level.
+ * @param chunksize  Chunk size in bytes.
+ */
+/**@{*/
 extern void lzma_props(algo_props_t *data, int level, uint64_t chunksize);
 extern void lzma_mt_props(algo_props_t *data, int level, uint64_t chunksize);
 extern void lz4_props(algo_props_t *data, int level, uint64_t chunksize);
@@ -165,7 +258,18 @@ extern void lz_fx_props(algo_props_t *data, int level, uint64_t chunksize);
 extern void bzip2_props(algo_props_t *data, int level, uint64_t chunksize);
 extern void adapt_props(algo_props_t *data, int level, uint64_t chunksize);
 extern void none_props(algo_props_t *data, int level, uint64_t chunksize);
+#ifdef ENABLE_PC_ZSTD
+extern void zstd_props(algo_props_t *data, int level, uint64_t chunksize);
+#endif
+/**@}*/
 
+/**
+ * @name Algorithm Deinit Functions
+ * Release algorithm-specific state allocated by the corresponding init function.
+ * @param data  In/out: pointer to algorithm-private state. Set to NULL on return.
+ * @return 0 on success.
+ */
+/**@{*/
 extern int zlib_deinit(void **data);
 extern int adapt_deinit(void **data);
 extern int lzma_deinit(void **data);
@@ -173,7 +277,17 @@ extern int ppmd_deinit(void **data);
 extern int lz_fx_deinit(void **data);
 extern int lz4_deinit(void **data);
 extern int none_deinit(void **data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_deinit(void **data);
+#endif
+/**@}*/
 
+/**
+ * @name Algorithm Statistics Functions
+ * Print compression statistics when the -C flag is used.
+ * @param show  Controls verbosity: 0 = summary, 1 = detailed.
+ */
+/**@{*/
 extern void adapt_stats(int show);
 extern void ppmd_stats(int show);
 extern void lzma_stats(int show);
@@ -182,6 +296,10 @@ extern void zlib_stats(int show);
 extern void lz_fx_stats(int show);
 extern void lz4_stats(int show);
 extern void none_stats(int show);
+#ifdef ENABLE_PC_ZSTD
+extern void zstd_stats(int show);
+#endif
+/**@}*/
 
 #ifdef ENABLE_PC_LIBBSC
 extern int libbsc_compress(void *src, uint64_t srclen, void *dst,
@@ -195,6 +313,13 @@ extern int libbsc_deinit(void **data);
 extern void libbsc_stats(int show);
 #endif
 
+/**
+ * @brief Main Pcompress context structure.
+ *
+ * Holds all configuration, state, and function pointers for a compression
+ * or decompression session. Created with create_pc_context(), configured
+ * with init_pc_context(), and freed with destroy_pc_context().
+ */
 typedef struct pc_ctx {
 	compress_func_ptr _compress_func;
 	compress_func_ptr _decompress_func;
@@ -278,8 +403,13 @@ typedef struct pc_ctx {
 	meta_ctx_t *meta_ctx;
 } pc_ctx_t;
 
-/*
- * Per-thread data structure for compression and decompression threads.
+/**
+ * @brief Per-thread data structure for compression and decompression.
+ *
+ * Each worker thread owns one instance containing pre-allocated buffers,
+ * synchronization semaphores, and algorithm function pointers. Threads
+ * are signaled via semaphores to process chunks in parallel while
+ * maintaining output ordering.
  */
 struct cmp_data {
 	uchar_t *cmp_seg;
@@ -309,16 +439,76 @@ struct cmp_data {
 	pc_ctx_t *pctx;
 };
 
+/** @name Library Public API */
+/**@{*/
+
+/** Print usage/help text to stderr. */
 void usage(pc_ctx_t *pctx);
+
+/**
+ * Allocate and zero-initialize a new Pcompress context.
+ * @return Pointer to allocated context, or NULL on failure.
+ */
 pc_ctx_t *create_pc_context(void);
+
+/**
+ * Initialize a context from a single argument string (space-delimited).
+ * @param pctx  Context created by create_pc_context().
+ * @param args  Space-separated argument string (as if from command line).
+ * @return 0 on success, 2 if help requested, -1 on error.
+ */
 int init_pc_context_argstr(pc_ctx_t *pctx, char *args);
+
+/**
+ * Initialize a context from argc/argv (as from main()).
+ * @param pctx  Context created by create_pc_context().
+ * @param argc  Argument count.
+ * @param argv  Argument vector.
+ * @return 0 on success, 2 if help requested, -1 on error.
+ */
 int init_pc_context(pc_ctx_t *pctx, int argc, char *argv[]);
+
+/**
+ * Free all resources associated with a Pcompress context.
+ * @param pctx  Context to destroy. Safe to call with NULL.
+ */
 void destroy_pc_context(pc_ctx_t *pctx);
+
+/**
+ * Set the encryption password for a context.
+ * @param pctx    Context to set password on.
+ * @param pwdata  Password bytes (copied internally).
+ * @param pwlen   Length of password.
+ */
 void pc_set_userpw(pc_ctx_t *pctx, unsigned char *pwdata, int pwlen);
 
+/**
+ * Run the main compression or decompression operation as configured.
+ * @param pctx  Fully initialized context.
+ * @return 0 on success, non-zero on failure.
+ */
 int start_pcompress(pc_ctx_t *pctx);
+
+/**
+ * Directly start compression of a single file (library API).
+ * @param pctx       Initialized context.
+ * @param filename   Path to input file.
+ * @param chunksize  Chunk size in bytes.
+ * @param level      Compression level (1-14).
+ * @return 0 on success, non-zero on failure.
+ */
 int start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level);
+
+/**
+ * Directly start decompression of a .pz file (library API).
+ * @param pctx         Initialized context.
+ * @param filename     Path to compressed .pz file.
+ * @param to_filename  Output file or directory path.
+ * @return 0 on success, non-zero on failure.
+ */
 int start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename);
+
+/**@}*/
 
 #ifdef	__cplusplus
 }

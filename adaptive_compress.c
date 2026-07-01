@@ -45,6 +45,9 @@ static unsigned int bzip2_count = 0;
 static unsigned int bsc_count = 0;
 static unsigned int ppmd_count = 0;
 static unsigned int lz4_count = 0;
+#ifdef ENABLE_PC_ZSTD
+static unsigned int zstd_count = 0;
+#endif
 
 extern int lzma_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *destlen, int level, uchar_t chdr, int btype, void *data);
@@ -56,6 +59,10 @@ extern int libbsc_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
 extern int lz4_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_compress(void *src, uint64_t srclen, void *dst,
+	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#endif
 
 extern int lzma_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
@@ -67,6 +74,10 @@ extern int libbsc_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
 extern int lz4_decompress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_decompress(void *src, uint64_t srclen, void *dst,
+	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
+#endif
 
 extern int lzma_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		     int file_version, compress_op_t op);
@@ -80,6 +91,11 @@ extern int libbsc_deinit(void **data);
 extern int lz4_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		       int file_version, compress_op_t op);
 extern int lz4_deinit(void **data);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
+		     int file_version, compress_op_t op);
+extern int zstd_deinit(void **data);
+#endif
 
 extern int ppmd_alloc(void *data);
 extern void ppmd_free(void *data);
@@ -87,12 +103,18 @@ extern int ppmd_state_init(void **data, int *level, int alloc);
 
 extern int lz4_buf_extra(uint64_t buflen);
 extern int libbsc_buf_extra(uint64_t buflen);
+#ifdef ENABLE_PC_ZSTD
+extern int zstd_buf_extra(uint64_t buflen);
+#endif
 
 struct adapt_data {
 	void *lzma_data;
 	void *ppmd_data;
 	void *bsc_data;
 	void *lz4_data;
+#ifdef ENABLE_PC_ZSTD
+	void *zstd_data;
+#endif
 	int adapt_mode;
 	analyzer_ctx_t *actx;
 };
@@ -108,13 +130,20 @@ void
 adapt_stats(int show)
 {
 	if (show) {
-		if (bzip2_count > 0 || bsc_count > 0 || ppmd_count > 0 || lzma_count > 0) {
+		if (bzip2_count > 0 || bsc_count > 0 || ppmd_count > 0 || lzma_count > 0
+#ifdef ENABLE_PC_ZSTD
+		    || zstd_count > 0
+#endif
+		    ) {
 			log_msg(LOG_INFO, 0, "Adaptive mode stats:");
 			log_msg(LOG_INFO, 0, "	BZIP2 chunk count: %u", bzip2_count);
 			log_msg(LOG_INFO, 0, "	LIBBSC chunk count: %u", bsc_count);
 			log_msg(LOG_INFO, 0, "	PPMd chunk count: %u", ppmd_count);
 			log_msg(LOG_INFO, 0, "	LZMA chunk count: %u", lzma_count);
 			log_msg(LOG_INFO, 0, "	LZ4 chunk count: %u", lz4_count);
+#ifdef ENABLE_PC_ZSTD
+			log_msg(LOG_INFO, 0, "	ZSTD chunk count: %u", zstd_count);
+#endif
 		} else {
 			log_msg(LOG_INFO, 0, "\n");
 		}
@@ -124,6 +153,9 @@ adapt_stats(int show)
 	bsc_count = 0;
 	ppmd_count = 0;
 	lz4_count = 0;
+#ifdef ENABLE_PC_ZSTD
+	zstd_count = 0;
+#endif
 }
 
 void
@@ -137,6 +169,11 @@ adapt_props(algo_props_t *data, int level, uint64_t chunksize)
 
 #ifdef ENABLE_PC_LIBBSC
 	ext2 = libbsc_buf_extra(chunksize);
+	if (ext2 > ext1) ext1 = ext2;
+#endif
+
+#ifdef ENABLE_PC_ZSTD
+	ext2 = zstd_buf_extra(chunksize);
 	if (ext2 > ext1) ext1 = ext2;
 #endif
 
@@ -162,6 +199,17 @@ adapt_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		 */
 		if (rv == 0)
 			rv = lz4_init(&(adat->lz4_data), &lv, nthreads, chunksize, file_version, op);
+#ifdef ENABLE_PC_ZSTD
+		/*
+		 * Zstandard is used for binary data in adapt mode 1. It offers
+		 * a good balance between speed and compression ratio, sitting
+		 * between LZ4 and LZMA.
+		 */
+		lv = *level;
+		adat->zstd_data = NULL;
+		if (rv == 0)
+			rv = zstd_init(&(adat->zstd_data), &lv, nthreads, chunksize, file_version, op);
+#endif
 		adat->lzma_data = NULL;
 		adat->bsc_data = NULL;
 		*data = adat;
@@ -172,6 +220,9 @@ adapt_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	ppmd_count = 0;
 	bsc_count = 0;
 	lz4_count = 0;
+#ifdef ENABLE_PC_ZSTD
+	zstd_count = 0;
+#endif
 	return (rv);
 }
 
@@ -198,6 +249,18 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		if (rv == 0)
 			rv = libbsc_init(&(adat->bsc_data), &lv, nthreads, chunksize, file_version, op);
 #endif
+#ifdef ENABLE_PC_ZSTD
+		/*
+		 * Zstandard is used for binary data in adapt mode 2, replacing
+		 * LZMA for general binary data where its speed/ratio tradeoff
+		 * is superior. LZMA remains available for the highest
+		 * compression needs.
+		 */
+		lv = *level;
+		adat->zstd_data = NULL;
+		if (rv == 0)
+			rv = zstd_init(&(adat->zstd_data), &lv, nthreads, chunksize, file_version, op);
+#endif
 		/*
 		 * LZ4 is used to tackle some embedded archive headers and/or zero paddings in
 		 * otherwise incompressible data. So we always use it at the lowest and fastest
@@ -214,6 +277,9 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	ppmd_count = 0;
 	bsc_count = 0;
 	lz4_count = 0;
+#ifdef ENABLE_PC_ZSTD
+	zstd_count = 0;
+#endif
 	return (rv);
 }
 
@@ -229,6 +295,10 @@ adapt_deinit(void **data)
 			rv += lzma_deinit(&(adat->lzma_data));
 		if (adat->lz4_data)
 			rv += lz4_deinit(&(adat->lz4_data));
+#ifdef ENABLE_PC_ZSTD
+		if (adat->zstd_data)
+			rv += zstd_deinit(&(adat->zstd_data));
+#endif
 		slab_free(NULL, adat);
 		*data = NULL;
 	}
@@ -295,18 +365,42 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 		lz4_count++;
 
 	} else if (adat->adapt_mode == 2 && PC_TYPE(btype) & TYPE_BINARY && !bsc_type) {
+#ifdef ENABLE_PC_ZSTD
+		/*
+		 * Use Zstandard for binary data in adapt2 mode. It provides
+		 * better speed than LZMA at competitive compression ratios.
+		 */
+		rv = zstd_compress(src, srclen, dst, dstlen, level, chdr, btype, adat->zstd_data);
+		if (rv < 0)
+			return (rv);
+		rv = ADAPT_COMPRESS_ZSTD;
+		zstd_count++;
+#else
 		rv = lzma_compress(src, srclen, dst, dstlen, level, chdr, btype, adat->lzma_data);
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_LZMA;
 		lzma_count++;
+#endif
 
 	} else if (adat->adapt_mode == 1 && PC_TYPE(btype) & TYPE_BINARY && !bsc_type) {
+#ifdef ENABLE_PC_ZSTD
+		/*
+		 * Use Zstandard for binary data in adapt mode 1. It provides
+		 * better compression than bzip2 at similar or better speed.
+		 */
+		rv = zstd_compress(src, srclen, dst, dstlen, level, chdr, btype, adat->zstd_data);
+		if (rv < 0)
+			return (rv);
+		rv = ADAPT_COMPRESS_ZSTD;
+		zstd_count++;
+#else
 		rv = bzip2_compress(src, srclen, dst, dstlen, level, chdr, btype, NULL);
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_BZIP2;
 		bzip2_count++;
+#endif
 
 	} else {
 #ifdef ENABLE_PC_LIBBSC
@@ -367,6 +461,14 @@ adapt_decompress(void *src, uint64_t srclen, void *dst,
 		return (libbsc_decompress(src, srclen, dst, dstlen, level, chdr, btype, adat->bsc_data));
 #else
 		log_msg(LOG_ERR, 0, "Cannot decompress chunk. Libbsc support not present.\n");
+		return (-1);
+#endif
+
+	} else if (cmp_flags == ADAPT_COMPRESS_ZSTD) {
+#ifdef ENABLE_PC_ZSTD
+		return (zstd_decompress(src, srclen, dst, dstlen, level, chdr, btype, adat->zstd_data));
+#else
+		log_msg(LOG_ERR, 0, "Cannot decompress chunk. Zstandard support not present.\n");
 		return (-1);
 #endif
 

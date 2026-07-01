@@ -42,7 +42,7 @@
 #include <signal.h>
 #include <rabin_dedup.h>
 #include <cpuid.h>
-#include <xxhash.h>
+#include "xxhash.h"
 #include "archive/pc_archive.h"
 #include "archive/pc_arc_filter.h"
 

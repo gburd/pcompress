@@ -49,8 +49,10 @@ typedef struct _CLzmaEncProps
   UInt32 mc;        /* 1 <= mc <= (1 << 30), default = 32 */
   unsigned writeEndMark;  /* 0 - do not write EOPM, 1 - write EOPM, default = 0 */
   int numThreads;  /* 1 or 2, default = 2 */
-  int normalized;
-  size_t litprob_sz;
+  /* Pcompress custom fields (not in upstream LZMA SDK).
+   * See VENDOR_PATCHES.md for details. */
+  int normalized;     /* Tracks if LzmaEncProps_Normalize() was called */
+  size_t litprob_sz;  /* Cached literal probability table size */
 } CLzmaEncProps;
 
 extern void LzmaEncProps_Init(CLzmaEncProps *p);

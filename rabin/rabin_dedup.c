@@ -74,7 +74,7 @@
 #include <utils.h>
 #include <pthread.h>
 #include <heap.h>
-#include <xxhash.h>
+#include "../utils/xxhash.h"
 
 #define	QSORT_LT(a, b)	((*a)<(*b))
 #define	QSORT_TYPE uint64_t

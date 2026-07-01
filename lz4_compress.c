@@ -107,23 +107,27 @@ lz4_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	uchar_t *dst2;
 
 	if (lzdat->level == 1) {
-		rv = LZ4_compress((const char *)src, (char *)dst, _srclen);
+		rv = LZ4_compress_default((const char *)src, (char *)dst,
+		    _srclen, LZ4_compressBound(_srclen));
 
 	} else if (lzdat->level == 2) {
-		rv = LZ4_compress((const char *)src, (char *)dst, _srclen);
+		rv = LZ4_compress_default((const char *)src, (char *)dst,
+		    _srclen, LZ4_compressBound(_srclen));
 		if (rv == 0 || rv > *dstlen) {
 			return (-1);
 		}
 		dst2 = (uchar_t *)slab_alloc(NULL, rv + sizeof (int) + LZ4_compressBound(rv));
 		*((int *)dst2) = htonl(rv);
-		rv = LZ4_compressHC((const char *)dst, (char *)(dst2 + sizeof (int)), rv);
+		rv = LZ4_compress_HC((const char *)dst, (char *)(dst2 + sizeof (int)),
+		    rv, LZ4_compressBound(rv), LZ4HC_CLEVEL_DEFAULT);
 		if (rv != 0) {
 			rv += sizeof (int);
 			memcpy(dst, dst2, rv);
 		}
 		slab_free(NULL, dst2);
 	} else {
-		rv = LZ4_compressHC((const char *)src, (char *)dst, _srclen);
+		rv = LZ4_compress_HC((const char *)src, (char *)dst,
+		    _srclen, LZ4_compressBound(_srclen), LZ4HC_CLEVEL_DEFAULT);
 	}
 	if (rv == 0) {
 		return (-1);
@@ -142,8 +146,9 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	int _dstlen = *dstlen;
 
 	if (lzdat->level == 1 || lzdat->level == 3) {
-		rv = LZ4_uncompress((const char *)src, (char *)dst, _dstlen);
-		if (rv != srclen) {
+		rv = LZ4_decompress_safe((const char *)src, (char *)dst,
+		    (int)srclen, _dstlen);
+		if (rv != _dstlen) {
 			return (-1);
 		}
 
@@ -151,13 +156,15 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		int sz1;
 
 		sz1 = ntohl(*((int *)src));
-		rv = LZ4_uncompress((const char *)src + sizeof (int), (char *)dst, sz1);
-		if (rv != srclen - sizeof (int)) {
+		rv = LZ4_decompress_safe((const char *)src + sizeof (int),
+		    (char *)dst, (int)srclen - (int)sizeof (int), sz1);
+		if (rv != sz1) {
 			return (-1);
 		}
 		memcpy(src, dst, sz1);
-		rv = LZ4_uncompress((const char *)src, (char *)dst, _dstlen);
-		if (rv != sz1) {
+		rv = LZ4_decompress_safe((const char *)src, (char *)dst,
+		    sz1, _dstlen);
+		if (rv != _dstlen) {
 			return (-1);
 		}
 	}

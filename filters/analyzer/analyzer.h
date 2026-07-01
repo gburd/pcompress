@@ -22,6 +22,16 @@
  * moinakg@belenix.org, http://moinakg.wordpress.com/
  */
 
+/**
+ * @file analyzer.h
+ * @brief Data type analyzer for adaptive compression mode.
+ *
+ * Analyzes input buffers to determine data type characteristics (text,
+ * binary, high-entropy, etc.) at multiple significance thresholds.
+ * Used by adaptive modes to select the best compression algorithm
+ * per chunk.
+ */
+
 #ifndef	_ANALYZER_H
 #define	_ANALYZER_H
 
@@ -29,17 +39,38 @@
 extern "C" {
 #endif
 
+/** Significance value holding a data type classification. */
 struct significance_value {
-	int btype;
+	int btype;  /**< Data type (DATA_TEXT, DATA_BINARY, etc.) */
 };
 
+/**
+ * @brief Analyzer context with multi-threshold data classification.
+ *
+ * Contains data type classifications at 10%, 30%, and 50% significance
+ * thresholds. Higher thresholds indicate stronger confidence in the
+ * classification.
+ */
 typedef struct _analyzer_ctx {
-	struct significance_value ten_pct;
-	struct significance_value thirty_pct;
-	struct significance_value fifty_pct;
+	struct significance_value ten_pct;    /**< Classification at 10% threshold. */
+	struct significance_value thirty_pct; /**< Classification at 30% threshold. */
+	struct significance_value fifty_pct;  /**< Classification at 50% threshold. */
 } analyzer_ctx_t;
 
+/**
+ * Analyze a buffer and populate the multi-threshold analyzer context.
+ * @param src     Input data buffer.
+ * @param srclen  Length of the input buffer.
+ * @param actx    Output: analyzer context with classifications.
+ */
 void analyze_buffer(void *src, uint64_t srclen, analyzer_ctx_t *actx);
+
+/**
+ * Perform a simple single-threshold analysis of a buffer.
+ * @param src     Input data buffer.
+ * @param srclen  Length of the input buffer.
+ * @return Data type classification (DATA_TEXT, DATA_BINARY, etc.).
+ */
 int analyze_buffer_simple(void *src, uint64_t srclen);
 
 #ifdef  __cplusplus

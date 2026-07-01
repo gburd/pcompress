@@ -60,6 +60,16 @@
  * 
  */
 
+/**
+ * @file rabin_dedup.h
+ * @brief Rabin fingerprint based deduplication engine.
+ *
+ * Provides content-defined chunking using polynomial fingerprinting for
+ * variable-block deduplication, fixed-block deduplication, and global
+ * deduplication with an in-memory hash index. Also supports delta
+ * compression via MinHash similarity detection and bsdiff.
+ */
+
 #ifndef _RABIN_POLY_H_
 #define _RABIN_POLY_H_
 

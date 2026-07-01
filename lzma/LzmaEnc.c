@@ -2346,12 +2346,15 @@ SRes LzmaEnc_CodeOneMemBlock(CLzmaEncHandle pp, Bool reInit,
   p->rc.outStream = &outStream.funcTable;
 
   res = LzmaEnc_CodeOneBlock(p, True, desiredPackSize, *unpackSize);
-  
+
   *unpackSize = (UInt32)(p->nowPos64 - nowPos64);
   *destLen -= outStream.rem;
-  if (outStream.overflow)
+  if (outStream.overflow) {
+    p->rc.outStream = NULL;  /* Clear pointer to stack variable before return */
     return SZ_ERROR_OUTPUT_EOF;
+  }
 
+  p->rc.outStream = NULL;  /* Clear pointer to stack variable before return */
   return res;
 }
 

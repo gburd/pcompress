@@ -32,6 +32,20 @@
 #include <allocator.h>
 #include <libbsc.h>
 
+/*
+ * bsc_decompress_old was provided by earlier libbsc versions for backward
+ * compatibility with v2.x compressed data. Modern libbsc (3.3+) handles
+ * old formats transparently via bsc_decompress, so we alias it.
+ */
+#ifndef LIBBSC_HAS_DECOMPRESS_OLD
+static inline int
+bsc_decompress_old(const unsigned char *input, int inputSize,
+    unsigned char *output, int outputSize, int features)
+{
+	return bsc_decompress(input, inputSize, output, outputSize, features);
+}
+#endif
+
 // 1G
 #define	BSC_MAX_CHUNK	1073741824L
 

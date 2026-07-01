@@ -87,7 +87,7 @@ typedef unsigned char uchar_t ;
 #define	UINT64_MAX (18446744073709551615ULL)
 #endif
 
-typedef unsigned long uintptr_t;
+/* uintptr_t is provided by stdint.h (included above) */
 typedef int32_t bsize_t;
 
 #undef WORDS_BIGENDIAN
@@ -231,18 +231,24 @@ typedef enum {
 	COMPRESS_INVALID
 } compress_algo_t;
 
+/**
+ * @brief Algorithm properties reported by each compression algorithm.
+ *
+ * Populated by the algorithm's *_props() function to communicate buffer
+ * requirements and threading capabilities to the compression engine.
+ */
 typedef struct {
-	uint32_t buf_extra;
-	int compress_mt_capable;
-	int decompress_mt_capable;
-	int single_chunk_mt_capable;
-	int is_single_chunk;
-	int nthreads;
-	int c_max_threads;
-	int d_max_threads;
-	int delta2_span;
-	int deltac_min_distance;
-	cksum_t cksum;
+	uint32_t buf_extra;             /**< Extra bytes needed in output buffer beyond input size. */
+	int compress_mt_capable;        /**< 1 if algorithm handles compression threading internally. */
+	int decompress_mt_capable;      /**< 1 if algorithm handles decompression threading internally. */
+	int single_chunk_mt_capable;    /**< 1 if internal MT works for single-chunk mode. */
+	int is_single_chunk;            /**< Set by caller: 1 if entire file is one chunk. */
+	int nthreads;                   /**< Set by caller: number of worker threads. */
+	int c_max_threads;              /**< Max internal threads for compression. */
+	int d_max_threads;              /**< Max internal threads for decompression. */
+	int delta2_span;                /**< Recommended stride span for delta2 pre-processing. */
+	int deltac_min_distance;        /**< Minimum distance for delta compression. */
+	cksum_t cksum;                  /**< Set by caller: checksum algorithm in use. */
 } algo_props_t;
 
 typedef enum {
@@ -362,21 +368,30 @@ int identify_pnm_type(uchar_t *buf, size_t len);
 #endif
 int identify_wav_type(uchar_t *buf, size_t len);
 
-/* Pointer type for compress and decompress functions. */
+/** @name Algorithm Function Pointer Types */
+/**@{*/
+
+/** Function pointer type for compress and decompress operations. */
 typedef int (*compress_func_ptr)(void *src, uint64_t srclen, void *dst,
 	uint64_t *destlen, int level, uchar_t chdr, int btype, void *data);
 
+/** Compression or decompression operation selector. */
 typedef enum {
 	COMPRESS,
 	DECOMPRESS
 } compress_op_t;
 
-/* Pointer type for algo specific init/deinit/stats functions. */
+/** Function pointer type for algorithm initialization. */
 typedef int (*init_func_ptr)(void **data, int *level, int nthreads, uint64_t chunksize,
 			     int file_version, compress_op_t op);
+/** Function pointer type for algorithm cleanup. */
 typedef int (*deinit_func_ptr)(void **data);
+/** Function pointer type for printing compression statistics. */
 typedef void (*stats_func_ptr)(int show);
+/** Function pointer type for reporting algorithm properties. */
 typedef void (*props_func_ptr)(algo_props_t *data, int level, uint64_t chunksize);
+
+/**@}*/
 
 /*
  * Logging definitions.

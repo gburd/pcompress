@@ -23,6 +23,17 @@
  *
  */
 
+/**
+ * @file pc_arc_filter.h
+ * @brief Content-aware archive filters for specialized file types.
+ *
+ * When archiving, files are analyzed by type and routed through
+ * specialized filters (PackJPG for JPEG, WavPack for WAV, Dispack
+ * for x86 executables) before general-purpose compression. Filters
+ * produce reversible transformations that improve compression ratios
+ * for their target file types.
+ */
+
 #ifndef	_PC_ARCHIVE_FILTER_H
 #define	_PC_ARCHIVE_FILTER_H
 
