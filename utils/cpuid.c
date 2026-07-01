@@ -60,6 +60,8 @@
 #define	SSSE3_FLAG	0x200
 #define	AVX_FLAG		0x10000000
 #define	AVX2_FLAG		(1U << 5)
+#define	AVX512F_FLAG		(1U << 16)
+#define	AVX512VL_FLAG		(1U << 31)
 #define	XOP_FLAG		0x800
 #define	AES_FLAG		0x2000000
 
@@ -144,9 +146,11 @@ cpuid_basic_identify(processor_cap_t *pc)
 	memcpy(raw.vendor_str + 8, &raw.basic_cpuid[0][2], 4);
 	raw.vendor_str[12] = 0;
 	pc->avx_level = 0;
+	pc->avx512_avail = 0;
 	pc->sse_level = 0;
 	pc->sse_sub_level = 0;
 	pc->xop_avail = 0;
+	pc->aes_avail = 0;
 
 	if (strcmp(raw.vendor_str, "GenuineIntel") == 0) {
 		pc->proc_type = PROC_X64_INTEL;
@@ -183,6 +187,11 @@ cpuid_basic_identify(processor_cap_t *pc)
 			pc->avx_level = 2;
 		}
 
+		/* CPUID leaf 7, EBX bit 16 = AVX-512F */
+		if (raw.basic_cpuid[7][1] & AVX512F_FLAG) {
+			pc->avx512_avail = 1;
+		}
+
 		if (raw.basic_cpuid[1][2] & AES_FLAG) {
 			pc->aes_avail = 1;
 		}
@@ -193,4 +202,39 @@ cpuid_basic_identify(processor_cap_t *pc)
 	}
 }
 
+#else /* !__x86_64__ */
+
+/*
+ * Non-x86 architectures: provide a cpuid_basic_identify() that
+ * populates processor_cap_t with appropriate defaults using the
+ * cpu_features abstraction layer.
+ */
+#include "cpu_features.h"
+
+void
+cpuid_basic_identify(processor_cap_t *pc)
+{
+	cpu_features_t feat;
+
+	memset(pc, 0, sizeof (*pc));
+	cpu_features_detect(&feat);
+
+	switch (feat.arch) {
+	case ARCH_ARM64:
+		pc->proc_type = PROC_ARM64;
+		pc->aes_avail = cpu_has_feature(&feat, CPU_FEAT_AES);
+		break;
+	case ARCH_RISCV:
+		pc->proc_type = PROC_RISCV;
+		break;
+	default:
+#if BYTE_ORDER == BIG_ENDIAN
+		pc->proc_type = PROC_BIGENDIAN_GENERIC;
+#else
+		pc->proc_type = PROC_LITENDIAN_GENERIC;
 #endif
+		break;
+	}
+}
+
+#endif /* __x86_64__ */

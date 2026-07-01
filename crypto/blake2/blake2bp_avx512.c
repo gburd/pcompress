@@ -20,12 +20,15 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
+ */
+
+/*
+ * BLAKE2bp (parallel BLAKE2b) AVX-512 variant.
+ * Uses the single-block blake2b functions from the AVX-512
+ * implementation via the BLAKE_NAMESPACE macro.
  */
 
 #if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
+#define BLAKE_NAMESPACE(x) x##_avx512
 #include "blake2bp.c"
 #endif
-

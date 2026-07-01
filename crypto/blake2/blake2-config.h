@@ -56,6 +56,10 @@
 #define HAVE_AVX
 #endif
 
+#if defined(__AVX512F__)
+#define HAVE_AVX512F
+#endif
+
 #if defined(__XOP__)
 #define HAVE_XOP
 #endif
@@ -89,8 +93,8 @@
 #define HAVE_SSE2
 #endif
 
-#if !defined(HAVE_SSE2)
-#error "This code requires at least SSE2."
+#if !defined(HAVE_SSE2) && (defined(__x86_64__) || defined(__i386__))
+#error "This code requires at least SSE2 on x86."
 #endif
 
 #endif

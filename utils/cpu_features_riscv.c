@@ -20,12 +20,32 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
  */
 
-#if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
-#include "blake2bp.c"
-#endif
+/*
+ * RISC-V CPU feature detection placeholder.
+ *
+ * Currently provides scalar-only support. RISC-V Vector extension (RVV)
+ * detection can be added here once the ecosystem matures.
+ */
 
+#if defined(__riscv) && (__riscv_xlen == 64)
+
+#include "cpu_features.h"
+
+void
+cpu_features_detect_riscv(cpu_features_t *feat)
+{
+	feat->arch = ARCH_RISCV;
+	feat->features = CPU_FEAT_NONE;
+
+	/*
+	 * TODO: Detect RISC-V Vector extension (RVV) when available.
+	 * On Linux this would use getauxval(AT_HWCAP) with COMPAT_HWCAP_ISA_V.
+	 */
+}
+
+#else
+/* Avoid empty translation unit warning on non-RISC-V platforms */
+typedef int cpu_features_riscv_unused;
+#endif /* __riscv && 64-bit */

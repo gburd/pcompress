@@ -20,7 +20,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
+ *
  */
 
 #ifndef __BLAKE2_DIGEST_H__
@@ -28,6 +28,7 @@
 
 #include "blake2.h"
 #include <cpuid.h>
+#include <string.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -66,6 +67,7 @@ extern "C" {
 
   static void blake2_module_init(struct blake2_dispatch *dsp, processor_cap_t *pc)
   {
+#if defined(__x86_64__) || defined(__i386__)
     dsp->blake2b_init		= blake2b_init_sse2;
     dsp->blake2b_init_key	= blake2b_init_key_sse2;
     dsp->blake2b_init_param	= blake2b_init_param_sse2;
@@ -117,6 +119,42 @@ extern "C" {
       dsp->blake2b		= blake2b_avx;
       dsp->blake2bp		= blake2bp_avx;
     }
+    if (pc->avx512_avail) {
+      dsp->blake2b_init		= blake2b_init_avx512;
+      dsp->blake2b_init_key	= blake2b_init_key_avx512;
+      dsp->blake2b_init_param	= blake2b_init_param_avx512;
+      dsp->blake2b_update	= blake2b_update_avx512;
+      dsp->blake2b_final		= blake2b_final_avx512;
+      dsp->blake2bp_init		= blake2bp_init_avx512;
+      dsp->blake2bp_init_key	= blake2bp_init_key_avx512;
+      dsp->blake2bp_update	= blake2bp_update_avx512;
+      dsp->blake2bp_final 	= blake2bp_final_avx512;
+      dsp->blake2b		= blake2b_avx512;
+      dsp->blake2bp		= blake2bp_avx512;
+    }
+#elif defined(__aarch64__) || defined(__arm64__)
+    /* ARM64: use NEON-optimized BLAKE2 implementations */
+    (void)pc;
+    dsp->blake2b_init		= blake2b_init_neon;
+    dsp->blake2b_init_key	= blake2b_init_key_neon;
+    dsp->blake2b_init_param	= blake2b_init_param_neon;
+    dsp->blake2b_update		= blake2b_update_neon;
+    dsp->blake2b_final		= blake2b_final_neon;
+    dsp->blake2bp_init		= blake2bp_init_neon;
+    dsp->blake2bp_init_key	= blake2bp_init_key_neon;
+    dsp->blake2bp_update		= blake2bp_update_neon;
+    dsp->blake2bp_final 		= blake2bp_final_neon;
+    dsp->blake2b			= blake2b_neon;
+    dsp->blake2bp		= blake2bp_neon;
+#else
+    /*
+     * Unknown arch: BLAKE2 SIMD implementations not available.
+     * Set all pointers to NULL. The crypto layer will fall back to
+     * OpenSSL for hashing.
+     */
+    (void)pc;
+    memset(dsp, 0, sizeof(*dsp));
+#endif
   }
 
 #if defined(__cplusplus)

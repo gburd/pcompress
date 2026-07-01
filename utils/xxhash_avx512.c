@@ -20,12 +20,15 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
+ */
+
+/*
+ * xxHash AVX-512 variant.
+ * Compiled with -mavx512f to take advantage of wider SIMD execution
+ * and EVEX-encoded instructions.
  */
 
 #if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
-#include "blake2bp.c"
+#define CPUCAP_NM(x)	x##_AVX512
+#include "xxhash.c"
 #endif
-

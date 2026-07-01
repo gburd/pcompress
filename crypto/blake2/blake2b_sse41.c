@@ -23,7 +23,9 @@
  *      
  */
 
+#if defined(__x86_64__) || defined(__i386__)
 #define HAVE_SSE41
 #define BLAKE_NAMESPACE(x) x##_sse41
 #include "blake2b.c"
+#endif
 

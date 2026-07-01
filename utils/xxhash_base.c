@@ -20,13 +20,15 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
+ *
  */
 
 #include <inttypes.h>
-#include <xxhash.h>
+#include "xxhash.h"
 #include <pthread.h>
 #include <utils.h>
+
+#if defined(__x86_64__) || defined(__i386__)
 
 extern void*        XXH32_init_SSE4   (unsigned int seed);
 extern int          XXH32_feed_SSE4   (void* state, const void* input, int len);
@@ -40,6 +42,22 @@ extern unsigned int XXH32_result_SSE2 (void* state);
 extern unsigned int XXH32_getIntermediateResult_SSE2 (void* state);
 extern unsigned int XXH32_SSE2 (const void* input, int len, unsigned int seed);
 
+extern void*        XXH32_init_AVX512   (unsigned int seed);
+extern int          XXH32_feed_AVX512   (void* state, const void* input, int len);
+extern unsigned int XXH32_result_AVX512 (void* state);
+extern unsigned int XXH32_getIntermediateResult_AVX512 (void* state);
+extern unsigned int XXH32_AVX512 (const void* input, int len, unsigned int seed);
+
+#elif defined(__aarch64__) || defined(__arm64__)
+
+extern void*        XXH32_init_NEON   (unsigned int seed);
+extern int          XXH32_feed_NEON   (void* state, const void* input, int len);
+extern unsigned int XXH32_result_NEON (void* state);
+extern unsigned int XXH32_getIntermediateResult_NEON (void* state);
+extern unsigned int XXH32_NEON (const void* input, int len, unsigned int seed);
+
+#endif
+
 unsigned int (*xxh32)(const void* input, int len, unsigned int seed) = NULL;
 void * (*xxh32_init)(unsigned int seed) = NULL;
 int (*xxh32_feed)(void* state, const void* input, int len) = NULL;
@@ -48,7 +66,14 @@ unsigned int (*xxh32_getIntermediateResult)(void* state) = NULL;
 
 void
 XXH32_module_init() {
-	if (proc_info.sse_level >= 4) {
+#if defined(__x86_64__) || defined(__i386__)
+	if (proc_info.avx512_avail) {
+		xxh32 = XXH32_AVX512;
+		xxh32_init = XXH32_init_AVX512;
+		xxh32_feed = XXH32_feed_AVX512;
+		xxh32_result = XXH32_result_AVX512;
+		xxh32_getIntermediateResult = XXH32_getIntermediateResult_AVX512;
+	} else if (proc_info.sse_level >= 4) {
 		xxh32 = XXH32_SSE4;
 		xxh32_init = XXH32_init_SSE4;
 		xxh32_feed = XXH32_feed_SSE4;
@@ -61,6 +86,13 @@ XXH32_module_init() {
 		xxh32_result = XXH32_result_SSE2;
 		xxh32_getIntermediateResult = XXH32_getIntermediateResult_SSE2;
 	}
+#elif defined(__aarch64__) || defined(__arm64__)
+	xxh32 = XXH32_NEON;
+	xxh32_init = XXH32_init_NEON;
+	xxh32_feed = XXH32_feed_NEON;
+	xxh32_result = XXH32_result_NEON;
+	xxh32_getIntermediateResult = XXH32_getIntermediateResult_NEON;
+#endif
 }
 
 unsigned int
@@ -92,4 +124,3 @@ XXH32_getIntermediateResult(void* state)
 {
 	return xxh32_getIntermediateResult(state);
 }
-

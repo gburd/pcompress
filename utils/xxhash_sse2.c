@@ -23,6 +23,8 @@
  *      
  */
 
+#if defined(__x86_64__) || defined(__i386__)
 #define CPUCAP_NM(x)	x##_SSE2
 #include "xxhash.c"
+#endif
 

@@ -24,6 +24,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#ifdef __x86_64__
 #include <utils.h>
 #include <cpuid.h>
 
@@ -59,12 +62,29 @@ main(int argc, char *argv[])
 		else
 			printf("\n");
 	} else {
-		if (pc.avx_level == 1)
-			printf("avx\n");
+		if (pc.avx512_avail)
+			printf("avx512f\n");
 		else if (pc.avx_level == 2)
 			printf("avx2\n");
+		else if (pc.avx_level == 1)
+			printf("avx\n");
 	}
 
 	return (0);
 }
 
+#else /* !__x86_64__ */
+
+/*
+ * On non-x86 architectures, this utility does nothing.
+ * The config script only calls it on x86 platforms.
+ */
+int
+main(int argc, char *argv[])
+{
+	(void)argc;
+	(void)argv;
+	return (0);
+}
+
+#endif /* __x86_64__ */

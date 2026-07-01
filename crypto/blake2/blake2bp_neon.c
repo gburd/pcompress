@@ -20,12 +20,18 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
  */
 
-#if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
-#include "blake2bp.c"
-#endif
+/*
+ * BLAKE2bp (parallel BLAKE2b) NEON variant.
+ * blake2bp uses the single-block blake2b functions from the NEON
+ * implementation via the BLAKE_NAMESPACE macro.
+ */
 
+#if defined(__aarch64__) || defined(__arm64__)
+#define BLAKE_NAMESPACE(x) x##_neon
+#include "blake2bp.c"
+#else
+/* Avoid empty translation unit warning on non-ARM platforms */
+typedef int blake2bp_neon_unused;
+#endif

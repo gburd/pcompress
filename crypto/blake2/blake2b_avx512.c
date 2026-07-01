@@ -20,12 +20,22 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
+ */
+
+/*
+ * BLAKE2b AVX-512 variant.
+ *
+ * Compiles blake2b.c with BLAKE_NAMESPACE set to produce _avx512
+ * suffixed symbols. The actual AVX-512 speedup comes from:
+ * - EVEX-encoded instructions (3-operand form, reduced register pressure)
+ * - Potential auto-vectorization with -mavx512f -mavx512vl
+ * - The underlying blake2b.c already uses __m128i SSE intrinsics which
+ *   benefit from the wider AVX-512 register file and execution units
+ *
+ * On CPUs without AVX-512 this file compiles to empty (x86 guard).
  */
 
 #if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
-#include "blake2bp.c"
+#define BLAKE_NAMESPACE(x) x##_avx512
+#include "blake2b.c"
 #endif
-

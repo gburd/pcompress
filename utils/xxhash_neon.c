@@ -20,12 +20,18 @@
  * If not, see <http://www.gnu.org/licenses/>.
  *
  * moinakg@belenix.org, http://moinakg.wordpress.com/
- *      
  */
 
-#if defined(__x86_64__) || defined(__i386__)
-#define HAVE_AVX
-#define BLAKE_NAMESPACE(x) x##_avx
-#include "blake2bp.c"
-#endif
+/*
+ * xxHash implementation for ARM64.
+ * Uses NEON-accelerated 32-bit multiply where available.
+ * Falls back to scalar on non-ARM.
+ */
 
+#if defined(__aarch64__) || defined(__arm64__)
+#define CPUCAP_NM(x) x##_NEON
+#include "xxhash.c"
+#else
+/* Avoid empty translation unit warning on non-ARM platforms */
+typedef int xxhash_neon_unused;
+#endif

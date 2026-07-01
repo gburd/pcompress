@@ -76,8 +76,9 @@ extern "C" {
     uint8_t  salt[BLAKE2B_SALTBYTES]; // 48
     uint8_t  personal[BLAKE2B_PERSONALBYTES];  // 64
   } blake2b_param;
+#pragma pack(pop)
 
-  BLAKE_ALIGN( 64 ) typedef struct __blake2b_state
+  typedef struct BLAKE_ALIGN( 64 ) __blake2b_state
   {
     uint64_t h[8];
     uint64_t t[2];
@@ -87,14 +88,13 @@ extern "C" {
     uint8_t  last_node;
   } blake2b_state;
 
-  BLAKE_ALIGN( 64 ) typedef struct __blake2bp_state
+  typedef struct BLAKE_ALIGN( 64 ) __blake2bp_state
   {
     blake2b_state S[4][1];
     blake2b_state R[1];
     uint8_t buf[4 * BLAKE2B_BLOCKBYTES];
     size_t  buflen;
   } blake2bp_state;
-#pragma pack(pop)
 
   // Streaming API
   int blake2b_init_sse2( blake2b_state *S, const uint8_t outlen );
@@ -149,6 +149,34 @@ extern "C" {
 
   int blake2b_avx( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
   int blake2bp_avx( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
+
+  // ARM NEON
+  int blake2b_init_neon( blake2b_state *S, const uint8_t outlen );
+  int blake2b_init_key_neon( blake2b_state *S, const uint8_t outlen, const void *key, const uint8_t keylen );
+  int blake2b_init_param_neon( blake2b_state *S, const blake2b_param *P );
+  int blake2b_update_neon( blake2b_state *S, const uint8_t *in, uint64_t inlen );
+  int blake2b_final_neon( blake2b_state *S, uint8_t *out, uint8_t outlen );
+  int blake2bp_init_neon( blake2bp_state *S, const uint8_t outlen );
+  int blake2bp_init_key_neon( blake2bp_state *S, const uint8_t outlen, const void *key, const uint8_t keylen );
+  int blake2bp_update_neon( blake2bp_state *S, const uint8_t *in, uint64_t inlen );
+  int blake2bp_final_neon( blake2bp_state *S, uint8_t *out, uint8_t outlen );
+
+  int blake2b_neon( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
+  int blake2bp_neon( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
+
+  // AVX-512
+  int blake2b_init_avx512( blake2b_state *S, const uint8_t outlen );
+  int blake2b_init_key_avx512( blake2b_state *S, const uint8_t outlen, const void *key, const uint8_t keylen );
+  int blake2b_init_param_avx512( blake2b_state *S, const blake2b_param *P );
+  int blake2b_update_avx512( blake2b_state *S, const uint8_t *in, uint64_t inlen );
+  int blake2b_final_avx512( blake2b_state *S, uint8_t *out, uint8_t outlen );
+  int blake2bp_init_avx512( blake2bp_state *S, const uint8_t outlen );
+  int blake2bp_init_key_avx512( blake2bp_state *S, const uint8_t outlen, const void *key, const uint8_t keylen );
+  int blake2bp_update_avx512( blake2bp_state *S, const uint8_t *in, uint64_t inlen );
+  int blake2bp_final_avx512( blake2bp_state *S, uint8_t *out, uint8_t outlen );
+
+  int blake2b_avx512( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
+  int blake2bp_avx512( uint8_t *out, const void *in, const void *key, const uint8_t outlen, const uint64_t inlen, uint8_t keylen );
 
 #if defined(__cplusplus)
 }

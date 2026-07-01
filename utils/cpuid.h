@@ -50,29 +50,35 @@
 #ifndef __CPUID_H__
 #define __CPUID_H__
 
-#ifdef	__x86_64__
-#define VENDOR_STR_MAX          16
-#define BRAND_STR_MAX           64
-#define CPU_FLAGS_MAX           128
-#define MAX_CPUID_LEVEL         32
-#define MAX_EXT_CPUID_LEVEL     32
-#define MAX_INTELFN4_LEVEL      4
+#include <stdint.h>
 
 typedef enum {
 	PROC_BIGENDIAN_GENERIC = 1,
 	PROC_LITENDIAN_GENERIC,
 	PROC_X64_INTEL,
-	PROC_X64_AMD
+	PROC_X64_AMD,
+	PROC_ARM64,
+	PROC_RISCV
 } proc_type_t;
 
 typedef struct {
 	int sse_level;
 	int sse_sub_level;
 	int avx_level;
+	int avx512_avail;
 	int xop_avail;
 	int aes_avail;
 	proc_type_t proc_type;
 } processor_cap_t;
+
+#ifdef	__x86_64__
+
+#define VENDOR_STR_MAX          16
+#define BRAND_STR_MAX           64
+#define CPU_FLAGS_MAX           128
+#define MAX_CPUID_LEVEL         32
+#define MAX_EXT_CPUID_LEVEL     32
+#define MAX_INTELFN4_LEVEL      4
 
 /**
  * This contains only the most basic CPU data, required to do identification
@@ -94,9 +100,9 @@ struct cpu_raw_data_t {
 };
 
 void cpuid_get_raw_data(struct cpu_raw_data_t* data);
-void cpuid_basic_identify(processor_cap_t *pc);
 
 #endif /* __x86_64__ */
 
-#endif /* __CPUID_H__ */
+void cpuid_basic_identify(processor_cap_t *pc);
 
+#endif /* __CPUID_H__ */

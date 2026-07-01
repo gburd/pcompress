@@ -23,7 +23,9 @@
  *      
  */
 
+#if defined(__x86_64__) || defined(__i386__)
 #define HAVE_AVX
 #define BLAKE_NAMESPACE(x) x##_avx
 #include "blake2b.c"
+#endif
 
