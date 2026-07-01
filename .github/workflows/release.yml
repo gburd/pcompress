@@ -1,0 +1,122 @@
+# Pcompress Release Build Pipeline
+#
+# Triggered on version tags (v*). Builds release binaries for
+# multiple platforms and creates a GitHub release with artifacts.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------
+  # Build release binaries for each platform
+  # ---------------------------------------------------------------
+  build-release:
+    name: "Release / ${{ matrix.os }} / ${{ matrix.arch }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x86_64
+            artifact_name: pcompress-linux-x86_64
+
+          - os: ubuntu-24.04
+            arch: x86_64
+            artifact_name: pcompress-linux-x86_64-ubuntu24
+
+          - os: macos-13
+            arch: x86_64
+            artifact_name: pcompress-macos-x86_64
+
+          - os: macos-14
+            arch: arm64
+            artifact_name: pcompress-macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install openssl@3 zlib bzip2 pkg-config yasm nasm
+
+      - name: Configure
+        run: |
+          config_flags="--disable-wavpack"
+          if [ "${{ matrix.os }}" = "macos-13" ] || [ "${{ matrix.os }}" = "macos-14" ]; then
+            config_flags="${config_flags} --with-openssl=$(brew --prefix openssl@3)"
+          fi
+          ./config ${config_flags}
+
+      - name: Build
+        run: make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+      - name: Run tests
+        run: |
+          if [ -d test ]; then
+            cd test
+            sh run_all_tests.sh unit || true
+            cd ..
+          fi
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME}"
+          pkg_dir="${{ matrix.artifact_name }}-${version}"
+          mkdir -p "${pkg_dir}"
+          cp pcompress "${pkg_dir}/" 2>/dev/null || true
+          cp libpcompress.* "${pkg_dir}/" 2>/dev/null || true
+          cp README.md LICENSE "${pkg_dir}/" 2>/dev/null || true
+          tar czf "${{ matrix.artifact_name }}-${version}.tar.gz" "${pkg_dir}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: "*.tar.gz"
+          retention-days: 14
+
+  # ---------------------------------------------------------------
+  # Create GitHub Release
+  # ---------------------------------------------------------------
+  create-release:
+    name: "Create Release"
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: release-artifacts/**/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

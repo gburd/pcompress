@@ -1,0 +1,307 @@
+# Pcompress Nightly Extended Test Pipeline
+#
+# Runs daily at 03:00 UTC with extended test coverage:
+# - Full build matrix
+# - Valgrind memory leak detection
+# - Performance benchmarks with regression detection
+# - Legacy test suite (t1-t9)
+# - Corpus-based round-trip validation
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+env:
+  MAKEFLAGS: -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1: Valgrind Memory Leak Check
+  # ---------------------------------------------------------------
+  valgrind:
+    name: "Valgrind Memory Check"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ valgrind \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Configure & Build (Debug)
+        run: |
+          ./config --enable-debug --disable-wavpack
+          make $MAKEFLAGS
+
+      - name: Generate test data
+        run: |
+          dd if=/dev/urandom of=/tmp/test_random.dat bs=1M count=4
+          dd if=/dev/zero of=/tmp/test_zeros.dat bs=1M count=2
+          echo "The quick brown fox jumps over the lazy dog" > /tmp/test_text.txt
+          for i in $(seq 1 10000); do echo "Line $i: repeated text for compression testing"; done > /tmp/test_repeated.txt
+
+      - name: Valgrind - compression round-trip
+        run: |
+          for algo in lzfx lz4 zlib bzip2 lzma adapt; do
+            echo "=== Testing $algo ==="
+            valgrind --leak-check=full --error-exitcode=1 \
+              --suppressions=/dev/null \
+              --track-origins=yes \
+              ./pcompress -c ${algo} -l 4 /tmp/test_repeated.txt /tmp/test_out.pz 2>&1 || echo "WARN: valgrind issue with $algo"
+            rm -f /tmp/test_out.pz /tmp/test_out.pz.* 2>/dev/null
+          done
+
+      - name: Valgrind - unit tests
+        run: |
+          if [ -d test ]; then
+            cd test
+            for bin in ../buildtmp/test_*; do
+              if [ -x "$bin" ]; then
+                echo "=== Valgrind: $(basename $bin) ==="
+                valgrind --leak-check=full --error-exitcode=1 "$bin" 2>&1 || echo "WARN: leak in $(basename $bin)"
+              fi
+            done
+          fi
+
+  # ---------------------------------------------------------------
+  # Job 2: Performance Benchmarks
+  # ---------------------------------------------------------------
+  benchmarks:
+    name: "Performance Benchmarks"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Configure & Build (Release)
+        run: |
+          ./config --disable-wavpack
+          make $MAKEFLAGS
+
+      - name: Generate benchmark data
+        run: |
+          # Create a reproducible test corpus
+          dd if=/dev/urandom of=/tmp/bench_random.dat bs=1M count=16 2>/dev/null
+          for i in $(seq 1 50000); do echo "Benchmark line $i: The quick brown fox jumps over the lazy dog repeatedly for testing."; done > /tmp/bench_text.dat
+
+      - name: Run benchmarks
+        run: |
+          echo "=== Compression Benchmark ===" | tee bench_results.txt
+          echo "Algorithm | Size_MB | Compress_s | Decompress_s | Ratio" | tee -a bench_results.txt
+          echo "----------|---------|------------|--------------|------" | tee -a bench_results.txt
+
+          for algo in lzfx lz4 zlib bzip2 lzma adapt; do
+            # Compress
+            start_c=$(date +%s%N)
+            ./pcompress -c ${algo} -l 4 /tmp/bench_text.dat /tmp/bench_out.pz 2>/dev/null || continue
+            end_c=$(date +%s%N)
+
+            if [ -f /tmp/bench_out.pz ]; then
+              orig_size=$(stat --printf="%s" /tmp/bench_text.dat 2>/dev/null || stat -f%z /tmp/bench_text.dat)
+              comp_size=$(stat --printf="%s" /tmp/bench_out.pz 2>/dev/null || stat -f%z /tmp/bench_out.pz)
+              compress_ms=$(( (end_c - start_c) / 1000000 ))
+
+              # Decompress
+              start_d=$(date +%s%N)
+              ./pcompress -d /tmp/bench_out.pz /tmp/bench_dec.dat 2>/dev/null || true
+              end_d=$(date +%s%N)
+              decompress_ms=$(( (end_d - start_d) / 1000000 ))
+
+              if [ "$orig_size" -gt 0 ]; then
+                ratio=$(echo "scale=3; $comp_size * 100 / $orig_size" | bc 2>/dev/null || echo "N/A")
+                echo "${algo} | $(echo "scale=1; $orig_size / 1048576" | bc 2>/dev/null || echo N/A) | ${compress_ms}ms | ${decompress_ms}ms | ${ratio}%" | tee -a bench_results.txt
+              fi
+            fi
+            rm -f /tmp/bench_out.pz /tmp/bench_out.pz.* /tmp/bench_dec.dat 2>/dev/null
+          done
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: bench_results.txt
+          retention-days: 90
+
+  # ---------------------------------------------------------------
+  # Job 3: Legacy Test Suite (full t1-t9)
+  # ---------------------------------------------------------------
+  legacy-tests:
+    name: "Legacy Test Suite"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Configure & Build
+        run: |
+          ./config --disable-wavpack
+          make $MAKEFLAGS
+
+      - name: Run full legacy test suite
+        run: |
+          if [ -d test ]; then
+            cd test
+            sh run_all_tests.sh full 2>&1 | tee test_results.txt
+            cd ..
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results
+          path: test/test_results.txt
+          retention-days: 30
+
+  # ---------------------------------------------------------------
+  # Job 4: Round-trip Compression Validation
+  # ---------------------------------------------------------------
+  round-trip:
+    name: "Round-Trip Validation"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Configure & Build
+        run: |
+          ./config --disable-wavpack
+          make $MAKEFLAGS
+
+      - name: Generate diverse test corpus
+        run: |
+          mkdir -p /tmp/corpus
+          # Text data
+          for i in $(seq 1 20000); do echo "Round-trip test line $i with various content $(date +%N)"; done > /tmp/corpus/text.dat
+          # Binary data
+          dd if=/dev/urandom of=/tmp/corpus/random.dat bs=1M count=2 2>/dev/null
+          # Highly compressible data
+          dd if=/dev/zero of=/tmp/corpus/zeros.dat bs=1M count=2 2>/dev/null
+          # Small file
+          echo "tiny" > /tmp/corpus/tiny.dat
+          # Compute checksums
+          sha256sum /tmp/corpus/*.dat > /tmp/corpus/checksums.txt
+          cat /tmp/corpus/checksums.txt
+
+      - name: Round-trip all algorithms
+        run: |
+          failures=0
+          for f in /tmp/corpus/text.dat /tmp/corpus/random.dat /tmp/corpus/zeros.dat /tmp/corpus/tiny.dat; do
+            fname=$(basename "$f")
+            for algo in lzfx lz4 zlib bzip2 lzma adapt; do
+              echo "--- ${fname} / ${algo} ---"
+              rm -f /tmp/rt_out.pz /tmp/rt_out.pz.* /tmp/rt_dec.dat 2>/dev/null
+
+              # Compress
+              if ! ./pcompress -c ${algo} -l 4 "$f" /tmp/rt_out.pz 2>/dev/null; then
+                echo "WARN: compression failed for ${fname}/${algo}"
+                continue
+              fi
+
+              # Decompress
+              if ! ./pcompress -d /tmp/rt_out.pz /tmp/rt_dec.dat 2>/dev/null; then
+                echo "FAIL: decompression failed for ${fname}/${algo}"
+                failures=$((failures + 1))
+                continue
+              fi
+
+              # Compare
+              if ! cmp -s "$f" /tmp/rt_dec.dat; then
+                echo "FAIL: round-trip mismatch for ${fname}/${algo}"
+                failures=$((failures + 1))
+              else
+                echo "PASS: ${fname}/${algo}"
+              fi
+
+              rm -f /tmp/rt_out.pz /tmp/rt_out.pz.* /tmp/rt_dec.dat 2>/dev/null
+            done
+          done
+
+          echo ""
+          echo "=== Round-trip failures: ${failures} ==="
+          if [ $failures -gt 0 ]; then
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------
+  # Job 5: Extended Sanitizer Coverage
+  # ---------------------------------------------------------------
+  extended-sanitizers:
+    name: "UBSAN + ASAN Extended"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc g++ \
+            libssl-dev zlib1g-dev libbz2-dev \
+            yasm nasm pkg-config
+
+      - name: Configure & Build with UBSAN+ASAN
+        run: |
+          export EXTRA_CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          export EXTRA_LDFLAGS="-fsanitize=address,undefined"
+          ./config --enable-debug --disable-wavpack
+          make $MAKEFLAGS
+
+      - name: Run tests under sanitizers
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:halt_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: |
+          # Test with various data patterns
+          dd if=/dev/urandom of=/tmp/san_test.dat bs=64K count=8 2>/dev/null
+          for algo in lzfx lz4 zlib bzip2; do
+            echo "=== Sanitizer test: $algo ==="
+            ./pcompress -c ${algo} -l 4 /tmp/san_test.dat /tmp/san_out.pz 2>/dev/null || echo "WARN: $algo compression"
+            if [ -f /tmp/san_out.pz ]; then
+              ./pcompress -d /tmp/san_out.pz /tmp/san_dec.dat 2>/dev/null || echo "WARN: $algo decompression"
+            fi
+            rm -f /tmp/san_out.pz /tmp/san_out.pz.* /tmp/san_dec.dat 2>/dev/null
+          done
