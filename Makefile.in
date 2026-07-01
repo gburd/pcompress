@@ -31,10 +31,14 @@ GPP=@GPP@
 LIBVER=1
 MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	adaptive_compress.c lzfx_compress.c lz4_compress.c none_compress.c \
-	utils/xxhash_base.c utils/heap.c utils/cpuid.c filters/analyzer/analyzer.c \
+	utils/xxhash_base.c utils/heap.c utils/cpuid.c \
+	utils/cpu_features.c utils/cpu_features_x86_64.c \
+	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
+	filters/analyzer/analyzer.c \
 	meta_stream.c pcompress.c
 MAINHDRS = allocator.h  pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
-	utils/cpuid.h utils/xxhash.h archive/pc_archive.h filters/dispack/dis.hpp \
+	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
+	filters/dispack/dis.hpp \
 	meta_stream.h filters/analyzer/analyzer.h
 MAINOBJS = $(MAINSRCS:.c=.o)
 
@@ -67,7 +71,9 @@ CRYPTO_CPPFLAGS=-I@OPENSSL_INCDIR@
 XXHASH_SRCS = utils/xxhash.c
 XXHASH_SSE4_SRCS = utils/xxhash_sse4.c
 XXHASH_SSE2_SRCS = utils/xxhash_sse2.c
-XXHASH_OBJS = utils/xxhash_sse4.o utils/xxhash_sse2.o
+XXHASH_NEON_SRCS = utils/xxhash_neon.c
+XXHASH_AVX512_SRCS = utils/xxhash_avx512.c
+XXHASH_OBJS = utils/xxhash_sse4.o utils/xxhash_sse2.o utils/xxhash_avx512.o utils/xxhash_neon.o
 XXHASH_HDRS = utils/xxhash.h
 
 BLAKE2b_SSE2 = crypto/blake2/blake2b_sse2.c
@@ -78,12 +84,17 @@ BLAKE2bp_SSE2 = crypto/blake2/blake2bp_sse2.c
 BLAKE2bp_SSE3 = crypto/blake2/blake2bp_ssse3.c
 BLAKE2bp_SSE4 = crypto/blake2/blake2bp_sse41.c
 BLAKE2bp_AVX = crypto/blake2/blake2bp_avx.c
+BLAKE2b_AVX512 = crypto/blake2/blake2b_avx512.c
+BLAKE2bp_AVX512 = crypto/blake2/blake2bp_avx512.c
+BLAKE2b_NEON = crypto/blake2/blake2b_neon.c
+BLAKE2bp_NEON = crypto/blake2/blake2bp_neon.c
 BLAKE2_BASE_SRCS = crypto/blake2/blake2b.c crypto/blake2/blake2bp.c
 BLAKE2_HDRS = crypto/blake2/blake2.h crypto/blake2/blake2-impl.h crypto/blake2/blake2-config.h \
 	crypto/blake2/blake2-kat.h crypto/blake2/blake2b-round.h crypto/blake2/blake2b-load-sse2.h \
-	crypto/blake2/blake2b-load-sse41.h
+	crypto/blake2/blake2b-load-sse41.h crypto/blake2/blake2b-round-neon.h
 BLAKE2_SRCS = $(BLAKE2b_SSE2) $(BLAKE2b_SSE3) $(BLAKE2b_SSE4) $(BLAKE2b_AVX) \
-	$(BLAKE2bp_SSE2) $(BLAKE2bp_SSE3) $(BLAKE2bp_SSE4) $(BLAKE2bp_AVX)
+	$(BLAKE2b_AVX512) $(BLAKE2bp_SSE2) $(BLAKE2bp_SSE3) $(BLAKE2bp_SSE4) \
+	$(BLAKE2bp_AVX) $(BLAKE2bp_AVX512) $(BLAKE2b_NEON) $(BLAKE2bp_NEON)
 BLAKE2_OBJS = $(BLAKE2_SRCS:.c=.o)
 
 ZLIB_SRCS = zlib_compress.c
@@ -95,6 +106,9 @@ BZLIB_SRCS = bzip2_compress.c
 BZLIB_HDRS = $(MAINHDRS)
 BZLIB_OBJS = $(BZLIB_SRCS:.c=.o)
 BZLIB_CPPFLAGS = @LIBBZ2_INC@
+
+EXTRA_CPPFLAGS = $(CRYPTO_CPPFLAGS) $(ZLIB_CPPFLAGS) $(BZLIB_CPPFLAGS)
+EXTRA_LDFLAGS = -Wl,-z,muldefs
 
 RABINSRCS = rabin/rabin_dedup.c rabin/global/index.c rabin/global/dedupe_config.c
 RABINHDRS = rabin/rabin_dedup.h utils/utils.h rabin/global/index.h rabin/global/dedupe_config.h lzma/lzma_crc.h utils/qsort.h
@@ -114,9 +128,33 @@ LZFXSRCS = lzfx/lzfx.c
 LZFXHDRS = lzfx/lzfx.h
 LZFXOBJS = $(LZFXSRCS:.c=.o)
 
-LZ4SRCS = lz4/lz4.c lz4/lz4hc.c
-LZ4HDRS = lz4/lz4.h lz4/lz4hc.h
+LZ4SRCS = lz4/lib/lz4.c lz4/lib/lz4hc.c
+LZ4HDRS = lz4/lib/lz4.h lz4/lib/lz4hc.h
 LZ4OBJS = $(LZ4SRCS:.c=.o)
+
+ZSTDSRCS = zstd/lib/common/debug.c zstd/lib/common/entropy_common.c \
+	zstd/lib/common/error_private.c zstd/lib/common/fse_decompress.c \
+	zstd/lib/common/pool.c zstd/lib/common/threading.c \
+	zstd/lib/common/xxhash.c zstd/lib/common/zstd_common.c \
+	zstd/lib/compress/fse_compress.c zstd/lib/compress/hist.c \
+	zstd/lib/compress/huf_compress.c zstd/lib/compress/zstd_compress.c \
+	zstd/lib/compress/zstd_compress_literals.c \
+	zstd/lib/compress/zstd_compress_sequences.c \
+	zstd/lib/compress/zstd_compress_superblock.c \
+	zstd/lib/compress/zstd_double_fast.c zstd/lib/compress/zstd_fast.c \
+	zstd/lib/compress/zstd_lazy.c zstd/lib/compress/zstd_ldm.c \
+	zstd/lib/compress/zstdmt_compress.c zstd/lib/compress/zstd_opt.c \
+	zstd/lib/compress/zstd_preSplit.c \
+	zstd/lib/decompress/huf_decompress.c \
+	zstd/lib/decompress/zstd_ddict.c \
+	zstd/lib/decompress/zstd_decompress_block.c \
+	zstd/lib/decompress/zstd_decompress.c
+ZSTD_ASM_SRCS = zstd/lib/decompress/huf_decompress_amd64.S
+ZSTD_ASM_OBJS = $(ZSTD_ASM_SRCS:.S=.o)
+ZSTDHDRS = zstd/lib/zstd.h
+ZSTDOBJS = $(ZSTDSRCS:.c=.o)
+ZSTDWRAP = zstd_compress.c
+ZSTDWRAPOBJ = zstd_compress.o
 
 PPMDSRCS = lzma/Ppmd8.c lzma/Ppmd8Enc.c lzma/Ppmd8Dec.c
 PPMDHDRS = lzma/Ppmd.h lzma/Ppmd8.h
@@ -222,19 +260,19 @@ CRYPTO_ASM_COMPILE1 = $(COMPILE) $(GEN_OPT) $(CRYPTO_CPPFLAGS) $(CPPFLAGS)
 CRYPTO_ASM_COMPILE2 = $(YASM_GAS)
 CRYPTO_ASM_COMPILE = @CRYPTO_ASM_COMPILE@
 
-BAKFILES = *~ lzma/*~ lzfx/*~ lz4/*~ rabin/*~ bsdiff/*~ filters/lzp/*~ utils/*~ crypto/sha2/*~ \
+BAKFILES = *~ lzma/*~ lzfx/*~ lz4/lib/*~ rabin/*~ bsdiff/*~ filters/lzp/*~ utils/*~ crypto/sha2/*~ \
 	crypto/sha2/intel/*~ crypto/aes/*~ crypto/scrypt/*~ crypto/*~ rabin/global/*~ \
 	delta2/*~ crypto/keccak/*~ transpose/*~ crypto/skein/*~ crypto/keccak/*.o \
 	archive/*~ filters/delta2/*~ filters/packjpg/*~ filters/transpose/*~
 
 RM = rm -f
 RM_RF = rm -rf
-BASE_CPPFLAGS = -I. -I./lzma -I./lzfx -I./lz4 -I./rabin -I./bsdiff -DNODEFAULT_PROPS \
-	-DFILE_OFFSET_BITS=64 -D_REENTRANT -D__USE_SSE_INTRIN__ -D_LZMA_PROB32 \
+BASE_CPPFLAGS = -I. -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I./rabin -I./bsdiff -DNODEFAULT_PROPS \
+	-DFILE_OFFSET_BITS=64 -D_REENTRANT -D__USE_SSE_INTRIN__ -D_LZMA_PROB32 @ZSTD_CPPFLAGS@ \
 	-I./filters/lzp @LIBBSCCPPFLAGS@ -I./crypto/skein -I./utils -I./crypto/sha2 \
 	-I./crypto/scrypt -I./crypto/aes -I./crypto @KEYLEN@ -I./rabin/global \
 	-I./crypto/keccak -I./filters/transpose -I./crypto/blake2 $(EXTRA_CPPFLAGS) \
-	-I./crypto/xsalsa20 -I./archive -pedantic -Wall -I./filters -fno-strict-aliasing \
+	-I./crypto/xsalsa20 -I./archive -pedantic -Wall -Wno-variadic-macros -I./filters -fno-strict-aliasing \
 	-Wno-unused-but-set-variable -Wno-enum-compare -I./filters/analyzer -I./filters/dispack \
 	@COMPAT_CPPFLAGS@ @XSALSA20_DEBUG@ -I@LIBARCHIVE_DIR@/libarchive -I./filters/packjpg \
 	-I./filters/packpnm @ENABLE_WAVPACK@
@@ -244,10 +282,10 @@ COMMON_VEC_FLAGS = -ftree-vectorize
 COMMON_LOOP_OPTFLAGS = $(VEC_FLAGS) -floop-interchange -floop-block
 RPATH=@RPATH@
 DTAGS=@DTAGS@
-LDLIBS = -ldl -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
+LDLIBS = @LDL@ -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
 	-L./buildtmp -Wl,$(RPATH)@OPENSSL_LIBDIR@ -lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
-	-Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
-OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) $(CRCOBJS) \
+	-lpthread -Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
+OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) @ZSTD_OBJS@ $(ZSTD_ASM_OBJS) @ZSTD_WRAPOBJ@ $(CRCOBJS) \
 $(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
 $(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2_OBJS) \
@@ -285,10 +323,12 @@ CPPFLAGS = @CPPFLAGS@ @NO_SLAB_CPPFLAGS@ @DEBUG_STATS_CPPFLAGS@
 GEN_OPT = @GEN_OPT@ @SSE_OPT_FLAGS@
 BASE_OPT = @GEN_OPT@
 PREFIX=@PREFIX@
-AVX_OPT_FLAG = -mavx @USE_CLANG_AS@
-SSE4_OPT_FLAG = -msse4.2 @USE_CLANG_AS@
-SSE3_OPT_FLAG = -mssse3 @USE_CLANG_AS@
-SSE2_OPT_FLAG = -msse2 @USE_CLANG_AS@
+AVX_OPT_FLAG = @AVX_OPT_FLAG@
+SSE4_OPT_FLAG = @SSE4_OPT_FLAG@
+SSE3_OPT_FLAG = @SSE3_OPT_FLAG@
+SSE2_OPT_FLAG = @SSE2_OPT_FLAG@
+AVX512_OPT_FLAG = @AVX512_OPT_FLAG@
+NEON_OPT_FLAG = @NEON_OPT_FLAG@
 
 SKEIN_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
 SHA2_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
@@ -315,6 +355,15 @@ $(LZFXOBJS): $(LZFXSRCS) $(LZFXHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(LZ4OBJS): $(LZ4SRCS) $(LZ4HDRS)
+	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
+
+$(ZSTDOBJS): $(ZSTDSRCS) $(ZSTDHDRS)
+	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) -Izstd/lib -Izstd/lib/common $(CPPFLAGS) -DXXH_NAMESPACE=ZSTD_ -DZSTD_MULTITHREAD $(@:.o=.c) -o $@
+
+$(ZSTD_ASM_OBJS): $(ZSTD_ASM_SRCS)
+	$(GCC) -c -fPIC -Izstd/lib -Izstd/lib/common $(@:.o=.S) -o $@
+
+$(ZSTDWRAPOBJ): $(ZSTDWRAP) $(ZSTDHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(LZPOBJS): $(LZPSRCS) $(LZPHDRS)
@@ -394,9 +443,11 @@ $(ZLIB_OBJS): $(ZLIB_SRCS) $(ZLIB_HDRS)
 $(BZLIB_OBJS): $(BZLIB_SRCS) $(BZLIB_HDRS)
 	$(COMPILE) $(GEN_OPT) $(BZLIB_CPPFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
-$(XXHASH_OBJS): $(XXHASH_SSE4_SRCS) $(XXHASH_SSE2_SRCS) $(XXHASH_HDRS) $(XXHASH_SRCS)
+$(XXHASH_OBJS): $(XXHASH_SSE4_SRCS) $(XXHASH_SSE2_SRCS) $(XXHASH_AVX512_SRCS) $(XXHASH_NEON_SRCS) $(XXHASH_HDRS) $(XXHASH_SRCS)
 	$(COMPILE) $(BASE_OPT) $(SSE4_OPT_FLAG) $(CPPFLAGS) $(XXHASH_SSE4_SRCS) -o $(XXHASH_SSE4_SRCS:.c=.o)
 	$(COMPILE) $(BASE_OPT) $(SSE2_OPT_FLAG) $(CPPFLAGS) $(XXHASH_SSE2_SRCS) -o $(XXHASH_SSE2_SRCS:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(AVX512_OPT_FLAG) $(CPPFLAGS) $(XXHASH_AVX512_SRCS) -o $(XXHASH_AVX512_SRCS:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(NEON_OPT_FLAG) $(CPPFLAGS) $(XXHASH_NEON_SRCS) -o $(XXHASH_NEON_SRCS:.c=.o)
 
 $(BLAKE2_OBJS): $(BLAKE2_SRCS) $(BLAKE2_BASE_SRCS) $(BLAKE2_HDRS)
 	$(COMPILE) $(BASE_OPT) $(SSE2_OPT_FLAG) $(CPPFLAGS) $(BLAKE2b_SSE2) -o $(BLAKE2b_SSE2:.c=.o)
@@ -407,6 +458,10 @@ $(BLAKE2_OBJS): $(BLAKE2_SRCS) $(BLAKE2_BASE_SRCS) $(BLAKE2_HDRS)
 	$(COMPILE) $(BASE_OPT) $(SSE3_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_SSE3) -o $(BLAKE2bp_SSE3:.c=.o)
 	$(COMPILE) $(BASE_OPT) $(SSE4_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_SSE4) -o $(BLAKE2bp_SSE4:.c=.o)
 	$(COMPILE) $(BASE_OPT) $(AVX_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_AVX) -o $(BLAKE2bp_AVX:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(AVX512_OPT_FLAG) $(CPPFLAGS) $(BLAKE2b_AVX512) -o $(BLAKE2b_AVX512:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(AVX512_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_AVX512) -o $(BLAKE2bp_AVX512:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(NEON_OPT_FLAG) $(CPPFLAGS) $(BLAKE2b_NEON) -o $(BLAKE2b_NEON:.c=.o)
+	$(COMPILE) $(BASE_OPT) $(NEON_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_NEON) -o $(BLAKE2bp_NEON:.c=.o)
 
 $(MAINOBJS): $(MAINSRCS) $(MAINHDRS)
 	$(COMPILE) $(GEN_OPT) $(LOOP_OPTFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
@@ -417,28 +472,118 @@ $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 Libarchive:
 	(cd @LIBARCHIVE_DIR@; make)
 
-$(LIBBSCLIB):
-	(cd $(LIBBSCDIR); make CC=$(GPP) OPTFLAGS="-O3 @SSE_OPT_FLAGS@ @USE_CLANG_AS@")
+LIBBSC_CPP_SRCS = $(LIBBSCDIR)/libbsc/adler32/adler32.cpp \
+	$(LIBBSCDIR)/libbsc/bwt/bwt.cpp \
+	$(LIBBSCDIR)/libbsc/coder/coder.cpp \
+	$(LIBBSCDIR)/libbsc/coder/qlfc/qlfc.cpp \
+	$(LIBBSCDIR)/libbsc/coder/qlfc/qlfc_model.cpp \
+	$(LIBBSCDIR)/libbsc/filters/detectors.cpp \
+	$(LIBBSCDIR)/libbsc/filters/preprocessing.cpp \
+	$(LIBBSCDIR)/libbsc/libbsc/libbsc.cpp \
+	$(LIBBSCDIR)/libbsc/lzp/lzp.cpp \
+	$(LIBBSCDIR)/libbsc/platform/platform.cpp \
+	$(LIBBSCDIR)/libbsc/st/st.cpp
+LIBBSC_C_SRCS = $(LIBBSCDIR)/libbsc/bwt/libsais/libsais.c
+LIBBSC_CPP_OBJS = $(LIBBSC_CPP_SRCS:.cpp=.o)
+LIBBSC_C_OBJS = $(LIBBSC_C_SRCS:.c=.o)
+
+$(LIBBSC_CPP_OBJS): $(LIBBSC_CPP_SRCS)
+	$(GPP) -c -O3 @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -fPIC -DLIBBSC_SORT_TRANSFORM_SUPPORT @LIBBSCGEN_OPT@ \
+	-I$(LIBBSCDIR)/libbsc $(@:.o=.cpp) -o $@
+
+$(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
+	$(GCC) -c -O3 @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -fPIC \
+	-I$(LIBBSCDIR)/libbsc $(@:.o=.c) -o $@
+
+$(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
+	ar rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
 $(LIB): Libarchive $(OBJS)  $(LIBBSCLIB)
 	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS)
 	ln -sf $(LIB).$(LIBVER) $(LIB)
 
-./buildtmp/$(PROG):
+./buildtmp/$(PROG): $(LIB) $(PROGOBJS)
 	mkdir -p buildtmp
 	$(LINK.PROG) -o $@ $(PROGOBJS) $(LDLIBS) -L. -l$(LINKLIB)
 
-$(PROG): $(LIB) $(PROGOBJS) ./buildtmp/$(PROG) 
+$(PROG): ./buildtmp/$(PROG)
 	cat utils/pcompress.sh | sed "s#<PC_PATH>#`pwd`#" > pcompress
 	chmod +x pcompress
 
 test: all
 	(cd test; ulimit -c unlimited; sh ./run_test.sh $(TESTSUITE) ) 2>&1 | tee test.log
 
+# --- Enhanced Test Framework Targets ---
+
+TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit
+TEST_LINK_FLAGS = -L. -l$(LINKLIB) $(LDLIBS)
+
+test-unit-build: $(LIB)
+	$(GCC) -o buildtmp/test_compress $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/unit/test_compress.c $(TEST_LINK_FLAGS)
+	$(GCC) -o buildtmp/test_xxhash $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/unit/test_xxhash.c $(TEST_LINK_FLAGS)
+	$(GCC) -o buildtmp/test_crc $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/unit/test_crc.c $(TEST_LINK_FLAGS)
+	$(GCC) -o buildtmp/test_slab $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/unit/test_slab.c $(TEST_LINK_FLAGS)
+	$(GCC) -o buildtmp/test_blake2 $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/unit/test_blake2.c $(TEST_LINK_FLAGS)
+
+test-unit: test-unit-build
+	buildtmp/test_compress
+	buildtmp/test_xxhash
+	buildtmp/test_crc
+	buildtmp/test_slab
+	buildtmp/test_blake2
+
+test-integration: all
+	(cd test; sh integration/test_compress.sh)
+	(cd test; sh integration/test_archive.sh)
+	(cd test; sh integration/test_edge_cases.sh)
+	(cd test; sh integration/test_crypto.sh)
+	(cd test; sh integration/test_dedup.sh)
+	(cd test; sh integration/test_multithread.sh)
+
+test-all: all test-unit-build
+	(cd test; sh run_all_tests.sh all)
+
+test-full: all test-unit-build bench-build
+	(cd test; sh run_all_tests.sh full)
+
+bench-build: $(LIB)
+	$(GCC) -o buildtmp/bench_algos $(GEN_OPT) $(TEST_CPPFLAGS) \
+		test/performance/bench_algos.c $(TEST_LINK_FLAGS)
+
+bench: bench-build
+	buildtmp/bench_algos
+
+fuzz-build: $(LIB)
+	@echo "Building fuzz harnesses (requires clang with libFuzzer or AFL++)..."
+	@if command -v clang >/dev/null 2>&1; then \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_decompress \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_decompress.c $(TEST_LINK_FLAGS); \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_crc \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_crc.c $(TEST_LINK_FLAGS); \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_compress \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(TEST_LINK_FLAGS); \
+	else \
+		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
+	fi
+
+fuzz: fuzz-build
+	@echo "Run individual fuzz targets manually:"
+	@echo "  buildtmp/fuzz_decompress -max_total_time=60"
+	@echo "  buildtmp/fuzz_compress -max_total_time=60"
+	@echo "  buildtmp/fuzz_crc -max_total_time=60"
+
 topclean:
 	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER)
+	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
+	$(RM) buildtmp/test_compress buildtmp/test_xxhash buildtmp/test_crc buildtmp/test_slab buildtmp/test_blake2 buildtmp/bench_algos
+	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress
 	$(RM) test.log
-	$(RM_RF) test/datafiles
+	$(RM_RF) test/datafiles test/integration/datafiles
 
 clean: topclean
 	(cd @LIBARCHIVE_DIR@; make clean)
@@ -447,7 +592,7 @@ clean: topclean
 
 distclean: clean
 	$(RM) Makefile
-	(cd $(LIBBSCDIR); make clean)
+	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM_RF) buildtmp
 	(cd @LIBARCHIVE_DIR@; make distclean; rm -rf Makefile.orig tar test test_utils cpio libarchive/test)
 	[ "x@ENABLE_WAVPACK@" != "x" ] && (cd @WAVPACK_DIR@; make distclean)

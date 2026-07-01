@@ -47,6 +47,7 @@ ${prog} [<options>]
 			Points to the directory containing the WavPack sources. This option
 			must be specified if --disable-wavpack is not provided.
 --disable-wavpack	Disables the WavPack filter.
+--disable-zstd		Disable Zstandard compression support (default: enabled).
 --no-sse-detect		Do NOT attempt to probe the system's SSE capability for build flags.
 			Implies '--no-avx-detect' below.
 --no-avx-detect		Do NOT attempt to probe the system's AVX capability for build flags.
@@ -60,6 +61,104 @@ ${prog} [<options>]
 
 _EOF
 exit 0
+}
+
+# ----------------------------------------------------------------
+# Helper: try pkg-config for a library, echoing libdir if found.
+# Usage: try_pkgconfig <pkg-name>
+# Returns 0 and prints the libdir on success, 1 on failure.
+# ----------------------------------------------------------------
+try_pkgconfig() {
+	_pkg="$1"
+	if command -v pkg-config >/dev/null 2>&1; then
+		_dir=$(pkg-config --variable=libdir "$_pkg" 2>/dev/null)
+		if [ -n "$_dir" ]; then
+			echo "$_dir"
+			return 0
+		fi
+	fi
+	return 1
+}
+
+# Helper: try pkg-config for include dir
+try_pkgconfig_inc() {
+	_pkg="$1"
+	if command -v pkg-config >/dev/null 2>&1; then
+		_dir=$(pkg-config --variable=includedir "$_pkg" 2>/dev/null)
+		if [ -n "$_dir" ]; then
+			echo "$_dir"
+			return 0
+		fi
+	fi
+	return 1
+}
+
+# ----------------------------------------------------------------
+# Build the list of library search paths for the current platform.
+# Accounts for Linux multiarch, Homebrew, MacPorts, FreeBSD, etc.
+# Usage: lib_search_paths <prefix>
+# ----------------------------------------------------------------
+lib_search_paths() {
+	_pref="$1"
+
+	# Standard paths
+	echo "${_pref}/lib64"
+	echo "${_pref}/usr/lib64"
+	echo "${_pref}/lib"
+	echo "${_pref}/usr/lib"
+	echo "${_pref}/local/lib64"
+	echo "${_pref}/usr/local/lib64"
+	echo "${_pref}/local/lib"
+	echo "${_pref}/usr/local/lib"
+
+	# Linux multiarch (Debian/Ubuntu)
+	if [ -n "$gnu_arch" ]; then
+		echo "${_pref}/lib/${gnu_arch}"
+		echo "${_pref}/usr/lib/${gnu_arch}"
+		echo "${_pref}/local/lib/${gnu_arch}"
+		echo "${_pref}/usr/local/lib/${gnu_arch}"
+	fi
+
+	# macOS Homebrew (Intel + Apple Silicon)
+	if [ "$OS" = "Darwin" ]; then
+		echo "/usr/local/opt/openssl/lib"
+		echo "/opt/homebrew/opt/openssl/lib"
+		echo "/usr/local/lib"
+		echo "/opt/homebrew/lib"
+		echo "/opt/local/lib"
+	fi
+
+	# FreeBSD
+	if [ "$OS" = "FreeBSD" ]; then
+		echo "/usr/local/lib"
+	fi
+
+	echo "${_pref}/.libs"
+	echo "${_pref}"
+}
+
+# Similar for include search paths
+inc_search_paths() {
+	_pref="$1"
+
+	echo "${_pref}/include"
+	echo "${_pref}/usr/include"
+	echo "${_pref}/local/include"
+	echo "${_pref}/usr/local/include"
+
+	if [ "$OS" = "Darwin" ]; then
+		echo "/usr/local/opt/openssl/include"
+		echo "/opt/homebrew/opt/openssl/include"
+		echo "/usr/local/include"
+		echo "/opt/homebrew/include"
+		echo "/opt/local/include"
+	fi
+
+	if [ "$OS" = "FreeBSD" ]; then
+		echo "/usr/local/include"
+	fi
+
+	echo "${_pref}"
 }
 
 arg1=$1
@@ -99,6 +198,12 @@ bzlib_prefix=
 sse_detect=1
 avx_detect=1
 sse_opt_flags="-msse2"
+avx_opt_flag="-mavx"
+sse4_opt_flag="-msse4.2"
+sse3_opt_flag="-mssse3"
+sse2_opt_flag="-msse2"
+avx512_opt_flag="-mavx512f -mavx512vl"
+neon_opt_flag=""
 crypto_compat_objs='\$\(CRYPTO_COMPAT_OBJS\)'
 crypto_compat_flags="-D__HASH_COMPATIBILITY_"
 salsa20_stream_c=
@@ -111,20 +216,39 @@ soname_opt="soname,"
 rpath="-R"
 dtag_val=',--enable-new-dtags'
 lrt="-lrt"
+ldl="-ldl"
 default_opt="O3"
 max_opt="O3"
 libarchive_dir="archive/libarchive"
 enable_wavpack="-D_ENABLE_WAVPACK_"
 wavpack_libspec=""
+enable_zstd=1
+zstd_objs='\$\(ZSTDOBJS\)'
+zstd_wrapobj='\$\(ZSTDWRAPOBJ\)'
+zstd_cppflags="-DENABLE_PC_ZSTD"
+zstd_incflags="-I./zstd/lib"
 
-if [ -x /bin/echo ]
-then
-	ECHO=/bin/echo
-elif [ -x /usr/bin/echo ]
-then
-	ECHO=/usr/bin/echo
+# ----------------------------------------------------------------
+# Initialize git submodules if present and not yet initialized
+# ----------------------------------------------------------------
+if [ -f .gitmodules ] && command -v git >/dev/null 2>&1; then
+	if git rev-parse --git-dir >/dev/null 2>&1; then
+		# Check if any submodule is uninitialized
+		uninit=$(git submodule status 2>/dev/null | grep '^-' | head -1)
+		if [ -n "$uninit" ]; then
+			echo "Initializing git submodules ..."
+			git submodule update --init --recursive
+			if [ $? -ne 0 ]; then
+				echo "WARNING: Failed to initialize git submodules."
+				echo "         You may need to run: git submodule update --init --recursive"
+			fi
+		fi
+	fi
 fi
 
+# ----------------------------------------------------------------
+# Detect compiler
+# ----------------------------------------------------------------
 if [ "x$GCC" = "x" ]
 then
 	GCC=gcc
@@ -140,10 +264,18 @@ then
 	GPP="${GXX}"
 fi
 
+# Allow CC/CXX environment overrides (common convention)
+if [ "x$CC" != "x" ]; then
+	GCC="$CC"
+fi
+if [ "x$CXX" != "x" ]; then
+	GPP="$CXX"
+fi
+
 rm -rf ./buildtmp
 mkdir ./buildtmp
 
-echo "Checking for GCC ..."
+echo "Checking for C compiler (${GCC}) ..."
 # Try a simple compilation
 cat << _EOF > tst.c
 #include <stdio.h>
@@ -161,8 +293,11 @@ ${GCC} tst.c -o tst
 if [ $? -ne 0 ]
 then
 	echo "ERROR:"
-	echo "Cannot compile a simple program. GCC 4.4 and above is required"
-	echo "to build this program. Please include installation bindir of GCC in the PATH."
+	echo "Cannot compile a simple program. GCC 4.4+ or a compatible C compiler is required"
+	echo "to build this program. Please include the compiler's bin directory in the PATH,"
+	echo "or set the CC environment variable."
+	echo ""
+	echo "  Example: CC=gcc-12 ./config"
 	echo ""
 	rm -f tst.c
 	exit 1
@@ -170,8 +305,8 @@ fi
 
 # Check bitness of system/toolchain
 echo "Checking for 32-bit/64-bit platform ..."
-bitness=`./tst`
-if [ $bitness -lt 8 ]
+bitness=$(./tst)
+if [ "$bitness" -lt 8 ]
 then
 	# Hmmm maybe default compilation is 32-bit. Re-try with m64 flag.
 	${GCC} -m64 tst.c -o tst
@@ -197,20 +332,20 @@ do
 	--disable-allocator) allocator=0;;
 	--enable-debug-stats) debug_stats=1;;
 	--prefix=*)
-		pval=`echo ${arg1} | cut -f2 -d"="`
+		pval=$(echo "${arg1}" | cut -f2 -d"=")
 		prefix=$pval
 	;;
 	--with-openssl=*)
-		openssl_prefix=`echo ${arg1} | cut -f2 -d"="`
+		openssl_prefix=$(echo "${arg1}" | cut -f2 -d"=")
 	;;
 	--with-zlib=*)
-		zlib_prefix=`echo ${arg1} | cut -f2 -d"="`
+		zlib_prefix=$(echo "${arg1}" | cut -f2 -d"=")
 	;;
 	--with-bzlib=*)
-		bzlib_prefix=`echo ${arg1} | cut -f2 -d"="`
+		bzlib_prefix=$(echo "${arg1}" | cut -f2 -d"=")
 	;;
 	--with-external-libbsc=*)
-		libbsc_dir=`echo ${arg1} | cut -f2 -d"="`
+		libbsc_dir=$(echo "${arg1}" | cut -f2 -d"=")
 		libbsc_lib=${libbsc_dir}/libbsc.a
 		libbsclflags='\$\(LIBBSCLFLAGS\)'
 		libbscwrapobj='\$\(LIBBSCWRAPOBJ\)'
@@ -218,12 +353,19 @@ do
 		libbsccppflags='\$\(LIBBSCCPPFLAGS\)'
 	;;
 	--wavpack-dir=*)
-		wavpack_dir=`echo ${arg1} | cut -f2 -d"="`
+		wavpack_dir=$(echo "${arg1}" | cut -f2 -d"=")
 		wavpack_libspec="-L${wavpack_dir}/src/.libs -lwavpack"
 	;;
 	--disable-wavpack)
 		enable_wavpack=""
 		wavpack_libspec=""
+	;;
+	--disable-zstd)
+		enable_zstd=0
+		zstd_objs=""
+		zstd_wrapobj=""
+		zstd_cppflags=""
+		zstd_incflags=""
 	;;
 	--use-key256)
 		keylen='-DDEFAULT_KEYLEN=16'
@@ -249,11 +391,45 @@ do
 	arg1=$1
 done
 
-if [ "x${enable_wavpack}" != "x" -a "x${wavpack_dir}" = "x" ]
+# Auto-detect WavPack submodule if not explicitly specified
+if [ "x${enable_wavpack}" != "x" ] && [ "x${wavpack_dir}" = "x" ]
 then
-	echo "--wavpack-dir not specified. Please specify path of wavpack source tree,"
-	echo "or use --disable-wavpack to disable the wavpack filter."
-	exit 1
+	if [ -f "./wavpack/include/wavpack.h" ]
+	then
+		wavpack_dir="./wavpack"
+		wavpack_libspec="-L${wavpack_dir}/src/.libs -lwavpack"
+		echo "WavPack support: enabled (using submodule)"
+	else
+		echo "WARNING: WavPack source not found (wavpack/include/wavpack.h missing)."
+		echo "  Ensure git submodules are initialized: git submodule update --init --recursive"
+		echo "  Or disable WavPack: ./config --disable-wavpack"
+		echo "  Or specify path: ./config --wavpack-dir=/path/to/wavpack"
+		echo ""
+		echo "Disabling WavPack support."
+		enable_wavpack=""
+	fi
+fi
+
+# Check for Zstandard submodule if enabled
+if [ $enable_zstd -eq 1 ]
+then
+	if [ ! -f "./zstd/lib/zstd.h" ]
+	then
+		echo "WARNING: Zstandard source not found (zstd/lib/zstd.h missing)."
+		echo "  Ensure git submodules are initialized: git submodule update --init --recursive"
+		echo "  Or disable Zstandard: ./config --disable-zstd"
+		echo ""
+		echo "Disabling Zstandard support."
+		enable_zstd=0
+		zstd_objs=""
+		zstd_wrapobj=""
+		zstd_cppflags=""
+		zstd_incflags=""
+	else
+		echo "Zstandard support: enabled"
+	fi
+else
+	echo "Zstandard support: disabled"
 fi
 
 if [ $debug -eq 1 ]
@@ -267,40 +443,122 @@ else
 	typ="RELEASE"
 fi
 
+# ----------------------------------------------------------------
+# Detect operating system and platform
+# ----------------------------------------------------------------
 echo "Checking OS ..."
 OS=$(uname)
 skeinblock='\$\(SKEIN_BLOCK_C\)'
+gnu_arch=""
+
 if [ "$OS" = "Linux" ]
 then
 	plat=$(uname -m)
+	# Determine GNU multiarch triplet for Debian/Ubuntu library paths
+	if command -v dpkg-architecture >/dev/null 2>&1; then
+		gnu_arch=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null)
+	elif [ -z "$gnu_arch" ]; then
+		# Fallback: construct from uname
+		case "$plat" in
+		x86_64)  gnu_arch="x86_64-linux-gnu" ;;
+		aarch64) gnu_arch="aarch64-linux-gnu" ;;
+		esac
+	fi
 elif [ "$OS" = "Darwin" ]
 then
 	plat=$(uname -m)
 	so_suffix=dylib
+elif [ "$OS" = "FreeBSD" ]
+then
+	plat=$(uname -m)
+	ldl=""
+	lrt=""
+	dtag_val=""
 elif [ "$OS" = "SunOS" ]
 then
 	plat=$(isainfo -v)
 else
-	echo "Unsupported OS: $OS"
-	exit 1
+	echo "WARNING: Untested OS '$OS'. Attempting to continue ..."
+	plat=$(uname -m)
 fi
 
-# Check GCC version
-echo "Checking GCC version ..."
-vers=`${GCC} -dumpversion`
-OIFS="$IFS"
-IFS=.
-set -- ${vers}
-IFS="$OIFS"
+echo "  OS: $OS  Platform: $plat"
 
-if [ $1 -lt 4 ] || [ $1 -eq 4 -a $2 -lt 4 ]
-then
-	echo "ERROR:"
-	echo "GCC version 4.4 or above is required."
-	echo ""
-	exit 1
+# ----------------------------------------------------------------
+# Detect CPU architecture and disable irrelevant features
+# ----------------------------------------------------------------
+is_x86=0
+is_arm=0
+is_riscv=0
+case "$plat" in
+x86_64|amd64|i[3456]86)
+	is_x86=1
+	;;
+aarch64|arm64|armv*)
+	is_arm=1
+	# Disable SSE/AVX detection and flags on ARM
+	sse_detect=0
+	avx_detect=0
+	sse_opt_flags=""
+	avx_opt_flag=""
+	avx512_opt_flag=""
+	sse4_opt_flag=""
+	sse3_opt_flag=""
+	sse2_opt_flag=""
+	# Enable NEON compiler flags for ARM64
+	neon_opt_flag="-march=armv8-a+crypto"
+	;;
+riscv64)
+	is_riscv=1
+	# Disable SSE/AVX detection and flags on RISC-V
+	sse_detect=0
+	avx_detect=0
+	sse_opt_flags=""
+	avx_opt_flag=""
+	avx512_opt_flag=""
+	sse4_opt_flag=""
+	sse3_opt_flag=""
+	sse2_opt_flag=""
+	;;
+esac
+
+# ----------------------------------------------------------------
+# Check compiler version
+# ----------------------------------------------------------------
+echo "Checking compiler version ..."
+
+# Detect if compiler is Clang
+is_clang=0
+${GCC} --version 2>&1 | grep -qi clang && is_clang=1
+
+if [ $is_clang -eq 1 ]; then
+	echo "  Detected Clang compiler"
+	vers=$(${GCC} -dumpversion 2>/dev/null)
+	# Clang's -dumpversion often returns a high number; skip GCC version check
+else
+	vers=$(${GCC} -dumpversion)
+	OIFS="$IFS"
+	IFS=.
+	set -- ${vers}
+	IFS="$OIFS"
+
+	if [ $1 -lt 4 ] || { [ $1 -eq 4 ] && [ $2 -lt 4 ]; }
+	then
+		echo "ERROR:"
+		echo "GCC version 4.4 or above is required."
+		echo "Detected version: ${vers}"
+		echo ""
+		echo "Set the CC environment variable to use a different compiler:"
+		echo "  CC=gcc-12 ./config"
+		echo ""
+		exit 1
+	fi
+	echo "  GCC version: ${vers}"
 fi
 
+# ----------------------------------------------------------------
+# SSE / AVX detection (x86 only)
+# ----------------------------------------------------------------
 if [ $sse_detect -eq 1 ]
 then
 	${GCC} -o sse_level ./utils/sse_level.c ./utils/cpuid.c -I./utils
@@ -316,43 +574,43 @@ fi
 if [ $sse_detect -eq 1 ]
 then
 	# SSE Detection
-	${ECHO} -n "Checking for CPU SSE version ... "
-	sse_ver=`./sse_level`
+	printf "Checking for CPU SSE version ... "
+	sse_ver=$(./sse_level)
 	if [ $? -ne 0 ]
 	then
 		rm -f sse_level
 		echo "ERROR:"
-		echo "SSE version detection utility. Try configuring with --no-sse-check option."
+		echo "SSE version detection utility. Try configuring with --no-sse-detect option."
 		echo ""
 		exit 1
 	fi
-	echo $sse_ver
+	echo "$sse_ver"
 	sse_opt_flags="-m${sse_ver}"
 fi
 
-if [ $avx_detect -eq 1 -a $sse_detect -eq 1 ]
+if [ $avx_detect -eq 1 ] && [ $sse_detect -eq 1 ]
 then
-	${ECHO} -n "Checking for CPU AVX version ... "
-	avx_ver=`./sse_level --avx`
+	printf "Checking for CPU AVX version ... "
+	avx_ver=$(./sse_level --avx)
 	if [ $? -ne 0 ]
 	then
 		rm -f sse_level
 		echo "ERROR:"
-		echo "SSE/AVX version detection utility. Try configuring with --no-sse-check option."
+		echo "SSE/AVX version detection utility. Try configuring with --no-sse-detect option."
 		echo ""
 		exit 1
 	fi
 	if [ "x$avx_ver" = "x" ]
 	then
-		echo None
+		echo "None"
 	else
-		echo $avx_ver
+		echo "$avx_ver"
 		sse_opt_flags="${sse_opt_flags} -m${avx_ver}"
 	fi
 fi
 rm -f sse_level
 
-echo $plat | egrep 'x86_64|amd64' > /dev/null
+echo "$plat" | grep -E 'x86_64|amd64' > /dev/null
 if [ $? -eq 0 ]
 then
 	if [ "$OS" != "Darwin" ]
@@ -365,27 +623,61 @@ then
 	# Detect Yasm
 	#
 	echo "Checking for Yasm ..."
-	for bindir in /bin /usr/bin /usr/local/bin
-	do
-		if [ -x ${bindir}/yasm ]
-		then
-			# Get yasm version
-			yver=`${bindir}/yasm --version | head -1 | awk '{print $2}'`
+
+	# First, try to find yasm in PATH (for Nix, Homebrew, and other package managers)
+	if command -v yasm >/dev/null 2>&1; then
+		yasm_path=$(command -v yasm)
+		yver=$($yasm_path --version 2>/dev/null | head -1 | awk '{print $2}')
+		if [ -n "$yver" ]; then
 			_OIFS=$IFS; IFS="."; set -- ${yver}; IFS="$_OIFS"
 			major=$1
 			minor=$2
 
 			# Minimum yasm version 1.1
-			[ $major -lt 1 -o $minor -lt 1 ] && continue
-			yasm=${bindir}/yasm
-			sha256asmobjs='\$\(SHA2ASM_OBJS\)'
-			sha256objs='\$\(SHA2_OBJS\)'
+			if [ "$major" -ge 1 ] && [ "$minor" -ge 1 ]; then
+				yasm=$yasm_path
+				sha256asmobjs='\$\(SHA2ASM_OBJS\)'
+				sha256objs='\$\(SHA2_OBJS\)'
+				echo "  Found yasm $yver at $yasm_path"
+			fi
 		fi
-	done
+	fi
+
+	# If not found in PATH, check standard locations
+	if [ "x${yasm}" = "x" ]; then
+		for bindir in /bin /usr/bin /usr/local/bin /opt/homebrew/bin
+		do
+			if [ -x "${bindir}/yasm" ]
+			then
+				# Get yasm version
+				yver=$(${bindir}/yasm --version | head -1 | awk '{print $2}')
+				_OIFS=$IFS; IFS="."; set -- ${yver}; IFS="$_OIFS"
+				major=$1
+				minor=$2
+
+				# Minimum yasm version 1.1
+				if [ "$major" -lt 1 ] || [ "$minor" -lt 1 ]; then
+					continue
+				fi
+				yasm=${bindir}/yasm
+				sha256asmobjs='\$\(SHA2ASM_OBJS\)'
+				sha256objs='\$\(SHA2_OBJS\)'
+			fi
+		done
+	fi
+
 	if [ "x${yasm}" = "x" ]
 	then
-		echo "Yasm version 1.1 or later is required to build on x64 platforms"
-		exit 1
+		echo "  Yasm not found - assembly optimizations will be disabled"
+		echo "  (Optional) Install yasm for better performance:"
+		echo "    - Ubuntu/Debian: sudo apt install yasm"
+		echo "    - macOS: brew install yasm"
+		echo "    - Nix: nix-shell -p yasm"
+		# Continue without yasm - use C implementations
+		yasm="@echo Skipping"
+		sha256asmobjs=
+		sha256objs=
+		skeinblock='\$\(SKEIN_BLOCK_C\)'
 	fi
 
 	if [ "$OS" = "Linux" ]
@@ -396,6 +688,10 @@ then
 	then
 		yasm="${yasm} ${yasm_params_osx}"
 		yasm_params_gas="${yasm} ${yasm_params_gas_osx}"
+
+	elif [ "$OS" = "FreeBSD" ]
+	then
+		yasm="${yasm} ${yasm_params_linux}"
 
 	elif [ "$OS" = "SunOS" ]
 	then
@@ -428,78 +724,139 @@ then
 	rpath="-rpath,"
 	dtag_val=""
 	lrt="-liconv"
+	ldl=""
 	max_opt="O2"
 fi
 
+if [ "$OS" = "FreeBSD" ]
+then
+	rpath="-rpath,"
+fi
+
+# ----------------------------------------------------------------
 # Detect OpenSSL library
+# ----------------------------------------------------------------
 echo "Checking for OpenSSL ..."
-for lib in "${openssl_prefix}/lib64" "${openssl_prefix}/usr/lib64" \
-	"${openssl_prefix}/lib" "${openssl_prefix}/usr/lib" \
-	"${openssl_prefix}/ssl/lib64" "${openssl_prefix}/ssl/lib" \
-	"${openssl_prefix}/lib/x86_64-linux-gnu" \
-	"${openssl_prefix}/usr/lib/x86_64-linux-gnu"
-do
-	if [ -d ${lib} ]
-	then
-		if [ -f "${lib}/libcrypto.${so_suffix}" -o -h "${lib}/libcrypto.${so_suffix}" ]
+
+# Try pkg-config first
+if [ "x${openssl_prefix}" = "x" ]; then
+	_pkglib=$(try_pkgconfig openssl)
+	if [ $? -eq 0 ] && [ -n "$_pkglib" ]; then
+		echo "  Found OpenSSL via pkg-config: $_pkglib"
+		openssl_libdir="$_pkglib"
+	fi
+fi
+
+if [ "x${openssl_libdir}" = "x" ]; then
+	for lib in "${openssl_prefix}/lib64" "${openssl_prefix}/usr/lib64" \
+		"${openssl_prefix}/lib" "${openssl_prefix}/usr/lib" \
+		"${openssl_prefix}/ssl/lib64" "${openssl_prefix}/ssl/lib" \
+		$(lib_search_paths "${openssl_prefix}")
+	do
+		if [ -d "${lib}" ]
 		then
-			openssl_libdir="${lib}"
-			(cd ./buildtmp; ln -s ${openssl_libdir}/libcrypto.${so_suffix})
-			break
-		else
-			if [ -f "${lib}/libcrypto.a" ]
+			if [ -f "${lib}/libcrypto.${so_suffix}" ] || [ -h "${lib}/libcrypto.${so_suffix}" ]
 			then
 				openssl_libdir="${lib}"
-				(cd ./buildtmp; ln -s ${openssl_libdir}/libcrypto.a)
+				(cd ./buildtmp; ln -s "${openssl_libdir}/libcrypto.${so_suffix}")
+				break
+			elif [ -f "${lib}/libcrypto.a" ]
+			then
+				openssl_libdir="${lib}"
+				(cd ./buildtmp; ln -s "${openssl_libdir}/libcrypto.a")
 				break
 			fi
 		fi
-	fi
-done
+	done
+fi
 
 if [ "x${openssl_libdir}" = "x" ]
 then
 	echo "ERROR: OpenSSL libraries not detected."
+	echo ""
+	echo "Possible solutions:"
+	if [ "$OS" = "Linux" ]; then
+		echo "  Debian/Ubuntu: sudo apt-get install libssl-dev"
+		echo "  Fedora/RHEL:   sudo dnf install openssl-devel"
+		echo "  Arch Linux:    sudo pacman -S openssl"
+	elif [ "$OS" = "Darwin" ]; then
+		echo "  Homebrew: brew install openssl"
+		echo "  Then: ./config --with-openssl=\$(brew --prefix openssl)"
+	elif [ "$OS" = "FreeBSD" ]; then
+		echo "  pkg install openssl"
+	fi
+	echo ""
+	echo "Or specify the path manually: ./config --with-openssl=/path/to/openssl"
 	exit 1
 fi
 
 # Detect OpenSSL headers
-for inc in "${openssl_prefix}/include" \
-	"${openssl_prefix}/usr/include" \
-	"${openssl_prefix}/ssl/include"
-do
-	if [ -d ${inc} ]
-	then
-		if [ -f "${inc}/openssl/sha.h" ]
-		then
-			openssl_incdir=${inc}
-			break
+# Try pkg-config first
+if [ "x${openssl_prefix}" = "x" ] && [ "x${openssl_incdir}" = "x" ]; then
+	_pkginc=$(try_pkgconfig_inc openssl)
+	if [ $? -eq 0 ] && [ -n "$_pkginc" ]; then
+		if [ -f "${_pkginc}/openssl/sha.h" ]; then
+			openssl_incdir="$_pkginc"
 		fi
 	fi
-done
+fi
+
+if [ "x${openssl_incdir}" = "x" ]; then
+	for inc in "${openssl_prefix}/include" \
+		"${openssl_prefix}/usr/include" \
+		"${openssl_prefix}/ssl/include" \
+		$(inc_search_paths "${openssl_prefix}")
+	do
+		if [ -d "${inc}" ]
+		then
+			if [ -f "${inc}/openssl/sha.h" ]
+			then
+				openssl_incdir=${inc}
+				break
+			fi
+		fi
+	done
+fi
 
 if [ "x${openssl_incdir}" = "x" ]
 then
 	echo "ERROR: OpenSSL header files not detected."
 	if [ "x${openssl_prefix}" = "x" ]
 	then
-		echo "Depending on your system you may need to install the openssl-devel or openssl-dev package."
+		echo ""
+		echo "Possible solutions:"
+		if [ "$OS" = "Linux" ]; then
+			echo "  Debian/Ubuntu: sudo apt-get install libssl-dev"
+			echo "  Fedora/RHEL:   sudo dnf install openssl-devel"
+		elif [ "$OS" = "Darwin" ]; then
+			echo "  Homebrew: brew install openssl"
+		elif [ "$OS" = "FreeBSD" ]; then
+			echo "  pkg install openssl"
+		else
+			echo "  Install the openssl-devel or libssl-dev package for your distribution."
+		fi
 	fi
 	exit 1
 fi
 
 
-# Check for OpenSSL version
+# Check for OpenSSL version (minimum: 1.1.1)
 echo "Checking OpenSSL version ..."
 cat << __EOF > tst.c
 #include <stdlib.h>
+#include <stdio.h>
 #include <openssl/opensslv.h>
 
 int
 main(void)
 {
-	if (OPENSSL_VERSION_NUMBER < 0x0090805fL)
-		exit (1);
+	if (OPENSSL_VERSION_NUMBER < 0x10101000L) {
+		fprintf(stderr, "OpenSSL version 0x%lxL detected, need >= 0x10101000L (1.1.1)\n",
+			(unsigned long)OPENSSL_VERSION_NUMBER);
+		exit(1);
+	}
+	printf("  OpenSSL version: %s (0x%lxL)\n", OPENSSL_VERSION_TEXT,
+		(unsigned long)OPENSSL_VERSION_NUMBER);
 	return (0);
 }
 __EOF
@@ -507,36 +864,45 @@ __EOF
 ${GCC} ${extra_opt_flags} -I${openssl_incdir} -L${openssl_libdir} tst.c -o tst
 if [ $? -ne 0 ]
 then
-	echo "Unable to compile OpenSSL test program please check OpenSSL installation."
+	echo "Unable to compile OpenSSL test program. Please check OpenSSL installation."
 	exit 1
 fi
 ./tst
 if [ $? -ne 0 ]
 then
-	echo "OpenSSL version too old. At least version 0.9.8e is required."
+	echo "OpenSSL version too old. At least version 1.1.1 is required."
 	echo
+	echo "Possible solutions:"
+	if [ "$OS" = "Linux" ]; then
+		echo "  Debian/Ubuntu: sudo apt-get install libssl-dev"
+		echo "  Fedora/RHEL:   sudo dnf install openssl-devel"
+	elif [ "$OS" = "Darwin" ]; then
+		echo "  Homebrew: brew install openssl"
+	elif [ "$OS" = "FreeBSD" ]; then
+		echo "  pkg install openssl"
+	fi
 	exit 1
 fi
 
-# Check for HMAC_CTX_copy function
-${ECHO} -n "Checking if the OpenSSL library provides HMAC_CTX_copy function ... "
+# Check for HMAC_CTX_new/copy/free (OpenSSL 1.1.0+ opaque API)
+printf "Checking if the OpenSSL library provides HMAC_CTX_new/copy ... "
 cat << __EOF > tst.c
 #include <stdlib.h>
-#include <openssl/sha.h>
-#include <openssl/rand.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
 int
 main(void)
 {
-	unsigned char key[16];
-	HMAC_CTX *ctx = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
-	HMAC_CTX *ctx1 = (HMAC_CTX *)malloc(sizeof (HMAC_CTX));
+	unsigned char key[16] = {0};
+	HMAC_CTX *ctx = HMAC_CTX_new();
+	HMAC_CTX *ctx1 = HMAC_CTX_new();
 
-	HMAC_CTX_init(ctx);
+	if (!ctx || !ctx1) return 1;
 	HMAC_Init_ex(ctx, key, 16, EVP_sha256(), NULL);
 	HMAC_CTX_copy(ctx1, ctx);
+	HMAC_CTX_free(ctx1);
+	HMAC_CTX_free(ctx);
 
 	return (0);
 }
@@ -554,7 +920,9 @@ fi
 rm -rf tst*
 openssl_libdir="${openssl_libdir}${dtag_val}"
 
-# Detect other library packages
+# ----------------------------------------------------------------
+# Detect other library packages (libbz2, libz)
+# ----------------------------------------------------------------
 for libspec in "libbz2:${bzlib_prefix}" "libz:${zlib_prefix}"
 do
 	_OIFS="$IFS"
@@ -570,52 +938,89 @@ do
 	then
 		use_prefix="$prefix"
 	fi
-	for lib in "${pref}/lib64" "${pref}/usr/lib64" "${pref}/lib" "${pref}/usr/lib" \
-		"${pref}/lib/x86_64-linux-gnu" "${pref}/usr/lib/x86_64-linux-gnu" \
-		"${pref}/local/lib64" "${pref}/usr/local/lib64" "${pref}/local/lib" "${pref}/usr/local/lib" \
-		"${pref}/local/lib/x86_64-linux-gnu" "${pref}/usr/local/lib/x86_64-linux-gnu" \
-		"${use_prefix}/lib64" "${use_prefix}/lib" "${use_prefix}/lib/x86_64-linux-gnu" \
-		"${use_prefix}/usr/lib/x86_64-linux-gnu" "${use_prefix}/.libs" "${use_prefix}"
-	do
-		if [ -d ${lib} ]
-		then
-			if [ -f "${lib}/${libname}.${so_suffix}" -o -h "${lib}/${libname}.${so_suffix}" ]
+
+	# Try pkg-config first
+	_found_via_pkg=0
+	if [ "x${pref}" = "x" ]; then
+		case "$libname" in
+		libbz2)  _pkgname="bzip2" ;;
+		libz)    _pkgname="zlib"  ;;
+		*)       _pkgname=""      ;;
+		esac
+		if [ -n "$_pkgname" ]; then
+			_pkglib=$(try_pkgconfig "$_pkgname")
+			if [ $? -eq 0 ] && [ -n "$_pkglib" ]; then
+				echo "  Found $libname via pkg-config: $_pkglib"
+				eval "${libname}_libdir=${_pkglib}${dtag_val}"
+				_found_via_pkg=1
+			fi
+		fi
+	fi
+
+	if [ $_found_via_pkg -eq 0 ]; then
+		for lib in $(lib_search_paths "${pref}") \
+			"${use_prefix}/lib64" "${use_prefix}/lib" \
+			$(lib_search_paths "${use_prefix}")
+		do
+			if [ -d "${lib}" ]
 			then
-				eval "${libname}_libdir=${lib}${dtag_val}"
-				(cd ./buildtmp; ln -s ${lib}/${libname}.${so_suffix})
-				break
-			else
-				if [ -f "${lib}/${libname}.a" ]
+				if [ -f "${lib}/${libname}.${so_suffix}" ] || [ -h "${lib}/${libname}.${so_suffix}" ]
 				then
 					eval "${libname}_libdir=${lib}${dtag_val}"
-					(cd ./buildtmp; ln -s ${lib}/${libname}.a)
+					(cd ./buildtmp; ln -s "${lib}/${libname}.${so_suffix}")
+					break
+				elif [ -f "${lib}/${libname}.a" ]
+				then
+					eval "${libname}_libdir=${lib}${dtag_val}"
+					(cd ./buildtmp; ln -s "${lib}/${libname}.a")
 					break
 				fi
 			fi
-		fi
-	done
+		done
+	fi
 done
 
 if [ "x${libbz2_libdir}" = "x" ]
 then
+	echo "ERROR: Libbz2 not detected."
+	echo ""
 	if [ "x$bzlib_prefix" = "x" ]
 	then
-		echo "ERROR: Libbz2 not detected."
-		echo "       You may have to install libbz2-devel or libbz2-dev"
+		echo "Possible solutions:"
+		if [ "$OS" = "Linux" ]; then
+			echo "  Debian/Ubuntu: sudo apt-get install libbz2-dev"
+			echo "  Fedora/RHEL:   sudo dnf install bzip2-devel"
+			echo "  Arch Linux:    sudo pacman -S bzip2"
+		elif [ "$OS" = "Darwin" ]; then
+			echo "  Homebrew: brew install bzip2"
+		elif [ "$OS" = "FreeBSD" ]; then
+			echo "  Bzip2 should be in base system. If not: pkg install bzip2"
+		fi
 	else
-		echo "ERROR: Bzip2 library not detected in given prefix."
+		echo "Bzip2 library not detected in given prefix: $bzlib_prefix"
 	fi
 	exit 1
 fi
 
 if [ "x${libz_libdir}" = "x" ]
 then
+	echo "ERROR: Zlib not detected."
+	echo ""
 	if [ "x$zlib_prefix" = "x" ]
 	then
-		echo "ERROR: Zlib not detected."
-		echo "       You may have to install libz-devel or libz-dev"
+		echo "Possible solutions:"
+		if [ "$OS" = "Linux" ]; then
+			echo "  Debian/Ubuntu: sudo apt-get install zlib1g-dev"
+			echo "  Fedora/RHEL:   sudo dnf install zlib-devel"
+			echo "  Arch Linux:    sudo pacman -S zlib"
+		elif [ "$OS" = "Darwin" ]; then
+			echo "  Zlib should be available via Xcode Command Line Tools."
+			echo "  Install with: xcode-select --install"
+		elif [ "$OS" = "FreeBSD" ]; then
+			echo "  Zlib should be in base system."
+		fi
 	else
-		echo "ERROR: Zlib not detected in given prefix."
+		echo "Zlib not detected in given prefix: $zlib_prefix"
 	fi
 	exit 1
 fi
@@ -623,7 +1028,7 @@ fi
 libbz2_inc=
 libz_inc=
 # Detect other library headers
-for hdr in "libbz2_inc:bzlib.h:${bzlib_prefix}" "libz_inc:zlib.h:${zlib_prefix}"
+for hdr in "libbz2_inc:bzlib.h:${bzlib_prefix}:bzip2" "libz_inc:zlib.h:${zlib_prefix}:zlib"
 do
 	_OIFS="$IFS"
 	IFS=":"
@@ -631,6 +1036,7 @@ do
 	var=$1
 	hdrf=$2
 	pref=$3
+	pkgname=$4
 	IFS="$_OIFS"
 
 	echo "Checking for $hdrf ..."
@@ -640,24 +1046,41 @@ do
 		use_prefix="$prefix"
 	fi
 	found=0
-	for inc in "${pref}/include" "${pref}/usr/include" \
-		"${pref}/local/include" "${pref}/usr/local/include" \
-		"${use_prefix}/include" "${use_prefix}/usr/include" \
-		"${use_prefix}"
-	do
-		if [ -d ${inc} ]
-		then
-			if [ -f "${inc}/${hdrf}" ]
-			then
-				eval "${var}=\"-I${inc}\""
+
+	# Try pkg-config first (important for Nix and other non-standard layouts)
+	if [ "x${pref}" = "x" ] && [ -n "$pkgname" ]; then
+		_pkginc=$(try_pkgconfig_inc "$pkgname")
+		if [ $? -eq 0 ] && [ -n "$_pkginc" ]; then
+			if [ -f "${_pkginc}/${hdrf}" ]; then
+				eval "${var}=\"-I${_pkginc}\""
 				found=1
-				break
 			fi
 		fi
-	done
+	fi
+
+	# If not found via pkg-config, search standard paths
+	if [ $found -ne 1 ]; then
+		for inc in $(inc_search_paths "${pref}") \
+			"${use_prefix}/include" "${use_prefix}/usr/include" \
+			$(inc_search_paths "${use_prefix}")
+		do
+			if [ -d "${inc}" ]
+			then
+				if [ -f "${inc}/${hdrf}" ]
+				then
+					eval "${var}=\"-I${inc}\""
+					found=1
+					break
+				fi
+			fi
+		done
+	fi
+
 	if [ $found -ne 1 ]
 	then
 		echo "Cannot find header $hdrf"
+		echo ""
+		echo "Make sure the development package for the library is installed."
 		exit 1
 	fi
 done
@@ -714,13 +1137,50 @@ debugstatscppflagsval=
 
 echo "*************** Running configure in libarchive ****************"
 (cd $libarchive_dir
- CC=${GCC} ./configure --disable-bsdtar --disable-bsdcpio --without-zlib --without-bz2lib --without-lzmadec --without-lzma  --without-lzo2  --without-nettle --without-openssl --without-xml2 --without-expat --disable-silent-rules --enable-shared=no --enable-static=yes --enable-xattr --with-pic
+ # If configure doesn't exist (submodule checkout), generate it
+ if [ ! -f ./configure ]; then
+	echo "  Generating configure script (submodule checkout) ..."
+	if ! command -v autoreconf >/dev/null 2>&1; then
+		echo "ERROR: autoreconf not found."
+		echo ""
+		echo "Building from a git submodule checkout requires autotools."
+		echo "Install autoconf, automake, and libtool:"
+		if [ "$OS" = "Linux" ]; then
+			echo "  Debian/Ubuntu: sudo apt-get install autoconf automake libtool"
+			echo "  Fedora/RHEL:   sudo dnf install autoconf automake libtool"
+		elif [ "$OS" = "Darwin" ]; then
+			echo "  Homebrew: brew install autoconf automake libtool"
+		fi
+		exit 1
+	fi
+	autoreconf -fvi 2>&1
+	if [ $? -ne 0 ]; then
+		echo "ERROR: autoreconf failed in libarchive."
+		echo "       Install autoconf, automake, and libtool."
+		exit 1
+	fi
+ fi
+ # Apply pcompress patches if not already applied
+ if [ -f ../patches/pcompress_libarchive.patch ]; then
+	if ! grep -q 'cb_is_metadata' libarchive/archive_private.h 2>/dev/null; then
+		echo "  Applying pcompress custom patches to libarchive ..."
+		if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+			git apply ../patches/pcompress_libarchive.patch
+		else
+			patch -p1 < ../patches/pcompress_libarchive.patch
+		fi
+		if [ $? -ne 0 ]; then
+			echo "WARNING: Some patches may not have applied cleanly."
+		fi
+	fi
+ fi
+ CC=${GCC} ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
  [ $? -ne 0 ] && exit $?
- cat Makefile | sed '
+ sed '
 s@$(BUILT_SOURCES)@@
 s@$(libarchive_test_SOURCES)@@
 s@$(libarchive_man_MANS)@@
-' > Makefile.new
+' Makefile > Makefile.new
  mv Makefile.new Makefile
 )
 if [ $? -ne 0 ]
@@ -734,6 +1194,17 @@ if [ "x${wavpack_dir}" != "x" ]
 then
 	echo "*************** Running configure in WavPack ****************"
 	(cd $wavpack_dir
+	 # Run autogen.sh if configure doesn't exist
+	 if [ ! -f configure ]; then
+		echo "  Running autogen.sh to generate configure script..."
+		if [ -f autogen.sh ]; then
+			sh ./autogen.sh
+		else
+			echo "  Running autoreconf directly..."
+			autoreconf -fiv
+		fi
+	 fi
+
 	 CC=${GCC} ./configure --enable-static=yes --enable-shared=no --with-pic
 	 if [ $? -ne 0 ]
 	 then
@@ -745,10 +1216,24 @@ then
 		echo "********* Configure in WavPack dir failed!"
 		exit 1
 	fi
-	echo "*************** Finished configure in WacPack ****************"
+	echo "*************** Finished configure in WavPack ****************"
 fi
 
-cat Makefile.in | sed "
+# ----------------------------------------------------------------
+# Finalize architecture-specific SIMD compiler flags
+# On x86, include use_clang_as. On non-x86, these are already empty.
+# ----------------------------------------------------------------
+if [ $is_x86 -eq 1 ]; then
+	if [ -n "$use_clang_as" ]; then
+		avx512_opt_flag="${avx512_opt_flag} ${use_clang_as}"
+		avx_opt_flag="${avx_opt_flag} ${use_clang_as}"
+		sse4_opt_flag="${sse4_opt_flag} ${use_clang_as}"
+		sse3_opt_flag="${sse3_opt_flag} ${use_clang_as}"
+		sse2_opt_flag="${sse2_opt_flag} ${use_clang_as}"
+	fi
+fi
+
+sed "
 s#@GCC@#${GCC}#g
 s#@GPP@#${GPP}#g
 s#@CRYPTO_ASM_COMPILE@#${crypto_asm_compile}#g
@@ -757,6 +1242,7 @@ s#@SO_SUFFIX@#${so_suffix}#g
 s#@YASM_GAS@#${yasm_params_gas}#g
 s#@RPATH@#${rpath}#g
 s#@LRT@#${lrt}#g
+s#@LDL@#${ldl}#g
 s#@LIBARCHIVE_DIR@#${libarchive_dir}#g
 s#soname#${soname_opt}#g
 s#${default_opt}#${max_opt}#g
@@ -803,9 +1289,65 @@ s#@${salsa20_debug_var}@#${salsa20_debug}#g
 s#@ENABLE_WAVPACK@#${enable_wavpack}#g
 s#@WAVPACK_LIBSPEC@#${wavpack_libspec}#g
 s#@WAVPACK_DIR@#${wavpack_dir}#g
-" > Makefile
+s#@ZSTD_OBJS@#${zstd_objs}#g
+s#@ZSTD_WRAPOBJ@#${zstd_wrapobj}#g
+s#@ZSTD_CPPFLAGS@#${zstd_cppflags}#g
+s#@ZSTD_INCFLAGS@#${zstd_incflags}#g
+s#@AVX_OPT_FLAG@#${avx_opt_flag}#g
+s#@AVX512_OPT_FLAG@#${avx512_opt_flag}#g
+s#@SSE4_OPT_FLAG@#${sse4_opt_flag}#g
+s#@SSE3_OPT_FLAG@#${sse3_opt_flag}#g
+s#@SSE2_OPT_FLAG@#${sse2_opt_flag}#g
+s#@NEON_OPT_FLAG@#${neon_opt_flag}#g
+" Makefile.in > Makefile
 
 if [ "x${enable_wavpack}" = "x" ]
 then
-    sed -i -e '/^WAVPKSRCS/ D' -e '/^WAVPKOBJS/ D' Makefile
+	# Portable sed in-place: write to temp file then replace
+	sed -e '/^WAVPKSRCS/ d' -e '/^WAVPKOBJS/ d' Makefile > Makefile.tmp
+	mv Makefile.tmp Makefile
 fi
+
+if [ $enable_zstd -eq 0 ]
+then
+	sed -e '/^ZSTDSRCS/ d' -e '/^ZSTDHDRS/ d' -e '/^ZSTDOBJS/ d' \
+	    -e '/^ZSTDWRAP/ d' -e '/^ZSTDWRAPOBJ/ d' Makefile > Makefile.tmp
+	mv Makefile.tmp Makefile
+fi
+
+# ----------------------------------------------------------------
+# Configuration summary
+# ----------------------------------------------------------------
+echo ""
+echo "===== Configuration Summary ====="
+echo "  OS:                ${OS}"
+echo "  Platform:          ${plat}"
+echo "  C Compiler:        ${GCC}"
+echo "  C++ Compiler:      ${GPP}"
+echo "  Build type:        ${typ}"
+echo "  Install prefix:    ${prefix}"
+echo "  OpenSSL lib:       ${openssl_libdir}"
+echo "  OpenSSL inc:       ${openssl_incdir}"
+echo "  Zlib lib:          ${libz_libdir}"
+echo "  Bzip2 lib:         ${libbz2_libdir}"
+if [ $enable_zstd -eq 1 ]; then
+	echo "  Zstandard:         enabled"
+else
+	echo "  Zstandard:         disabled"
+fi
+if [ "x${enable_wavpack}" != "x" ]; then
+	echo "  WavPack:           enabled (${wavpack_dir})"
+else
+	echo "  WavPack:           disabled"
+fi
+if [ $is_x86 -eq 1 ]; then
+	echo "  SSE flags:         ${sse_opt_flags}"
+fi
+if [ $is_arm -eq 1 ]; then
+	echo "  NEON flags:        ${neon_opt_flag}"
+fi
+echo "  Memory allocator:  $([ $allocator -eq 1 ] && echo 'internal' || echo 'system')"
+echo "================================="
+echo ""
+echo "Build with: make"
+echo ""

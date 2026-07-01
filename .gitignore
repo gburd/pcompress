@@ -25,3 +25,28 @@ stamp-h1
 .libs
 buildtmp
 *.dSYM
+
+# Nix
+result
+result-*
+.direnv
+
+# Backup files
+*.backup
+
+# Build logs and scratch artifacts
+*.log
+*.out
+*.tmp
+build*.log
+build.out
+complete-build.log
+final-build.log
+config-run.log
+warnings_report.txt
+
+# Editor / environment dotfiles accidentally captured from $HOME
+.idea
+.vscode
+.ripgreprc
+.mcp.json
