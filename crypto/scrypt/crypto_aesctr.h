@@ -55,6 +55,7 @@
 
 #include <stdint.h>
 
+#include "ossl_compat.h"
 #include <openssl/aes.h>
 
 typedef int (*setkey_func_ptr)(const unsigned char *userKey, const int bits, AES_KEY *key);

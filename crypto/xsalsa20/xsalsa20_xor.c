@@ -32,6 +32,14 @@ Public domain.
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "ossl_compat.h"
+
+/* Suppress OpenSSL 3.x deprecation warnings for PKCS5_PBKDF2_HMAC */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <openssl/rand.h>
 #include <openssl/evp.h>
 #include <assert.h>
@@ -238,3 +246,8 @@ salsa20_cleanup(salsa20_ctx_t *ctx)
 	memset(ctx->nonce, 0, XSALSA20_CRYPTO_NONCEBYTES);
 	free(ctx);
 }
+
+/* Restore warnings after OpenSSL 3.x deprecated API usage */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic pop
+#endif

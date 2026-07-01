@@ -54,6 +54,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ossl_compat.h"
+
+/* Suppress OpenSSL 3.x deprecation warnings for low-level AES API */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <openssl/aes.h>
 #ifdef __USE_SSE_INTRIN__
 #include <emmintrin.h>
@@ -179,3 +187,8 @@ crypto_aesctr_free(struct crypto_aesctr * stream)
 	/* Free the stream. */
 	free(stream);
 }
+
+/* Restore warnings after OpenSSL 3.x deprecated API usage */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic pop
+#endif

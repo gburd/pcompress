@@ -60,6 +60,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "ossl_compat.h"
+
+/* Suppress OpenSSL 3.x deprecation warnings for low-level AES API */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <openssl/rand.h>
 #include <openssl/evp.h>
 #include <crypto_scrypt.h>
@@ -235,3 +243,8 @@ aes_cleanup(aes_ctx_t *ctx)
 	ctx->nonce = 0;
 	free(ctx);
 }
+
+/* Restore warnings after OpenSSL 3.x deprecated API usage */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic pop
+#endif

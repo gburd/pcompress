@@ -223,12 +223,12 @@ genShortMsgSponge(unsigned int rate, unsigned int capacity, int outputLength, co
     }
     if ( FindMarker(fp_in, "# Principal Submitter:") ) {
         rv = fscanf(fp_in, "%[^\n]\n", line);
-        fclose(fp_in);
-        fclose(fp_out);
         fprintf(fp_out, "# Principal Submitter:%s\n", line);
     }
     else {
         printf("genShortMsg: Couldn't read Principal Submitter\n");
+        fclose(fp_in);
+        fclose(fp_out);
         return KAT_HEADER_ERROR;
     }
     

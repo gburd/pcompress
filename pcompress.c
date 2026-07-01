@@ -51,6 +51,7 @@
 #include <transpose.h>
 #include <delta2/delta2.h>
 #include <crypto/crypto_utils.h>
+#include <crypto/ossl_compat.h>
 #include <crypto_xsalsa20.h>
 #include <ctype.h>
 #include <errno.h>
@@ -1362,11 +1363,17 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 					UNCOMP_BAIL;
 				}
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
 				snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
 				    "%s" PATHSEP_STR "%s" PATHSEP_STR ".data", cwd, to_filename);
+#pragma GCC diagnostic pop
 			} else {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
 				snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
 					 "%s" PATHSEP_STR ".data", to_filename);
+#pragma GCC diagnostic pop
 			}
 			if ((pctx->archive_temp_fd = open(pctx->archive_temp_file,
 			    O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) == -1) {
@@ -2987,10 +2994,11 @@ static int
 init_algo(pc_ctx_t *pctx, const char *algo, int bail)
 {
 	int rv = 1;
-	char algorithm[8];
+	char algorithm[9];
 
 	/* Copy given string into known length buffer to avoid memcmp() overruns. */
 	strncpy(algorithm, algo, 8);
+	algorithm[8] = '\0'; /* Ensure null termination */
 	pctx->_props_func = NULL;
 	if (memcmp(algorithm, "zlib", 4) == 0) {
 		pctx->_compress_func = zlib_compress;
@@ -3055,6 +3063,18 @@ init_algo(pc_ctx_t *pctx, const char *algo, int bail)
 		pctx->_props_func = lz4_props;
 		rv = 0;
 
+
+#ifdef ENABLE_PC_ZSTD
+	} else if (memcmp(algorithm, "zstd", 4) == 0) {
+		pctx->_compress_func = zstd_compress;
+		pctx->_decompress_func = zstd_decompress;
+		pctx->_init_func = zstd_init;
+		pctx->_deinit_func = zstd_deinit;
+		pctx->_stats_func = zstd_stats;
+		pctx->_props_func = zstd_props;
+		rv = 0;
+#endif
+
 	} else if (memcmp(algorithm, "none", 4) == 0) {
 		pctx->_compress_func = none_compress;
 		pctx->_decompress_func = none_decompress;
@@ -3109,6 +3129,14 @@ create_pc_context(void)
 {
 	pc_ctx_t *ctx = (pc_ctx_t *)malloc(sizeof (pc_ctx_t));
 
+	if (ossl_check_version() != 0) {
+		fprintf(stderr, "FATAL: Incompatible OpenSSL version detected.\n"
+		    "       Compiled with: %s\n"
+		    "       Runtime:       %s\n",
+		    ossl_compiled_version(), ossl_runtime_version());
+		free(ctx);
+		return (NULL);
+	}
 	slab_init();
 	init_pcompress();
 	init_archive_mod();

@@ -27,6 +27,7 @@
 #define	_AES_CRYPTO_H
 
 #include <utils.h>
+#include "ossl_compat.h"
 #include <openssl/aes.h>
 #ifdef	_USE_PBK
 #include <openssl/evp.h>

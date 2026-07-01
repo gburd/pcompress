@@ -24,6 +24,14 @@
 
 #include <sys/types.h>
 #include <stdlib.h>
+#include "ossl_compat.h"
+
+/* Suppress OpenSSL 3.x deprecation warnings for low-level SHA API */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <openssl/sha.h>
 #include <sha512.h>
 #include <stdio.h>
@@ -341,3 +349,8 @@ opt_SHA512_par(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 	opt_SHA512_Update(&ctx[0], &cksum[4], 2 * 64);
 	opt_SHA512_Final(&ctx[0], cksum_buf);
 }
+
+/* Restore warnings after OpenSSL 3.x deprecated API usage */
+#if defined(__GNUC__) && OSSL_HAVE_3X
+#pragma GCC diagnostic pop
+#endif
