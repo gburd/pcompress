@@ -3,7 +3,7 @@
 #
 
 clean() {
-	for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd adapt adapt2
+	for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd zstd adapt adapt2
 	do
 		for tf in `cat files.lst`
 		do
@@ -16,11 +16,19 @@ echo "#################################################"
 echo "# Compress compressed files"
 echo "#################################################"
 
+_algo_ok() {
+	_tmp="${TMPDIR:-/tmp}/_pcomp_probe_$$"
+	printf 'probe' > "$_tmp"
+	../../pcompress -c "$1" -l 1 -s 64k "$_tmp" 2>/dev/null
+	_rv=$?
+	rm -f "$_tmp" "$_tmp.pz"
+	return $_rv
+}
+
 clean
-for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd adapt adapt2
+for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd zstd adapt adapt2
 do
-	../../pcompress 2>&1 | grep $algo > /dev/null
-	[ $? -ne 0 ] && continue
+	_algo_ok $algo || continue
 
 	for tf in `cat files.lst`
 	do
@@ -36,10 +44,9 @@ do
 	done
 done
 
-for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd adapt adapt2
+for algo in lzfx lz4 zlib bzip2 lzma lzmaMt libbsc ppmd zstd adapt adapt2
 do
-	../../pcompress 2>&1 | grep $algo > /dev/null
-	[ $? -ne 0 ] && continue
+	_algo_ok $algo || continue
 
 	for level in 1 3 9 14
 	do

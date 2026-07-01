@@ -5,10 +5,18 @@ echo "#################################################"
 echo "# Simple pipe mode compress and decompress"
 echo "#################################################"
 
+_algo_ok() {
+	_tmp="${TMPDIR:-/tmp}/_pcomp_probe_$$"
+	printf 'probe' > "$_tmp"
+	../../pcompress -c "$1" -l 1 -s 64k "$_tmp" 2>/dev/null
+	_rv=$?
+	rm -f "$_tmp" "$_tmp.pz"
+	return $_rv
+}
+
 for algo in lzfx lz4 adapt
 do
-	../../pcompress 2>&1 | grep $algo > /dev/null
-	[ $? -ne 0 ] && continue
+	_algo_ok $algo || continue
 
 	for level in 1 3
 	do

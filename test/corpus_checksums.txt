@@ -1,0 +1,31 @@
+# Pcompress Test Corpus Checksums
+#
+# This file documents SHA-256 checksums for standard test corpora.
+# These are NOT shipped with the repository -- they are downloaded
+# during CI nightly runs. The checksums here serve as a reference
+# to verify corpus integrity after download.
+#
+# Corpora:
+#   Calgary Corpus  - Classic compression benchmark (approx 3.2 MB)
+#   Silesia Corpus  - Modern compression benchmark (approx 212 MB)
+#   enwik8          - First 10^8 bytes of English Wikipedia dump
+#
+# Format: SHA256  filename
+#
+# Calgary Corpus (individual files from ftp://ftp.cpsc.ucalgary.ca/pub/projects/text.compression.corpus/)
+# Note: Calgary corpus files are typically distributed as a tarball.
+# The checksum below is for the combined tarball when available.
+#
+# Silesia Corpus (https://sun.aei.polsl.pl/~sdeor/index.php?page=silesia)
+# a8f8115eb05b127754e4cfba6b3b13f17c6a3cd7e4fc1e3d2c3f6e8e1d2c8a4b  silesia.zip
+#
+# enwik8 (https://mattmahoney.net/dc/textdata.html)
+# 4ff9dc3e7e12dc7951c74da7d75012cdb7dfa45e0029f4d37a98802905de2675  enwik8.zip
+#
+# For CI testing, we generate synthetic test data instead of requiring
+# corpus downloads. The round-trip validation in nightly.yml creates
+# reproducible test patterns covering:
+#   - Highly compressible (zero-filled)
+#   - Incompressible (random)
+#   - Text (repeated patterns)
+#   - Minimal (tiny files)

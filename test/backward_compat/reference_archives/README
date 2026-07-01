@@ -1,0 +1,14 @@
+Pcompress Reference Archives
+=============================
+
+These archives were created by the current build of pcompress and serve as
+regression test inputs. Future builds must be able to decompress them and
+produce byte-identical output matching reference_input.sha256.
+
+Format version: 10  (UTILITY_VERSION 3.1)
+Created by: test/backward_compat/run_backward_compat.sh --create-reference
+
+Files:
+  reference_input.dat       - Original uncompressed data
+  reference_input.sha256    - SHA-256 checksum of reference_input.dat
+  ref_<algo>_L6_64k.pz     - Compressed with <algo>, level 6, chunk 64k
