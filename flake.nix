@@ -38,7 +38,7 @@
       in {
         packages.default = pkgs.stdenv.mkDerivation rec {
           pname = "pcompress";
-          version = "4.0.0-dev";
+          version = "4.0.0";
 
           # NOTE: This flake requires git submodules to be initialized
           # Run: git submodule update --init --recursive
@@ -50,6 +50,7 @@
             yasm
             which
             git
+            patchelf
             # For libarchive submodule build
             autoconf
             automake
@@ -152,20 +153,35 @@
           '';
 
           installPhase = ''
-            mkdir -p $out/bin $out/share/doc/pcompress $out/share/man/man1
+            runHook preInstall
 
-            # Install binary
-            install -Dm755 pcompress $out/bin/pcompress
+            # 'make install' installs the real ELF binary (buildtmp/pcompress),
+            # the shared library, and README to $PREFIX (set to $out via config).
+            make install
 
-            # Install documentation
-            install -Dm644 README.md $out/share/doc/pcompress/
-            install -Dm644 LICENSE $out/share/doc/pcompress/
-            install -Dm644 docs/*.md $out/share/doc/pcompress/ 2>/dev/null || true
+            # The binary links against libpcompress.so.1 with no rpath to the
+            # install location; add $out/lib to its rpath (preserving the
+            # existing entries for bzip2/zlib/openssl/etc.) so it resolves the
+            # library without needing LD_LIBRARY_PATH or the dev wrapper.
+            # 'make install' sets mode 0555, so make it writable for patchelf.
+            chmod u+w "$out/bin/pcompress"
+            patchelf --add-rpath "$out/lib" "$out/bin/pcompress"
+            chmod 0555 "$out/bin/pcompress"
+
+            # Additional documentation (license + docs/) beyond the README that
+            # 'make install' already places in share/doc/pcompress.
+            install -Dm644 COPYING $out/share/doc/pcompress/COPYING
+            install -Dm644 COPYING.LESSER $out/share/doc/pcompress/COPYING.LESSER
+            for f in docs/*.md; do
+              install -Dm644 "$f" "$out/share/doc/pcompress/$(basename "$f")"
+            done
 
             # Install man page if it exists
             if [ -f pcompress.1 ]; then
-              install -Dm644 pcompress.1 $out/share/man/man1/
+              install -Dm644 pcompress.1 $out/share/man/man1/pcompress.1
             fi
+
+            runHook postInstall
           '';
 
           meta = with pkgs.lib; {

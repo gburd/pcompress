@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(pcompress VERSION 3.1 LANGUAGES C CXX ASM)
+project(pcompress VERSION 4.0.0 LANGUAGES C CXX ASM)
 
 #
 # CMake build for Pcompress - alternative to config/Makefile workflow.
