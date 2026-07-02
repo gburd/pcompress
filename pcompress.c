@@ -3655,6 +3655,18 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	if (pctx->do_compress) {
 		struct stat sbuf;
 
+		/*
+		 * Global deduplication produces a stream that cannot be decoded
+		 * from a pipe, so reject an explicit request for it when the
+		 * compressed output goes to stdout (pipe_out) or the input is a
+		 * pipe (pipe_mode), rather than emitting an undecodable archive.
+		 */
+		if ((pctx->pipe_mode || pctx->pipe_out) && pctx->enable_rabin_global) {
+			log_msg(LOG_ERR, 0,
+			    "Global Deduplication is not supported with pipe mode.");
+			return (1);
+		}
+
 		if (pctx->filename && stat(pctx->filename, &sbuf) == -1) {
 			log_msg(LOG_ERR, 1, "Cannot stat: %s", pctx->filename);
 			return (1);
@@ -3707,7 +3719,17 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			if (pctx->level > 4) pctx->enable_delta2_encode = 1;
 			if (pctx->level > 9) pctx->lzp_preprocess = 1;
 			if (pctx->level > 3) {
-				if (pctx->chunksize >= RAB_MIN_CHUNK_SIZE_GLOBAL)
+				/*
+				 * Global deduplication cannot be decoded from a pipe,
+				 * so never auto-enable it when the compressed output
+				 * goes to stdout (pipe_out) or the input is a pipe
+				 * (pipe_mode); otherwise a plain
+				 * "pcompress -c <algo> -l<n> file -" or
+				 * "pcompress -p -c <algo> -l<n>" stream would be
+				 * undecodable via "pcompress -d -".
+				 */
+				if (!pctx->pipe_mode && !pctx->pipe_out &&
+				    pctx->chunksize >= RAB_MIN_CHUNK_SIZE_GLOBAL)
 					pctx->enable_rabin_global = 1;
 				if (pctx->chunksize >= RAB_MIN_CHUNK_SIZE) {
 					pctx->enable_rabin_scan = 1;
