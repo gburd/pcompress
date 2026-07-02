@@ -680,8 +680,15 @@ hmac_cleanup(mac_ctx_t *mctx)
 
 	} else if (cksum == CKSUM_SHA256 || cksum == CKSUM_SHA512 || cksum == CKSUM_CRC64) {
 		if (cksum_provider == PROVIDER_OPENSSL) {
+			/*
+			 * HMAC_CTX_free() releases the context allocated by
+			 * HMAC_CTX_new(); NULL the pointers so the trailing
+			 * free() below does not double-free them.
+			 */
 			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx_reinit));
+			mctx->mac_ctx = NULL;
+			mctx->mac_ctx_reinit = NULL;
 		} else {
 			memset(mctx->mac_ctx, 0, sizeof (HMAC_SHA512_Context));
 			memset(mctx->mac_ctx_reinit, 0, sizeof (HMAC_SHA512_Context));
