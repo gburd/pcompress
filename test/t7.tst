@@ -65,7 +65,9 @@ for algo in lzfx zlib
 do
 	for tf in `cat files.lst`
 	do
-		for feat in "-e SALSA20" "-e AES -L" "-D -e SALSA20" "-D -EE -L -e SALSA20 -S KECCAK256" "-G -e SALSA20" "-G -F -e AES"
+		# Global Deduplication (-G) cannot be decoded from a pipe, so it is
+		# omitted here where compression writes to stdout ('-').
+		for feat in "-e SALSA20" "-e AES -L" "-D -e SALSA20" "-D -EE -L -e SALSA20 -S KECCAK256"
 		do
 			for seg in 5m
 			do
@@ -87,7 +89,7 @@ do
 				fi
 
 				echo "sillypassword" > /tmp/pwf
-				cmd="cat ${tf}.pz | ../../pcompress -d -w /tmp/pwf - ${tf}.1"
+				cmd="cat ${tf}.pz | ../../pcompress -d -w /tmp/pwf - > ${tf}.1"
 				echo "Running $cmd"
 				eval $cmd
 				if [ $? -ne 0 ]

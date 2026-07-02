@@ -51,12 +51,12 @@ with the existing `.pz` file format.
   - Zero warnings from project-owned source code (including zero
     OpenSSL deprecation warnings on 3.x)
   - Platform-agnostic CPU feature detection abstraction (utils/cpu_features.h)
+  - ARM64/NEON optimized code paths for BLAKE2 and xxHash
+  - CI/CD pipeline with GitHub Actions
   - Comprehensive developer documentation (docs/)
   - Testing framework with unit, integration, fuzz, and benchmark suites
 
   In Progress:
-  - ARM64/NEON optimized code paths for BLAKE2 and xxHash
-  - CI/CD pipeline with GitHub Actions
   - Cross-platform validation (macOS, FreeBSD)
 
 See `docs/MIGRATION_v4.md` for upgrade details and `docs/ARCHITECTURE.md`

@@ -56,7 +56,10 @@ done
 
 for algo in lz4 zlib
 do
-	for dopts in "" "-G -D" "-G -F" "-D"
+	# Global Deduplication (-G) cannot be decoded from a pipe, so it is not
+	# valid when compressing to stdout ('-'). Only segmented dedup (-D) and
+	# no-dedup are exercised in pipe-output mode here.
+	for dopts in "" "-D"
 	do
 		for tf in `cat files.lst`
 		do
@@ -72,7 +75,7 @@ do
 					rm -f ${tf}.pz
 					continue
 				fi
-				cmd="cat ${tf}.pz | ../../pcompress -d - ${tf}.1"
+				cmd="cat ${tf}.pz | ../../pcompress -d - > ${tf}.1"
 				echo "Running $cmd"
 				eval $cmd
 				if [ $? -ne 0 ]
