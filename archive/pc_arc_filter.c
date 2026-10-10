@@ -197,7 +197,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 
 	if (fi->compressing) {
 		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
-		if (mapbuf == NULL) {
+		if (mapbuf == MAP_FAILED) {
 			log_msg(LOG_ERR, 1, "Mmap failed in packJPG filter.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -314,7 +314,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 
 	if (fi->compressing) {
 		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
-		if (mapbuf == NULL) {
+		if (mapbuf == MAP_FAILED) {
 			log_msg(LOG_ERR, 1, "Mmap failed in packPNM filter.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -427,7 +427,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 
 	if (fi->compressing) {
 		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
-		if (mapbuf == NULL) {
+		if (mapbuf == MAP_FAILED) {
 			log_msg(LOG_ERR, 1, "Mmap failed in WavPack filter.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -542,7 +542,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 
 	if (fi->compressing) {
 		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
-		if (mapbuf == NULL) {
+		if (mapbuf == MAP_FAILED) {
 			log_msg(LOG_ERR, 1, "Mmap failed in Dispack filter.");
 			return (FILTER_RETURN_ERROR);
 		}

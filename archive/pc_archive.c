@@ -541,7 +541,7 @@ do_mmap:
 				pctx->temp_mmap_len = TEMP_MMAP_SIZE ;
 			pctx->temp_mmap_buf = mmap(NULL, pctx->temp_mmap_len, PROT_READ,
 			    MAP_SHARED, pctx->archive_members_fd, pctx->temp_mmap_pos);
-			if (pctx->temp_mmap_buf == NULL) {
+			if (pctx->temp_mmap_buf == MAP_FAILED) {
 				log_msg(LOG_ERR, 1, "Error mmap-ing archive members file.");
 				return (-1);
 			}
@@ -977,8 +977,9 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 		pctx->temp_mmap_len = TEMP_MMAP_SIZE;
 		pctx->temp_mmap_buf = mmap(NULL, pctx->temp_mmap_len, PROT_READ,
 					MAP_SHARED, pctx->archive_members_fd, 0);
-		if (pctx->temp_mmap_buf == NULL) {
+		if (pctx->temp_mmap_buf == MAP_FAILED) {
 			log_msg(LOG_WARN, 1, "Unable to mmap pathlist file, switching to read().");
+			pctx->temp_mmap_buf = NULL;
 			pctx->temp_mmap_len = 0;
 		}
 	} else {
@@ -1160,7 +1161,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 			len = MMAP_SIZE;
 do_map:
 		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, offset);
-		if (mapbuf == NULL) {
+		if (mapbuf == MAP_FAILED) {
 			/* Mmap failed; this is bad. */
 			log_msg(LOG_ERR, 1, "Mmap failed for %s.", fpath);
 			rv = -1;
