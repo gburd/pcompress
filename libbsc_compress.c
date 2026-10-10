@@ -86,7 +86,8 @@ libbsc_stats(int show)
 int
 libbsc_buf_extra(uint64_t buflen)
 {
-	return (4096);
+	/* bsc_compress() may emit the input plus LIBBSC_HEADER_SIZE bytes. */
+	return (4096 + LIBBSC_HEADER_SIZE);
 }
 
 
@@ -100,7 +101,7 @@ libbsc_props(algo_props_t *data, int level, uint64_t chunksize) {
 	data->compress_mt_capable = 0;
 	data->decompress_mt_capable = 0;
 	data->single_chunk_mt_capable = 1;
-	data->buf_extra = 0;
+	data->buf_extra = libbsc_buf_extra(chunksize);
 	data->c_max_threads = 8;
 	data->d_max_threads = 8;
 	data->delta2_span = 150;
