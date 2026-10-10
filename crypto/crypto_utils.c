@@ -292,21 +292,17 @@ compute_checksum(uchar_t *cksum_buf, int cksum, uchar_t *buf, uint64_t bytes, in
 	return (0);
 }
 
+/*
+ * SHA256 here means SHA-512/256 and must produce identical digests on
+ * every host, so always use the built-in SHA-512 code (Intel SSE4/AVX on
+ * x86-64, portable C elsewhere). Was: OpenSSL's SHA-256 on non-x86 and
+ * big-endian hosts, which made files unreadable across architectures.
+ */
 static void
 init_sha512(void)
 {
-#ifdef	WORDS_BIGENDIAN
-	cksum_provider = PROVIDER_OPENSSL;
-#else
-#ifdef	__x86_64__
-	cksum_provider = PROVIDER_OPENSSL;
-	if (proc_info.proc_type == PROC_X64_INTEL || proc_info.proc_type == PROC_X64_AMD) {
-		if (opt_Init_SHA512(&proc_info) == 0) {
-			cksum_provider = PROVIDER_X64_OPT;
-		}
-	}
-#endif
-#endif
+	(void) opt_Init_SHA512(&proc_info);
+	cksum_provider = PROVIDER_X64_OPT;
 }
 
 static void

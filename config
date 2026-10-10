@@ -193,7 +193,7 @@ openssl_incdir=
 libbz2_libdir=
 libz_libdir=
 sha256asmobjs=
-sha256objs=
+sha256objs='\$\(SHA2_OBJS\)'
 keylen=
 yasm=yasm
 yasm_params_linux="-f x64 -f elf64 -X gnu -g dwarf2 -D LINUX"
@@ -751,7 +751,6 @@ then
 		# Continue without yasm - use C implementations
 		yasm="@echo Skipping"
 		sha256asmobjs=
-		sha256objs=
 		skeinblock='\$\(SKEIN_BLOCK_C\)'
 	fi
 

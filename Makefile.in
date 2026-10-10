@@ -405,8 +405,9 @@ $(SKEIN_BLOCK_OBJ): $(SKEIN_BLOCK_SRC)
 $(SKEINOBJS): $(SKEINSRCS) $(SKEINHDRS)
 	$(COMPILE) $(SKEIN_FLAGS) $(@:.o=.c) -o $@
 
+# The Intel SSE4/AVX SHA-512 assembly is only linked when yasm is available.
 $(SHA2_OBJS): $(SHA2_SRCS) $(SHA2_HDRS)
-	$(COMPILE) $(SHA2_FLAGS) $(@:.o=.c) -o $@
+	$(COMPILE) $(SHA2_FLAGS) `[ -n "@SHA2ASM_OBJS@" ] && echo -DHAVE_SHA512_ASM` $(@:.o=.c) -o $@
 
 $(SHA2ASM_OBJS): $(SHA2ASM_SRCS)
 	$(YASM)	-o $@ $(@:.o=.asm)
@@ -516,7 +517,7 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit
-UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_blake2 test_api
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_blake2 test_sha2 test_api
 # Tests link the objects directly: the shared library hides internal symbols.
 # LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 
