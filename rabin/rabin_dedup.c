@@ -70,6 +70,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <allocator.h>
 #include <utils.h>
 #include <pthread.h>
@@ -1617,12 +1618,31 @@ dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size)
 				 * it requires random access to the output file.
 				 */
 				if (pos1 >= offset) {
+					/* Must reference data already rebuilt in this segment. */
+					if (pos1 - offset + len > sz) {
+						log_msg(LOG_ERR, 0, "Invalid dedup reference.\n");
+						ctx->valid = 0;
+						break;
+					}
 					src2 = ctx->cbuf + (pos1 - offset);
 					memcpy(pos2, src2, len);
 				} else {
+					struct stat sb;
+
+					/*
+					 * Must reference data already written to the output.
+					 * Output can be short if an earlier chunk failed; an
+					 * mmap() beyond EOF would SIGBUS.
+					 */
+					if (pos1 + len > offset || fstat(ctx->out_fd, &sb) == -1 ||
+					    pos1 + len > (uint64_t)sb.st_size) {
+						log_msg(LOG_ERR, 0, "Invalid dedup reference.\n");
+						ctx->valid = 0;
+						break;
+					}
 					adj = pos1 % ctx->pagesize;
 					src2 = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, ctx->out_fd, pos1 - adj);
-					if (src2 == NULL) {
+					if (src2 == MAP_FAILED) {
 						log_msg(LOG_ERR, 1, "MMAP failed ");
 						ctx->valid = 0;
 						break;

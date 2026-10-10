@@ -521,7 +521,7 @@ perform_decompress(void *dat)
 	struct cmp_data *tdat = (struct cmp_data *)dat;
 	uint64_t _chunksize;
 	uint64_t dedupe_index_sz, dedupe_data_sz, dedupe_index_sz_cmp, dedupe_data_sz_cmp;
-	int rv = 0;
+	int rv = 0, defer_index_wait;
 	unsigned int blknum;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	uchar_t HDR;
@@ -530,6 +530,7 @@ perform_decompress(void *dat)
 
 	pctx = tdat->pctx;
 redo:
+	defer_index_wait = 0;
 	Sem_Wait(&tdat->start_sem);
 	if (pctx->main_cancel)
 		return (NULL);
@@ -769,9 +770,8 @@ redo:
 		 * decompression to achieve better concurrency. Decompression does not need
 		 * to wait for the previous thread's dedupe recovery to complete.
 		 */
-		if (pctx->enable_rabin_global) {
-			Sem_Wait(tdat->rctx->index_sem);
-		}
+		/* Defer the global-index token wait until after checksum verification. */
+		defer_index_wait = pctx->enable_rabin_global;
 	}
 
 	if (!pctx->encrypt_type) {
@@ -789,6 +789,8 @@ redo:
 			pctx->main_cancel = 1;
 		}
 	}
+	if (defer_index_wait && !pctx->t_errored)
+		Sem_Wait(tdat->rctx->index_sem);
 
 cont:
 	Sem_Post(&tdat->cmp_done_sem);
@@ -956,6 +958,8 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		if (pctx->pipe_mode && pctx->meta_stream) {
 			log_msg(LOG_ERR, 0,
 			    "Cannot extract archive with metadata stream in pipe mode.");
+			err = 1;
+			goto uncomp_done;
 		}
 
 		/*
@@ -1041,7 +1045,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				log_msg(LOG_WARN, 0, "Using %s for output file name.", to_filename);
 			}
 		}
-		if (!pctx->pipe_mode) {
+		if (to_filename != NULL) {
 			origf = to_filename;
 			if ((to_filename = realpath(origf, NULL)) != NULL) {
 				free((void *)(to_filename));
@@ -1070,9 +1074,14 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 
 		if (flags & FLAG_DEDUP_FIXED) {
 			if (version > 7) {
-				if (pctx->pipe_mode) {
-					log_msg(LOG_ERR, 0, "Global Deduplication is not "
-					    "supported with pipe mode.");
+				/*
+				 * Global dedupe restore re-reads already written
+				 * output, so it needs a real output file (archives
+				 * use a temp file).
+				 */
+				if (to_filename == NULL && !(flags & FLAG_ARCHIVE)) {
+					log_msg(LOG_ERR, 0, "Global Deduplication requires "
+					    "an output file; cannot decompress to stdout.");
 					err = 1;
 					goto uncomp_done;
 				}
@@ -1420,7 +1429,8 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			UNCOMP_BAIL;
 		}
 	} else {
-		if (!pctx->pipe_mode) {
+		/* Write to the named target if given, else stdout (pipe mode). */
+		if (to_filename != NULL) {
 			if ((uncompfd = open(to_filename, O_WRONLY|O_CREAT|O_TRUNC,
 			    S_IRUSR|S_IWUSR)) == -1) {
 				log_msg(LOG_ERR, 1, "Cannot open: %s", to_filename);
@@ -1599,6 +1609,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		bail = 1;
 	while (!bail) {
 		int64_t rb;
+		int is_meta;
 
 		if (pctx->main_cancel) break;
 		for (p = 0; p < nprocs; p++) {
@@ -1634,18 +1645,16 @@ redo:
 			}
 
 			/*
-			 * Zero compressed len means end of file.
+			 * Zero compressed len means end of file. A length equal to
+			 * METADATA_INDICATOR denotes a metadata chunk only when the
+			 * archive has metadata streams; otherwise it is a 1-byte chunk.
 			 */
+			is_meta = (pctx->meta_stream && tdat->len_cmp == METADATA_INDICATOR);
 			if (tdat->len_cmp == 0) {
 				bail = 1;
 				break;
 
-			} else if (tdat->len_cmp == METADATA_INDICATOR) {
-				if (!pctx->meta_stream) {
-					log_msg(LOG_ERR, 0, "Invalid chunk %d length: %" PRIu64 "\n",
-						pctx->chunk_num, tdat->len_cmp);
-					UNCOMP_BAIL;
-				}
+			} else if (is_meta) {
 				/*
 				 * If compressed length indicates a metadata chunk. Read it's length
 				 * and skip the chunk.
@@ -1672,7 +1681,7 @@ redo:
 			 * decompression allows to avoid allocating per-thread chunks which will
 			 * never be used. This can happen if chunk count < thread count.
 			 */
-			if (!tdat->compressed_chunk && tdat->len_cmp != METADATA_INDICATOR) {
+			if (!tdat->compressed_chunk && !is_meta) {
 				tdat->compressed_chunk = (uchar_t *)slab_alloc(NULL,
 				    compressed_chunksize);
 				tdat->uncompressed_chunk = (uchar_t *)slab_alloc(NULL,
@@ -1684,7 +1693,7 @@ redo:
 				tdat->cmp_seg = tdat->uncompressed_chunk;
 			}
 
-			if (tdat->len_cmp != METADATA_INDICATOR) {
+			if (!is_meta) {
 				if (tdat->len_cmp > pctx->largest_chunk)
 					pctx->largest_chunk = tdat->len_cmp;
 				if (tdat->len_cmp < pctx->smallest_chunk)
@@ -1723,7 +1732,7 @@ redo:
 			/*
 			 * If we just skipped a metadata chunk, redo the read to go to the next one.
 			 */
-			if (tdat->len_cmp == METADATA_INDICATOR) {
+			if (is_meta) {
 				goto redo;
 			}
 			Sem_Post(&tdat->start_sem);
@@ -1750,6 +1759,9 @@ uncomp_done:
 			tdat->len_cmp = 0;
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
+			/* Wake workers parked on the global dedupe index token. */
+			if (pctx->enable_rabin_global)
+				Sem_Post(&tdat->index_sem);
 			pthread_join(tdat->thr, NULL);
 		}
 		if (thread == 2)
@@ -2135,6 +2147,7 @@ repeat:
 		if (unlikely(wbytes != tdat->len_cmp)) {
 			log_msg(LOG_ERR, 1, "Chunk Write (expected: %" PRIu64
 			    ", written: %" PRId64 ") : ", tdat->len_cmp, wbytes);
+			pctx->t_errored = 1;
 do_cancel:
 			pctx->main_cancel = 1;
 			tdat->cancel = 1;
@@ -2888,6 +2901,9 @@ comp_done:
 			tdat->len_cmp = 0;
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
+			/* Wake workers parked on the global dedupe index token. */
+			if (pctx->enable_rabin_global)
+				Sem_Post(&tdat->index_sem);
 			pthread_join(tdat->thr, NULL);
 			if (pctx->encrypt_type)
 				hmac_cleanup(&tdat->chunk_hmac);
