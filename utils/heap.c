@@ -61,15 +61,19 @@ heap_insert(MinHeap *heap, __TYPE data)
 }
 
 void
-heap_nsmallest(MinHeap *heap, __TYPE *data, __TYPE *heapbuf, __TYPE heapsize, __TYPE datasize)
+heap_nsmallest(MinHeap *heap, const void *data, __TYPE *heapbuf, __TYPE heapsize, __TYPE datasize)
 {
-	__TYPE i;
+	const unsigned char *d = (const unsigned char *)data;
+	__TYPE i, v;
 
 	heap->size = 1;
 	heap->totsize = heapsize;
 	heap->tree = heapbuf;
-	heap->tree[0] = data[0];
+	memcpy(&v, d, sizeof (v));	/* unaligned-safe */
+	heap->tree[0] = v;
 
-	for (i = 1; i < datasize; i++)
-		heap_insert(heap, data[i]);
+	for (i = 1; i < datasize; i++) {
+		memcpy(&v, d + i * sizeof (v), sizeof (v));
+		heap_insert(heap, v);
+	}
 }

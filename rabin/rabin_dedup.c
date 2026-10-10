@@ -78,7 +78,7 @@
 #include "../utils/xxhash.h"
 
 #define	QSORT_LT(a, b)	((*a)<(*b))
-#define	QSORT_TYPE uint64_t
+#define	QSORT_TYPE pc_u64u_t	/* sorted arrays are at arbitrary byte offsets */
 #include <qsort.h>
 
 #include "rabin_dedup.h"
@@ -428,7 +428,7 @@ destroy_dedupe_context(dedupe_context_t *ctx)
  * avoid overheads of qsort() with callback function.
  */
 static void
-isort_uint64(uint64_t *ary, uint32_t nitems)
+isort_uint64(pc_u64u_t *ary, uint32_t nitems)
 {
 	uint32_t i, j, k;
 	uint64_t tmp;
@@ -453,7 +453,7 @@ isort_uint64(uint64_t *ary, uint32_t nitems)
  * inline quicksort routine that does not use a callback function.
  */
 static void
-do_qsort(uint64_t *arr, uint32_t len)
+do_qsort(pc_u64u_t *arr, uint32_t len)
 {
 	QSORT(arr, len);
 }
@@ -461,8 +461,9 @@ do_qsort(uint64_t *arr, uint32_t len)
 static inline int
 ckcmp(uchar_t *a, uchar_t *b, int sz)
 {
-	size_t *v1 = (size_t *)a;
-	size_t *v2 = (size_t *)b;
+	/* Checksums sit at arbitrary byte offsets. */
+	const pc_u64u_t *v1 = (const pc_u64u_t *)a;
+	const pc_u64u_t *v2 = (const pc_u64u_t *)b;
 	int len;
 
 	len = 0;
@@ -472,7 +473,7 @@ ckcmp(uchar_t *a, uchar_t *b, int sz)
 		}
 		++v1;
 		++v2;
-		len += sizeof (size_t);
+		len += sizeof (*v1);
 	} while (len < sz);
 
 	return (0);
@@ -708,7 +709,7 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 				pc[2] = DELTA_EXTRA_PCT(length);
 				pc[3] = DELTA_EXTRA2_PCT(length);
 
-				heap_nsmallest(&heap, (int64_t *)(buf1+last_offset),
+				heap_nsmallest(&heap, buf1+last_offset,
 					       (int64_t *)ctx_heap, pc[ctx->delta_flag], length);
 				ctx->blocks[blknum]->similarity_hash =
 					XXH32((const uchar_t *)ctx_heap, heap_size(&heap)*8, 0);
@@ -750,7 +751,7 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 				pc[2] = DELTA_EXTRA_PCT(length);
 				pc[3] = DELTA_EXTRA2_PCT(length);
 
-				heap_nsmallest(&heap, (int64_t *)(buf1+last_offset),
+				heap_nsmallest(&heap, buf1+last_offset,
 					       (int64_t *)ctx_heap, pc[ctx->delta_flag], length);
 
 				cur_sketch =
@@ -777,7 +778,7 @@ process_blocks:
 	if (blknum > 2) {
 		uint64_t pos, matchlen, pos1 = 0;
 		int valid = 1;
-		uint32_t *dedupe_index;
+		pc_u32u_t *dedupe_index;	/* buffer offsets are unaligned */
 		uint64_t dedupe_index_sz = 0;
 		rabin_blockentry_t *be;
 		DEBUG_STAT_EN(uint32_t delta_calls, delta_fails, merge_count, hash_collisions);
@@ -979,7 +980,7 @@ process_blocks:
 					 * Assume the concatenated chunk hash buffer as an array of 64-bit
 					 * integers and sort them in ascending order.
 					 */
-					do_qsort((uint64_t *)seg_heap, length/8);
+					do_qsort((pc_u64u_t *)seg_heap, length/8);
 
 					/*
 					 * Compute the K min values sketch where K == 20 in this case.
@@ -1049,7 +1050,7 @@ process_blocks:
 					 * file. Sort the offsets to avoid subsequent random access.
 					 */
 					tgt = src + 1;
-					isort_uint64((uint64_t *)tgt, sub_i);
+					isort_uint64((pc_u64u_t *)tgt, sub_i);
 
 					/*
 					 * Now eliminate duplicate offsets and UINT64_MAX offset entries which
@@ -1428,7 +1429,7 @@ next_ent:
 			return (0);
 		}
 
-		dedupe_index = (uint32_t *)(ctx->cbuf + RABIN_HDR_SIZE);
+		dedupe_index = (pc_u32u_t *)(ctx->cbuf + RABIN_HDR_SIZE);
 		pos = 0;
 		DEBUG_STAT_EN(merge_count = 0);
 
@@ -1503,12 +1504,12 @@ next_ent:
 dedupe_done:
 		if (valid) {
 			uchar_t *cbuf = ctx->cbuf;
-			uint64_t *entries;
+			pc_u64u_t *entries;	/* at offset 4: unaligned */
 			DEBUG_STAT_EN(uint64_t sz);
 			DEBUG_STAT_EN(sz = *size);
 			U32_P(cbuf) = htonl(blknum);
 			cbuf += sizeof (uint32_t);
-			entries = (uint64_t *)cbuf;
+			entries = (pc_u64u_t *)cbuf;
 			entries[0] = htonll(*size);
 			entries[1] = 0;
 			entries[2] = htonll(pos1 - dedupe_index_sz - RABIN_HDR_SIZE);
@@ -1532,10 +1533,10 @@ dedupe_done:
 void
 update_dedupe_hdr(uchar_t *buf, uint64_t dedupe_index_sz_cmp, uint64_t dedupe_data_sz_cmp)
 {
-	uint64_t *entries;
+	pc_u64u_t *entries;	/* at offset 4: unaligned */
 
 	buf += sizeof (uint32_t);
-	entries = (uint64_t *)buf;
+	entries = (pc_u64u_t *)buf;
 	entries[1] = htonll(dedupe_index_sz_cmp);
 	entries[3] = htonll(dedupe_data_sz_cmp);
 }
@@ -1545,12 +1546,12 @@ parse_dedupe_hdr(uchar_t *buf, uint32_t *blknum, uint64_t *dedupe_index_sz,
 		uint64_t *dedupe_data_sz, uint64_t *dedupe_index_sz_cmp,
 		uint64_t *dedupe_data_sz_cmp, uint64_t *deduped_size)
 {
-	uint64_t *entries;
+	pc_u64u_t *entries;	/* at offset 4: unaligned */
 
 	*blknum = ntohl(U32_P(buf));
 	buf += sizeof (uint32_t);
 
-	entries = (uint64_t *)buf;
+	entries = (pc_u64u_t *)buf;
 	*dedupe_data_sz = ntohll(entries[0]);
 	*dedupe_index_sz = (uint64_t)(*blknum & CLEAR_GLOBAL_FLAG) * RABIN_ENTRY_SIZE;
 	*dedupe_index_sz_cmp =  ntohll(entries[1]);
@@ -1562,13 +1563,13 @@ void
 dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size)
 {
 	uint32_t blknum, blk, oblk, len;
-	uint32_t *dedupe_index;
+	pc_u32u_t *dedupe_index;	/* buffer offsets are unaligned */
 	uint64_t data_sz, sz, indx_cmp, data_sz_cmp, deduped_sz;
 	uint64_t dedupe_index_sz, pos1;
 	uchar_t *pos2;
 
 	parse_dedupe_hdr(buf, &blknum, &dedupe_index_sz, &data_sz, &indx_cmp, &data_sz_cmp, &deduped_sz);
-	dedupe_index = (uint32_t *)(buf + RABIN_HDR_SIZE);
+	dedupe_index = (pc_u32u_t *)(buf + RABIN_HDR_SIZE);
 	pos1 = dedupe_index_sz + RABIN_HDR_SIZE;
 	pos2 = ctx->cbuf;
 	sz = 0;

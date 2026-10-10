@@ -2070,7 +2070,7 @@ plain_index:
 	 */
 	if (tdat->rbytes < tdat->chunksize) {
 		type |= CHSIZE_MASK;
-		*((typeof (tdat->rbytes) *)(tdat->cmp_seg + tdat->len_cmp)) = htonll(tdat->rbytes);
+		I64_P(tdat->cmp_seg + tdat->len_cmp) = htonll(tdat->rbytes);
 		tdat->len_cmp += ORIGINAL_CHUNKSZ;
 		len_cmp += ORIGINAL_CHUNKSZ;
 		U64_P(tdat->cmp_seg) = htonll(len_cmp);

@@ -35,6 +35,7 @@ typedef struct Heap_ {
 
 #define	heap_size(heap) ((heap)->size)
 
-void heap_nsmallest(MinHeap *heap, __TYPE *data, __TYPE *heapbuf, __TYPE heapsize, __TYPE datasize);
+/* data may be at any byte offset; heapbuf must be 8-byte aligned. */
+void heap_nsmallest(MinHeap *heap, const void *data, __TYPE *heapbuf, __TYPE heapsize, __TYPE datasize);
 
 #endif

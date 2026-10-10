@@ -435,8 +435,8 @@ mycmp(uchar_t *a, uchar_t *b, int sz)
 
 	len = 0;
 	do {
-		val1 = *((size_t *)v1);
-		val2 = *((size_t *)v2);
+		memcpy(&val1, v1, sizeof (val1));
+		memcpy(&val2, v2, sizeof (val2));
 		if (val1 != val2) {
 			return (1);
 		}

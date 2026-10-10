@@ -126,9 +126,9 @@ int bsc_lzp_encode_block(const unsigned char * input, const unsigned char * inpu
             if (value > 0)
             {
                 const unsigned char * reference = inputStart + value;
-                if ((*(unsigned int *)(input + minLen - 4) == *(unsigned int *)(reference + minLen - 4)) && (*(unsigned int *)(input) == *(unsigned int *)(reference)))
+                if ((U32_P(input + minLen - 4) == U32_P(reference + minLen - 4)) && (U32_P(input) == U32_P(reference)))
                 {
-                    if ((heuristic > input) && (*(unsigned int *)heuristic != *(unsigned int *)(reference + (heuristic - input))))
+                    if ((heuristic > input) && (U32_P(heuristic) != U32_P(reference + (heuristic - input))))
                     {
                         goto LZP_MATCH_NOT_FOUND;
                     }
@@ -136,7 +136,7 @@ int bsc_lzp_encode_block(const unsigned char * input, const unsigned char * inpu
                     int len = 4;
                     for (; input + len < inputMinLenEnd; len += 4)
                     {
-                        if (*(unsigned int *)(input + len) != *(unsigned int *)(reference + len)) break;
+                        if (U32_P(input + len) != U32_P(reference + len)) break;
                     }
                     if (len < minLen)
                     {
@@ -240,7 +240,7 @@ int bsc_lzp_decode_block(const unsigned char * input, const unsigned char * inpu
                         reference -= offset[output - reference];
                     }
 
-                    while (output < outputEnd) { *(unsigned int *)output = *(unsigned int*)reference; output += 4; reference += 4; }
+                    while (output < outputEnd) { U32_P(output) = U32_P(reference); output += 4; reference += 4; }
 
                     output = outputEnd; context = output[-1] | (output[-2] << 8) | (output[-3] << 16) | (output[-4] << 24);
                 }
@@ -300,8 +300,8 @@ int64_t bsc_lzp_compress_serial(const unsigned char * input, unsigned char * out
             result = inputSize; memcpy(output + outputPtr, input + inputStart, inputSize);
         }
 
-        *(int *)(output + 1 + 8 * blockId + 0) = inputSize;
-        *(int *)(output + 1 + 8 * blockId + 4) = result;
+        I32_P(output + 1 + 8 * blockId + 0) = inputSize;
+        I32_P(output + 1 + 8 * blockId + 4) = result;
 
         outputPtr += result;
     }
@@ -346,8 +346,8 @@ int bsc_lzp_compress_parallel(const unsigned char * input, unsigned char * outpu
                     compressionResult[blockId] = bsc_lzp_encode_block(input + blockStart, input + blockStart + blockSize, buffer + blockStart, buffer + blockStart + blockSize, hashSize, minLen);
                     if (compressionResult[blockId] < LZP_NO_ERROR) compressionResult[blockId] = blockSize;
 
-                    *(int *)(output + 1 + 8 * blockId + 0) = blockSize;
-                    *(int *)(output + 1 + 8 * blockId + 4) = compressionResult[blockId];
+                    I32_P(output + 1 + 8 * blockId + 0) = blockSize;
+                    I32_P(output + 1 + 8 * blockId + 4) = compressionResult[blockId];
                 }
 
                 #pragma omp single
@@ -427,13 +427,13 @@ int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int6
         #pragma omp parallel for schedule(dynamic)
         for (int blockId = 0; blockId < nBlocks; ++blockId)
         {
-            int inputPtr = 0;  for (int p = 0; p < blockId; ++p) inputPtr  += *(int *)(input + 1 + 8 * p + 4);
-            int outputPtr = 0; for (int p = 0; p < blockId; ++p) outputPtr += *(int *)(input + 1 + 8 * p + 0);
+            int inputPtr = 0;  for (int p = 0; p < blockId; ++p) inputPtr  += I32_P(input + 1 + 8 * p + 4);
+            int outputPtr = 0; for (int p = 0; p < blockId; ++p) outputPtr += I32_P(input + 1 + 8 * p + 0);
 
             inputPtr += 1 + 8 * nBlocks;
 
-            int inputSize  = *(int *)(input + 1 + 8 * blockId + 4);
-            int outputSize = *(int *)(input + 1 + 8 * blockId + 0);
+            int inputSize  = I32_P(input + 1 + 8 * blockId + 4);
+            int outputSize = I32_P(input + 1 + 8 * blockId + 0);
 
             if (inputSize != outputSize)
             {
@@ -454,13 +454,13 @@ int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int6
 
         for (blockId = 0; blockId < nBlocks; ++blockId)
         {
-            int64_t inputPtr = 0;  for (p = 0; p < blockId; ++p) inputPtr  += *(int *)(input + 1 + 8 * p + 4);
-            int64_t outputPtr = 0; for (p = 0; p < blockId; ++p) outputPtr += *(int *)(input + 1 + 8 * p + 0);
+            int64_t inputPtr = 0;  for (p = 0; p < blockId; ++p) inputPtr  += I32_P(input + 1 + 8 * p + 4);
+            int64_t outputPtr = 0; for (p = 0; p < blockId; ++p) outputPtr += I32_P(input + 1 + 8 * p + 0);
 
             inputPtr += 1 + 8 * nBlocks;
 
-            int inputSize  = *(int *)(input + 1 + 8 * blockId + 4);
-            int outputSize = *(int *)(input + 1 + 8 * blockId + 0);
+            int inputSize  = I32_P(input + 1 + 8 * blockId + 4);
+            int outputSize = I32_P(input + 1 + 8 * blockId + 0);
 
             if (inputSize != outputSize)
             {

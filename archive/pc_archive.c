@@ -806,7 +806,7 @@ add_pathname(const char *fpath, const struct stat *sb,
 	}
 cont:
 	buf = a_state.pbuf + a_state.bufpos;
-	*((short *)buf) = len;
+	I16_P(buf) = len;
 	buf += 2;
 	memcpy(buf, fpath, len);
 	a_state.bufpos += (len + 2);

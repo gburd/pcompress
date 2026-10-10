@@ -75,7 +75,7 @@ zero_rle_encode(const void *ibuf, const unsigned int ilen,
 					state = 1;
 					// Lookahead if there are at least 4 consecutive zeroes
 					if (ilen > 3) {
-						pos4 = *((unsigned int *)(ib+pos1));
+						pos4 = U32_P(ib+pos1);
 						if (!pos4) break;
 					}
 				}
