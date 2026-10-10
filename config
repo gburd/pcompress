@@ -204,6 +204,8 @@ sse3_opt_flag="-mssse3"
 sse2_opt_flag="-msse2"
 avx512_opt_flag="-mavx512f -mavx512vl"
 neon_opt_flag=""
+sse_intrin_flag="-D__USE_SSE_INTRIN__"
+aes_asm_srcs="crypto/aes/vpaes-x86_64.s crypto/aes/aesni-x86_64.s"
 crypto_compat_objs='\$\(CRYPTO_COMPAT_OBJS\)'
 crypto_compat_flags="-D__HASH_COMPATIBILITY_"
 salsa20_stream_c=
@@ -507,6 +509,12 @@ aarch64|arm64|armv*)
 	sse2_opt_flag=""
 	# Enable NEON compiler flags for ARM64
 	neon_opt_flag="-march=armv8-a+crypto"
+	sse_intrin_flag=""
+	aes_asm_srcs=""
+	salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
+	salsa20_stream_asm=
+	salsa20_debug='\$\(XSALSA20_DEBUG\)'
+	sha256objs='\$\(SHA2_OBJS\)'
 	;;
 riscv64)
 	is_riscv=1
@@ -519,6 +527,12 @@ riscv64)
 	sse4_opt_flag=""
 	sse3_opt_flag=""
 	sse2_opt_flag=""
+	sse_intrin_flag=""
+	aes_asm_srcs=""
+	salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
+	salsa20_stream_asm=
+	salsa20_debug='\$\(XSALSA20_DEBUG\)'
+	sha256objs='\$\(SHA2_OBJS\)'
 	;;
 esac
 
@@ -1162,15 +1176,13 @@ echo "*************** Running configure in libarchive ****************"
  fi
  # Apply pcompress patches if not already applied
  if [ -f ../patches/pcompress_libarchive.patch ]; then
-	if ! grep -q 'cb_is_metadata' libarchive/archive_private.h 2>/dev/null; then
+	# Already fully applied?  (A reverse dry-run succeeds only then.)
+	if ! patch -p1 -R -s -f --dry-run < ../patches/pcompress_libarchive.patch >/dev/null 2>&1; then
 		echo "  Applying pcompress custom patches to libarchive ..."
-		if command -v git >/dev/null 2>&1 && [ -d .git ]; then
-			git apply ../patches/pcompress_libarchive.patch
-		else
-			patch -p1 < ../patches/pcompress_libarchive.patch
-		fi
-		if [ $? -ne 0 ]; then
-			echo "WARNING: Some patches may not have applied cleanly."
+		if ! patch -p1 -N -s < ../patches/pcompress_libarchive.patch; then
+			echo "ERROR: pcompress libarchive patch failed to apply."
+			echo "       Reset the submodule: git -C $libarchive_dir checkout ."
+			exit 1
 		fi
 	fi
  fi
@@ -1299,6 +1311,8 @@ s#@SSE4_OPT_FLAG@#${sse4_opt_flag}#g
 s#@SSE3_OPT_FLAG@#${sse3_opt_flag}#g
 s#@SSE2_OPT_FLAG@#${sse2_opt_flag}#g
 s#@NEON_OPT_FLAG@#${neon_opt_flag}#g
+s#@SSE_INTRIN_FLAG@#${sse_intrin_flag}#g
+s#@AES_ASM_SRCS@#${aes_asm_srcs}#g
 " Makefile.in > Makefile
 
 if [ "x${enable_wavpack}" = "x" ]

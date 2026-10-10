@@ -137,6 +137,175 @@ index 050fc63c..e9587c20 100644
  };
  
  /* Check magic value and state; return(ARCHIVE_FATAL) if it isn't valid. */
+diff --git a/libarchive/archive_read.c b/libarchive/archive_read.c
+index 822c534b..a4971c57 100644
+--- a/libarchive/archive_read.c
++++ b/libarchive/archive_read.c
+@@ -467,6 +467,8 @@ archive_read_open1(struct archive *_a)
+ 	    "archive_read_open");
+ 	archive_clear_error(&a->archive);
+ 
++	if (_a->is_metadata_streaming)
++		_a->cb_is_metadata = 1;
+ 	if (a->client.reader == NULL) {
+ 		archive_set_error(&a->archive, EINVAL,
+ 		    "No reader function provided to archive_read_open");
+@@ -496,6 +498,10 @@ archive_read_open1(struct archive *_a)
+ 	filter->code = ARCHIVE_FILTER_NONE;
+ 	filter->can_skip = 1;
+ 	filter->can_seek = 1;
++	if (__archive_read_filter_add_shadow(a, filter) != ARCHIVE_OK) {
++		free(filter);
++		return (ARCHIVE_FATAL);
++	}
+ 
+ 	a->client.dataset[0].begin_position = 0;
+ 	if (!a->filter || !a->bypass_filter_bidding)
+@@ -532,9 +538,31 @@ archive_read_open1(struct archive *_a)
+ 
+ 	/* Ensure libarchive starts from the first node in a multivolume set */
+ 	client_switch_proxy(a->filter, 0);
++	if (_a->is_metadata_streaming)
++		_a->cb_is_metadata = 0;
+ 	return (e);
+ }
+ 
++/*
++ * Pcompress: when metadata streaming is on, give the filter a shadow copy
++ * (own buffers/position) through which all metadata reads are routed.
++ */
++int
++__archive_read_filter_add_shadow(struct archive_read *a,
++    struct archive_read_filter *filter)
++{
++	if (!a->archive.is_metadata_streaming)
++		return (ARCHIVE_OK);
++	filter->shadow = malloc(sizeof(*filter));
++	if (filter->shadow == NULL) {
++		archive_set_error(&a->archive, ENOMEM, "Out of memory");
++		return (ARCHIVE_FATAL);
++	}
++	memcpy(filter->shadow, filter, sizeof(*filter));
++	filter->shadow->shadow = NULL;
++	return (ARCHIVE_OK);
++}
++
+ /*
+  * Allow each registered stream transform to bid on whether
+  * it wants to handle this stream.  Repeat until we've finished
+@@ -590,7 +618,8 @@ choose_filters(struct archive_read *a)
+ 		filter->upstream = a->filter;
+ 		a->filter = filter;
+ 		r = (best_bidder->vtable->init)(a->filter);
+-		if (r != ARCHIVE_OK) {
++		if (r != ARCHIVE_OK ||
++		    __archive_read_filter_add_shadow(a, filter) != ARCHIVE_OK) {
+ 			__archive_read_free_filters(a);
+ 			return (ARCHIVE_FATAL);
+ 		}
+@@ -1002,6 +1031,10 @@ close_filters(struct archive_read *a)
+ 		}
+ 		free(f->buffer);
+ 		f->buffer = NULL;
++		if (f->shadow != NULL) {
++			free(f->shadow->buffer);
++			f->shadow->buffer = NULL;
++		}
+ 		f = t;
+ 	}
+ 	return r;
+@@ -1015,6 +1048,7 @@ __archive_read_free_filters(struct archive_read *a)
+ 
+ 	while (a->filter != NULL) {
+ 		struct archive_read_filter *t = a->filter->upstream;
++		free(a->filter->shadow);
+ 		free(a->filter);
+ 		a->filter = t;
+ 	}
+@@ -1334,6 +1368,13 @@ __archive_read_filter_ahead(struct archive_read_filter *filter,
+ 		return (NULL);
+ 	}
+ 
++	/*
++	 * Pcompress: metadata reads go through the shadow filter when
++	 * metadata streaming is enabled.
++	 */
++	if (filter->shadow != NULL && filter->archive->archive.cb_is_metadata)
++		filter = filter->shadow;
++
+ 	/*
+ 	 * Keep pulling more data until we can satisfy the request.
+ 	 */
+@@ -1512,6 +1553,13 @@ __archive_read_filter_consume(struct archive_read_filter * filter,
+ 	if (request == 0)
+ 		return 0;
+ 
++	/*
++	 * Pcompress: metadata reads go through the shadow filter when
++	 * metadata streaming is enabled.
++	 */
++	if (filter->shadow != NULL && filter->archive->archive.cb_is_metadata)
++		filter = filter->shadow;
++
+ 	skipped = advance_file_pointer(filter, request);
+ 	if (skipped == request)
+ 		return (skipped);
+@@ -1636,6 +1684,9 @@ __archive_read_filter_seek(struct archive_read_filter *filter, int64_t offset,
+ 		return (ARCHIVE_FATAL);
+ 	if (filter->can_seek == 0)
+ 		return (ARCHIVE_FAILED);
++	/* Pcompress: no seeking when metadata streams are enabled. */
++	if (filter->archive->archive.is_metadata_streaming)
++		return (ARCHIVE_FAILED);
+ 
+ 	client = &(filter->archive->client);
+ 	switch (whence) {
+diff --git a/libarchive/archive_read_append_filter.c b/libarchive/archive_read_append_filter.c
+index cd88df11..beb17474 100644
+--- a/libarchive/archive_read_append_filter.c
++++ b/libarchive/archive_read_append_filter.c
+@@ -138,6 +138,8 @@ archive_read_append_filter(struct archive *_a, int code)
+     filter->upstream = a->filter;
+     a->filter = filter;
+     r2 = (bidder->vtable->init)(a->filter);
++    if (r2 == ARCHIVE_OK)
++      r2 = __archive_read_filter_add_shadow(a, filter);
+     if (r2 != ARCHIVE_OK) {
+       __archive_read_free_filters(a);
+       return (ARCHIVE_FATAL);
+@@ -194,6 +196,8 @@ archive_read_append_filter_program_signature(struct archive *_a,
+   filter->upstream = a->filter;
+   a->filter = filter;
+   r = (bidder->vtable->init)(a->filter);
++  if (r == ARCHIVE_OK)
++    r = __archive_read_filter_add_shadow(a, filter);
+   if (r != ARCHIVE_OK) {
+     __archive_read_free_filters(a);
+     return (ARCHIVE_FATAL);
+diff --git a/libarchive/archive_read_private.h b/libarchive/archive_read_private.h
+index 0c374f48..68703e2f 100644
+--- a/libarchive/archive_read_private.h
++++ b/libarchive/archive_read_private.h
+@@ -93,6 +93,11 @@ struct archive_read_filter {
+ 	 * just declare them here. */
+ 	struct archive_read_filter_bidder *bidder; /* My bidder. */
+ 	struct archive_read_filter *upstream; /* Who I read from. */
++	/*
++	 * Pcompress: shadow copy used for metadata reads when metadata
++	 * streaming is enabled, so metadata and data keep separate buffers.
++	 */
++	struct archive_read_filter *shadow;
+ 	struct archive_read *archive; /* Associated archive. */
+ 	const struct archive_read_filter_vtable *vtable;
+ 	/* My private data. */
+@@ -254,6 +259,7 @@ int64_t	__archive_read_filter_consume(struct archive_read_filter *, int64_t);
+ int __archive_read_header(struct archive_read *, struct archive_entry *);
+ int __archive_read_program(struct archive_read_filter *, const char *);
+ void __archive_read_free_filters(struct archive_read *);
++int __archive_read_filter_add_shadow(struct archive_read *, struct archive_read_filter *);
+ struct archive_read_extract *__archive_read_get_extract(struct archive_read *);
+ 
+ 
 diff --git a/libarchive/archive_virtual.c b/libarchive/archive_virtual.c
 index 97e0b8a0..ea343c8e 100644
 --- a/libarchive/archive_virtual.c

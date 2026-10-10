@@ -132,6 +132,7 @@ static update_func_ptr sha512_update_func;
 int
 APS_NAMESPACE(Init_SHA512) (processor_cap_t *pc)
 {
+#if defined(__x86_64__)
 	if (pc->proc_type == PROC_X64_INTEL || pc->proc_type == PROC_X64_AMD) {
 		if (pc->avx_level > 0) {
 			sha512_update_func = sha512_avx;
@@ -144,6 +145,7 @@ APS_NAMESPACE(Init_SHA512) (processor_cap_t *pc)
 		}
 		return (0);
 	}
+#endif
 	return (1);
 }
 

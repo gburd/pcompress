@@ -35,6 +35,9 @@
 #endif
 #define	PREFETCH_T0(addr,nrOfBytesAhead) _mm_prefetch(((char *)(addr))+nrOfBytesAhead,_MM_HINT_T0)
 #define	PREFETCH_FETCH_DIST 64
+#else
+#define	PREFETCH_T0(addr,nrOfBytesAhead) __builtin_prefetch(((const char *)(addr))+nrOfBytesAhead)
+#define	PREFETCH_FETCH_DIST 64
 #endif
 
 #include "LzFind.h"
