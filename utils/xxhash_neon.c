@@ -28,10 +28,14 @@
  * Falls back to scalar on non-ARM.
  */
 
-#if defined(__aarch64__) || defined(__arm64__)
-#define CPUCAP_NM(x) x##_NEON
+#if !defined(__x86_64__) && !defined(__i386__)
+/*
+ * Portable C build used on every non-x86 target (the compiler
+ * auto-vectorizes it with NEON on ARM64 when -march allows).
+ */
+#define CPUCAP_NM(x) x##_GENERIC
 #include "xxhash.c"
 #else
-/* Avoid empty translation unit warning on non-ARM platforms */
+/* Avoid empty translation unit warning on x86 */
 typedef int xxhash_neon_unused;
 #endif

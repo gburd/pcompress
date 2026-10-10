@@ -132,8 +132,8 @@ extern "C" {
       dsp->blake2b		= blake2b_avx512;
       dsp->blake2bp		= blake2bp_avx512;
     }
-#elif defined(__aarch64__) || defined(__arm64__)
-    /* ARM64: use NEON-optimized BLAKE2 implementations */
+#else
+    /* ARM64: NEON implementation; other arches: the portable scalar one. */
     (void)pc;
     dsp->blake2b_init		= blake2b_init_neon;
     dsp->blake2b_init_key	= blake2b_init_key_neon;
@@ -146,14 +146,6 @@ extern "C" {
     dsp->blake2bp_final 		= blake2bp_final_neon;
     dsp->blake2b			= blake2b_neon;
     dsp->blake2bp		= blake2bp_neon;
-#else
-    /*
-     * Unknown arch: BLAKE2 SIMD implementations not available.
-     * Set all pointers to NULL. The crypto layer will fall back to
-     * OpenSSL for hashing.
-     */
-    (void)pc;
-    memset(dsp, 0, sizeof(*dsp));
 #endif
   }
 

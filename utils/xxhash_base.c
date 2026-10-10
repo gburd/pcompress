@@ -48,13 +48,13 @@ extern unsigned int XXH32_result_AVX512 (void* state);
 extern unsigned int XXH32_getIntermediateResult_AVX512 (void* state);
 extern unsigned int XXH32_AVX512 (const void* input, int len, unsigned int seed);
 
-#elif defined(__aarch64__) || defined(__arm64__)
+#else
 
-extern void*        XXH32_init_NEON   (unsigned int seed);
-extern int          XXH32_feed_NEON   (void* state, const void* input, int len);
-extern unsigned int XXH32_result_NEON (void* state);
-extern unsigned int XXH32_getIntermediateResult_NEON (void* state);
-extern unsigned int XXH32_NEON (const void* input, int len, unsigned int seed);
+extern void*        XXH32_init_GENERIC   (unsigned int seed);
+extern int          XXH32_feed_GENERIC   (void* state, const void* input, int len);
+extern unsigned int XXH32_result_GENERIC (void* state);
+extern unsigned int XXH32_getIntermediateResult_GENERIC (void* state);
+extern unsigned int XXH32_GENERIC (const void* input, int len, unsigned int seed);
 
 #endif
 
@@ -86,12 +86,13 @@ XXH32_module_init() {
 		xxh32_result = XXH32_result_SSE2;
 		xxh32_getIntermediateResult = XXH32_getIntermediateResult_SSE2;
 	}
-#elif defined(__aarch64__) || defined(__arm64__)
-	xxh32 = XXH32_NEON;
-	xxh32_init = XXH32_init_NEON;
-	xxh32_feed = XXH32_feed_NEON;
-	xxh32_result = XXH32_result_NEON;
-	xxh32_getIntermediateResult = XXH32_getIntermediateResult_NEON;
+#else
+	/* Was NULL on anything but x86/ARM64: crashed on riscv64, SPARC, ... */
+	xxh32 = XXH32_GENERIC;
+	xxh32_init = XXH32_init_GENERIC;
+	xxh32_feed = XXH32_feed_GENERIC;
+	xxh32_result = XXH32_result_GENERIC;
+	xxh32_getIntermediateResult = XXH32_getIntermediateResult_GENERIC;
 #endif
 }
 

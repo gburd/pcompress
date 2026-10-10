@@ -28,10 +28,10 @@
  * implementation via the BLAKE_NAMESPACE macro.
  */
 
-#if defined(__aarch64__) || defined(__arm64__)
+#if (!defined(__x86_64__) && !defined(__i386__)) || defined(PC_FORCE_GENERIC)
 #define BLAKE_NAMESPACE(x) x##_neon
 #include "blake2bp.c"
 #else
-/* Avoid empty translation unit warning on non-ARM platforms */
+/* Avoid empty translation unit warning on x86 */
 typedef int blake2bp_neon_unused;
 #endif
