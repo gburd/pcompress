@@ -35,10 +35,11 @@ if [ ! -f mixed.dat ]; then
 	awk 'BEGIN{printf "P5\n256 256\n255\n"; for(i=0;i<65536;i++) printf "%c", (i%256+i/256)%256}' > tree/img.pgm
 	for b in /bin/sh /usr/bin/env "$(command -v sh)"; do [ -f "$b" ] && { cp -L "$b" tree/prog.elf; break; }; done
 	# Near-duplicate blocks for delta (bsdiff) encoding: same data, sparse edits.
-	head -c 3000000 mixed.dat > d1; cp d1 d2
-	awk 'BEGIN{srand(7); for(i=0;i<3000;i++) print int(rand()*2999990)}' | while read o; do
+	# Copies must be > deltac_min_distance (4MB) apart within one chunk.
+	head -c 6000000 mixed.dat > d1; cp d1 d2
+	awk 'BEGIN{srand(7); for(i=0;i<2000;i++) print int(rand()*5999990)}' | while read o; do
 		printf 'Q' | dd of=d2 bs=1 seek=$o conv=notrunc 2>/dev/null; done
-	cat d1 d2 d1 d2 > delta.dat; rm -f d1 d2
+	cat d1 d2 > delta.dat; rm -f d1 d2
 	printf 'pw%s\n' secret > pw.master
 fi
 ck() { # name, compress-args...; input $IN; DARGS = extra decompress args
@@ -64,7 +65,11 @@ for opt in "-D" "-D -E" "-D -EE" "-F" "-G" "-G -F" "-D -B0" "-D -B5" "-L" "-P" "
 	ck "lzma $opt" -c lzma -l6 -s 4m $opt
 	ck "zstd $opt" -c zstd -l6 -s 4m $opt
 done
-for s in CRC64 SHA256 SHA512 KECCAK256 KECCAK512 BLAKE256 BLAKE512; do ck "cksum-$s" -c zlib -l3 -S $s; done
+for s in CRC64 SHA256 SHA512 KECCAK256 KECCAK512 BLAKE256 BLAKE512; do
+	ck "cksum-$s" -c zlib -l3 -S $s
+	# Whole file in one chunk: checksums run in parallel (OpenMP) mode.
+	ck "cksum-$s-single" -c lz4 -l1 -s 64m -S $s
+done
 for e in AES SALSA20; do for k in 16 32; do
 	PWF=1 DARGS="-w pw"
 	cp pw.master pw; ck "enc-$e-k$k" -c zstd -l6 -e $e -k $k -w pw
@@ -75,8 +80,8 @@ for t in 1 3 16; do ck "threads-$t" -c lzma -l6 -s 1m -t $t; done
 # Delta (bsdiff) on near-duplicate blocks, all similarity levels/block sizes.
 IN=delta.dat
 for opt in "-E" "-EE" "-E -B0" "-E -B3" "-EE -B1 -L -P"; do
-	ck "delta $opt" -c zstd -l6 -s 4m $opt
-	ck "delta-lzma $opt" -c lzma -l9 -s 4m $opt
+	ck "delta $opt" -c zstd -l3 -s 16m $opt
+	ck "delta-lzma $opt" -c lzma -l9 -s 16m $opt
 done
 # Global dedupe: index-memory limit forces the segmented (on-disk) index;
 # alternate block hashes; cache dir.

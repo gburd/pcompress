@@ -516,7 +516,7 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit
-UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_blake2
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_blake2 test_api
 # Tests link the objects directly: the shared library hides internal symbols.
 # LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 

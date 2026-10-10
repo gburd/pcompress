@@ -47,45 +47,14 @@ run_section() {
 
 # --- Unit Tests ---
 run_unit_tests() {
-	if [ -x "${BUILD_DIR}/buildtmp/test_compress" ]; then
-		run_section "Unit: Compression Round-Trip" \
-		    "${BUILD_DIR}/buildtmp/test_compress"
-	else
-		echo "SKIP: test_compress not built (run 'make test-unit-build')"
-		total_skip=$((total_skip + 1))
-	fi
-
-	if [ -x "${BUILD_DIR}/buildtmp/test_xxhash" ]; then
-		run_section "Unit: xxHash" \
-		    "${BUILD_DIR}/buildtmp/test_xxhash"
-	else
-		echo "SKIP: test_xxhash not built"
-		total_skip=$((total_skip + 1))
-	fi
-
-	if [ -x "${BUILD_DIR}/buildtmp/test_crc" ]; then
-		run_section "Unit: CRC32/CRC64" \
-		    "${BUILD_DIR}/buildtmp/test_crc"
-	else
-		echo "SKIP: test_crc not built"
-		total_skip=$((total_skip + 1))
-	fi
-
-	if [ -x "${BUILD_DIR}/buildtmp/test_slab" ]; then
-		run_section "Unit: Slab Allocator" \
-		    "${BUILD_DIR}/buildtmp/test_slab"
-	else
-		echo "SKIP: test_slab not built"
-		total_skip=$((total_skip + 1))
-	fi
-
-	if [ -x "${BUILD_DIR}/buildtmp/test_blake2" ]; then
-		run_section "Unit: BLAKE2b Hashing" \
-		    "${BUILD_DIR}/buildtmp/test_blake2"
-	else
-		echo "SKIP: test_blake2 not built"
-		total_skip=$((total_skip + 1))
-	fi
+	for t in test_compress test_xxhash test_crc test_slab test_blake2 test_api; do
+		if [ -x "${BUILD_DIR}/buildtmp/$t" ]; then
+			run_section "Unit: $t" "${BUILD_DIR}/buildtmp/$t"
+		else
+			echo "FAIL: $t not built (run 'make test-unit-build')"
+			total_fail=$((total_fail + 1))
+		fi
+	done
 }
 
 # --- Integration Tests ---
