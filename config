@@ -106,6 +106,12 @@ try_pkgconfig_inc() {
 lib_search_paths() {
 	_pref="$1"
 
+	# Solaris/illumos: 64-bit libraries live in lib/64 (lib/ is 32-bit).
+	if [ "$OS" = "SunOS" ]; then
+		echo "${_pref}/lib/64"
+		echo "${_pref}/usr/lib/64"
+	fi
+
 	# Standard paths
 	echo "${_pref}/lib64"
 	echo "${_pref}/usr/lib64"
@@ -495,7 +501,9 @@ then
 	dtag_val=""
 elif [ "$OS" = "SunOS" ]
 then
-	plat=$(isainfo -v)
+	# isainfo -v is multi-line prose; -n prints the native ISA (sparcv9/amd64).
+	plat=$(isainfo -n)
+	dtag_val=""
 else
 	echo "WARNING: Untested OS '$OS'. Attempting to continue ..."
 	plat=$(uname -m)
@@ -533,9 +541,9 @@ aarch64|arm64|armv*)
 	salsa20_debug='\$\(XSALSA20_DEBUG\)'
 	sha256objs='\$\(SHA2_OBJS\)'
 	;;
-riscv64)
-	is_riscv=1
-	# Disable SSE/AVX detection and flags on RISC-V
+*)
+	[ "$plat" = riscv64 ] && is_riscv=1
+	# Disable SSE/AVX detection and flags on RISC-V and other non-x86/ARM
 	sse_detect=0
 	avx_detect=0
 	sse_opt_flags=""
@@ -597,6 +605,11 @@ if [ $is_clang -eq 1 ]; then
 	# The x86 .s sources use GNU as macro directives (.psize, .altmacro).
 	[ $is_x86 -eq 1 ] && [ "$OS" != "Darwin" ] && gnu_as_flag="-fno-integrated-as"
 fi
+
+# GCC built without ISL rejects the Graphite loop flags ("sorry, unimplemented").
+echo 'int main(void){return 0;}' > tst.c
+${GCC} ${gcc_loop_flags} -c tst.c -o tst.o >/dev/null 2>&1 || gcc_loop_flags=""
+rm -f tst.c tst.o
 
 # Link-time optimization. GCC needs the plugin-aware archiver for the
 # static libbsc/libarchive archives; -flto=auto parallelises LTRANS.
@@ -810,7 +823,8 @@ if [ "x${openssl_prefix}" = "x" ]; then
 fi
 
 if [ "x${openssl_libdir}" = "x" ]; then
-	for lib in "${openssl_prefix}/lib64" "${openssl_prefix}/usr/lib64" \
+	_sun64=; [ "$OS" = "SunOS" ] && _sun64="${openssl_prefix}/lib/64"
+	for lib in ${_sun64} "${openssl_prefix}/lib64" "${openssl_prefix}/usr/lib64" \
 		"${openssl_prefix}/lib" "${openssl_prefix}/usr/lib" \
 		"${openssl_prefix}/ssl/lib64" "${openssl_prefix}/ssl/lib" \
 		$(lib_search_paths "${openssl_prefix}")
@@ -1248,6 +1262,10 @@ then
 	echo "********* Configure in internal libarchive failed!"
 	exit 1
 fi
+# libarchive's configure links whatever optional libs it finds (libacl,
+# libzstd, liblz4, libmd ...); the static archive needs them on our link line.
+la_libs=$(sed -n 's/^LIBS = //p' $libarchive_dir/Makefile)
+extra_ld_flags="${extra_ld_flags} ${la_libs}"
 echo "*************** Finished configure in libarchive ****************"
 
 if [ "x${wavpack_dir}" != "x" ]
