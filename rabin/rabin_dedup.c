@@ -82,6 +82,14 @@
 #include <qsort.h>
 
 #include "rabin_dedup.h"
+
+/*
+ * Scratch arrays are carved from the end of the output buffer. Round the
+ * start down to 8 bytes: they hold pointers and 64-bit values, and
+ * real_chunksize is arbitrary (SIGBUS on strict-alignment CPUs).
+ */
+#define	SCRATCH_TAIL(ctx, sz) \
+	((uchar_t *)(((uintptr_t)((ctx)->cbuf + (ctx)->real_chunksize - (sz))) & ~(uintptr_t)7))
 #if defined(__USE_SSE_INTRIN__) && defined(__SSE4_1__) && RAB_POLYNOMIAL_WIN_SIZE == 16
 #	include <smmintrin.h>
 #	define	SSE_MODE		1
@@ -546,7 +554,7 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 		ary_sz = 0;
 		if (ctx->arc != NULL) {
 			ary_sz = (sizeof (global_blockentry_t) * (*size / ctx->rabin_poly_min_block_size + 1));
-			ctx->g_blocks = (global_blockentry_t *)(ctx->cbuf + ctx->real_chunksize - ary_sz);
+			ctx->g_blocks = (global_blockentry_t *)SCRATCH_TAIL(ctx, ary_sz);
 		}
 
 		/*
@@ -554,7 +562,7 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 		 * for the compressed chunk temporarily.
 		 */
 		ary_sz += ctx->rabin_poly_max_block_size;
-		ctx_heap = (uint32_t *)(ctx->cbuf + ctx->real_chunksize - ary_sz);
+		ctx_heap = (uint32_t *)SCRATCH_TAIL(ctx, ary_sz);
 	}
 #ifndef SSE_MODE
 	memset(ctx->current_window_data, 0, RAB_POLYNOMIAL_WIN_SIZE);
@@ -1310,7 +1318,7 @@ next_ent:
 		}
 
 		ary_sz = (blknum << 1) * sizeof (rabin_blockentry_t *);
-		htab = (rabin_blockentry_t **)(ctx->cbuf + ctx->real_chunksize - ary_sz);
+		htab = (rabin_blockentry_t **)SCRATCH_TAIL(ctx, ary_sz);
 		memset(htab, 0, ary_sz);
 
 		/*
