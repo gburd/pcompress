@@ -284,8 +284,16 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * If filter failed we indicate a soft error to continue the
 		 * archive extraction.
 		 */
+		/*
+		 * Was: memcpy of 'len', which is 0 here, so the entry was
+		 * silently written empty. Emit the stored data as-is, like
+		 * the not-our-format path above, and flag a soft error.
+		 */
 		free(out);
+		len = archive_entry_size(fi->entry);
 		out = malloc(len);
+		if (out == NULL)
+			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
 
 		fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -395,8 +403,16 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * If filter failed we indicate a soft error to continue the
 		 * archive extraction.
 		 */
+		/*
+		 * Was: memcpy of 'len', which is 0 here, so the entry was
+		 * silently written empty. Emit the stored data as-is, like
+		 * the not-our-format path above, and flag a soft error.
+		 */
 		free(out);
+		len = archive_entry_size(fi->entry);
 		out = malloc(len);
+		if (out == NULL)
+			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
 
 		fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -511,8 +527,16 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 * If filter failed we indicate a soft error to continue the
 		 * archive extraction.
 		 */
+		/*
+		 * Was: memcpy of 'len', which is 0 here, so the entry was
+		 * silently written empty. Emit the stored data as-is, like
+		 * the not-our-format path above, and flag a soft error.
+		 */
 		free(out);
+		len = archive_entry_size(fi->entry);
 		out = malloc(len);
+		if (out == NULL)
+			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
 
 		fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -605,8 +629,16 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		 * If filter failed we indicate a soft error to continue the
 		 * archive extraction.
 		 */
+		/*
+		 * Was: memcpy of 'len', which is 0 here, so the entry was
+		 * silently written empty. Emit the stored data as-is, like
+		 * the not-our-format path above, and flag a soft error.
+		 */
 		free(out);
+		len = archive_entry_size(fi->entry);
 		out = malloc(len);
+		if (out == NULL)
+			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
 
 		fi->fout->output_type = FILTER_OUTPUT_MEM;
