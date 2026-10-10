@@ -21,7 +21,7 @@
  * Select BLAKE2 function set based on architecture.
  * Default to SSE2 on x86_64, NEON on ARM64.
  */
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if !defined(__x86_64__) && !defined(__i386__)
 #define BLAKE2B_INIT    blake2b_init_neon
 #define BLAKE2B_UPDATE  blake2b_update_neon
 #define BLAKE2B_FINAL   blake2b_final_neon
@@ -160,6 +160,51 @@ MU_TEST(test_blake2b_large_input)
 	#undef LARGE_SZ
 }
 
+/* --- Known-answer tests against the official BLAKE2 vectors --- */
+
+#define BLAKE2S_OUTBYTES 32	/* referenced by the KAT header */
+#include "blake2-kat.h"
+
+typedef int (*b2_fn)(uint8_t *, const void *, const void *, const uint8_t,
+    const uint64_t, uint8_t);
+
+static int
+kat_check(b2_fn b, b2_fn bp)
+{
+	uint8_t key[BLAKE2B_KEYBYTES], buf[KAT_LENGTH], h[BLAKE2B_OUTBYTES];
+	int i;
+
+	for (i = 0; i < BLAKE2B_KEYBYTES; i++) key[i] = (uint8_t)i;
+	for (i = 0; i < KAT_LENGTH; i++) buf[i] = (uint8_t)i;
+	for (i = 0; i < KAT_LENGTH; i++) {
+		if (b(h, buf, key, BLAKE2B_OUTBYTES, i, BLAKE2B_KEYBYTES) != 0 ||
+		    memcmp(h, blake2b_keyed_kat[i], BLAKE2B_OUTBYTES) != 0)
+			return (i + 1);
+		if (bp(h, buf, key, BLAKE2B_OUTBYTES, i, BLAKE2B_KEYBYTES) != 0 ||
+		    memcmp(h, blake2bp_keyed_kat[i], BLAKE2B_OUTBYTES) != 0)
+			return (-(i + 1));
+	}
+	return (0);
+}
+
+MU_TEST(test_blake2b_kat_variants)
+{
+#if defined(__x86_64__) || defined(__i386__)
+	mu_assert_int_eq(0, kat_check(blake2b_sse2, blake2bp_sse2));
+	if (__builtin_cpu_supports("ssse3"))
+		mu_assert_int_eq(0, kat_check(blake2b_ssse3, blake2bp_ssse3));
+	if (__builtin_cpu_supports("sse4.1"))
+		mu_assert_int_eq(0, kat_check(blake2b_sse41, blake2bp_sse41));
+	if (__builtin_cpu_supports("avx"))
+		mu_assert_int_eq(0, kat_check(blake2b_avx, blake2bp_avx));
+	if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vl"))
+		mu_assert_int_eq(0, kat_check(blake2b_avx512, blake2bp_avx512));
+#else
+	/* NEON on ARM64, portable scalar code elsewhere (same symbols). */
+	mu_assert_int_eq(0, kat_check(blake2b_neon, blake2bp_neon));
+#endif
+}
+
 /* --- Suites --- */
 
 MU_TEST_SUITE(suite_blake2b)
@@ -170,6 +215,7 @@ MU_TEST_SUITE(suite_blake2b)
 	MU_RUN_TEST(test_blake2b_streaming);
 	MU_RUN_TEST(test_blake2b_short_output);
 	MU_RUN_TEST(test_blake2b_large_input);
+	MU_RUN_TEST(test_blake2b_kat_variants);
 }
 
 int

@@ -68,8 +68,84 @@ MU_TEST(test_xxhash_collision_resistance)
 	}
 }
 
+/*
+ * Known answers over buf[i] = i*31+7, computed with an independent
+ * reference model. The one-shot XXH32() in pcompress is a deliberate
+ * variant (two 4-lane accumulators over 32-byte stripes, for SIMD) and
+ * differs from upstream xxHash32 for len >= 16.
+ * Every SIMD/scalar build must produce identical values: they feed dedupe
+ * hash tables and the global dedupe index.
+ */
+static const struct { int len; unsigned int seed, hash, spec; } xxh_kat[] = {
+	/* len, seed, pcompress XXH32 variant, upstream xxHash32 (reference) */
+	{ 0, 0x00000000U, 0x02cc5d05U, 0x02cc5d05U },
+	{ 1, 0x00000000U, 0x002e0d32U, 0x002e0d32U },
+	{ 3, 0x00000000U, 0xaca17380U, 0xaca17380U },
+	{ 4, 0x00000000U, 0x073faa82U, 0x073faa82U },
+	{ 15, 0x00000000U, 0x9f29f87bU, 0x9f29f87bU },
+	{ 16, 0x00000000U, 0x48e15729U, 0x3f6c9665U },
+	{ 17, 0x00000000U, 0x99c6bfd3U, 0xe048ecdbU },
+	{ 31, 0x00000000U, 0x76590f02U, 0x00f1525cU },
+	{ 32, 0x00000000U, 0xabc94028U, 0xee42e668U },
+	{ 33, 0x00000000U, 0xbce78007U, 0x770b5126U },
+	{ 100, 0x00000000U, 0xdb5d0887U, 0x75936eb8U },
+	{ 1024, 0x00000000U, 0x28684e82U, 0xead2ce3cU },
+	{ 1024, 0x9e3779b1U, 0x2ed4fd14U, 0xb3f439f0U },
+	{ 0, 0x00000001U, 0x0b2cb792U, 0x0b2cb792U },
+	{ 37, 0x00003039U, 0x2c326709U, 0x7bce658aU },
+};
+
+typedef unsigned int (*xxh_fn)(const void *, int, unsigned int);
+
+static unsigned char kat_buf[1024];
+
+static int
+xxh_variant_ok(xxh_fn h)
+{
+	size_t k;
+
+	for (k = 0; k < sizeof (xxh_kat) / sizeof (xxh_kat[0]); k++) {
+		unsigned int got = h(kat_buf, xxh_kat[k].len, xxh_kat[k].seed);
+
+		if (got != xxh_kat[k].hash) {
+			fprintf(stderr, "  XXH32(len=%d, seed=%08x) = %08x, want %08x\n",
+			    xxh_kat[k].len, xxh_kat[k].seed, got, xxh_kat[k].hash);
+			return (0);
+		}
+	}
+	return (1);
+}
+
+#if defined(__x86_64__) || defined(__i386__)
+extern unsigned int XXH32_SSE2(const void *, int, unsigned int);
+extern unsigned int XXH32_SSE4(const void *, int, unsigned int);
+extern unsigned int XXH32_AVX512(const void *, int, unsigned int);
+#else
+extern unsigned int XXH32_GENERIC(const void *, int, unsigned int);
+#endif
+
+MU_TEST(test_xxhash_kat)
+{
+	int i;
+
+	for (i = 0; i < (int)sizeof (kat_buf); i++)
+		kat_buf[i] = (unsigned char)(i * 31 + 7);
+	/* The runtime dispatcher (what pcompress actually calls). */
+	mu_assert(xxh_variant_ok(XXH32), "dispatched XXH32 KAT");
+#if defined(__x86_64__) || defined(__i386__)
+	mu_assert(xxh_variant_ok(XXH32_SSE2), "XXH32 SSE2 KAT");
+	if (__builtin_cpu_supports("sse4.1"))
+		mu_assert(xxh_variant_ok(XXH32_SSE4), "XXH32 SSE4 KAT");
+	if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vl"))
+		mu_assert(xxh_variant_ok(XXH32_AVX512), "XXH32 AVX512 KAT");
+#else
+	mu_assert(xxh_variant_ok(XXH32_GENERIC), "XXH32 generic KAT");
+#endif
+}
+
 MU_TEST_SUITE(suite_xxhash)
 {
+	MU_RUN_TEST(test_xxhash_kat);
 	MU_RUN_TEST(test_xxhash_empty);
 	MU_RUN_TEST(test_xxhash_deterministic);
 	MU_RUN_TEST(test_xxhash_seed_differs);
@@ -77,9 +153,12 @@ MU_TEST_SUITE(suite_xxhash)
 	MU_RUN_TEST(test_xxhash_collision_resistance);
 }
 
+extern void init_pcompress(void);
+
 int
 main(void)
 {
+	init_pcompress();	/* CPU detection + hash dispatch setup */
 	MU_RUN_SUITE(suite_xxhash);
 	MU_REPORT();
 	return MU_EXIT_CODE;

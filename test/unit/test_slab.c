@@ -65,8 +65,10 @@ MU_TEST(test_slab_calloc_zeroed)
 
 MU_TEST(test_slab_cache_add)
 {
+	/* 1 = new cache created, 0 = already present (or allocator bypassed). */
 	int rv = slab_cache_add(8192);
-	mu_assert_int_eq(0, rv);
+	mu_assert(rv == 0 || rv == 1, "slab_cache_add returned an invalid value");
+	mu_assert_int_eq(0, slab_cache_add(8192));
 	/* Allocate from the pre-created cache */
 	void *p = slab_alloc(NULL, 8192);
 	mu_assert(p != NULL, "alloc from pre-created cache returned NULL");
