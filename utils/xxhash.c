@@ -161,7 +161,9 @@ static inline __m128i _x_mm_rotl_epi32(const __m128i a, int bits)
 //**************************************
 // Macros
 //**************************************
-#define XXH_LE32(p)  (XXH_BIG_ENDIAN ? XXH_swap32(*(unsigned int*)(p)) : *(unsigned int*)(p))
+/* Unaligned-safe 32-bit load (inputs are arbitrary byte offsets). */
+static inline unsigned int XXH_read32(const void *p) { unsigned int v; memcpy(&v, p, 4); return v; }
+#define XXH_LE32(p)  (XXH_BIG_ENDIAN ? XXH_swap32(XXH_read32(p)) : XXH_read32(p))
 
 
 

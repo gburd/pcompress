@@ -38,6 +38,13 @@
 #include <utils.h>
 
 #ifdef WORDS_BIGENDIAN
+/* xz-utils gets these from tuklib; the big-endian CRC code needs them. */
+#	ifndef bswap32
+#		define bswap32(x) __builtin_bswap32(x)
+#	endif
+#	ifndef bswap64
+#		define bswap64(x) __builtin_bswap64(x)
+#	endif
 #	define A(x) ((x) >> 24)
 #	define B(x) (((x) >> 16) & 0xFF)
 #	define C(x) (((x) >> 8) & 0xFF)

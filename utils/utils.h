@@ -184,12 +184,34 @@ typedef int32_t bsize_t;
 #define	PATHSEP_CHAR	'/'
 #define	PATHSEP_STR	"/"
 #define	BYTES_TO_MB(x) ((x) / (1024 * 1024))
-#define	U64_P(x) *((uint64_t *)(x))
-#define	U32_P(x) *((uint32_t *)(x))
-#define	U16_P(x) *((uint16_t *)(x))
-#define	I64_P(x) *((int64_t *)(x))
-#define	I32_P(x) *((int32_t *)(x))
-#define	I16_P(x) *((int16_t *)(x))
+/*
+ * Load/store integers at arbitrary byte offsets in a buffer (usable as
+ * lvalues). The types are declared 1-byte aligned and may_alias, so the
+ * compiler emits accesses that are legal on strict-alignment CPUs (SPARC,
+ * some RISC-V and MIPS) and that do not break strict aliasing; on x86 and
+ * ARM64 this is still a single load/store.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+typedef uint64_t __attribute__((aligned(1), may_alias)) pc_u64u_t;
+typedef uint32_t __attribute__((aligned(1), may_alias)) pc_u32u_t;
+typedef uint16_t __attribute__((aligned(1), may_alias)) pc_u16u_t;
+typedef int64_t __attribute__((aligned(1), may_alias)) pc_i64u_t;
+typedef int32_t __attribute__((aligned(1), may_alias)) pc_i32u_t;
+typedef int16_t __attribute__((aligned(1), may_alias)) pc_i16u_t;
+#else
+typedef uint64_t pc_u64u_t;
+typedef uint32_t pc_u32u_t;
+typedef uint16_t pc_u16u_t;
+typedef int64_t pc_i64u_t;
+typedef int32_t pc_i32u_t;
+typedef int16_t pc_i16u_t;
+#endif
+#define	U64_P(x) (*((pc_u64u_t *)(x)))
+#define	U32_P(x) (*((pc_u32u_t *)(x)))
+#define	U16_P(x) (*((pc_u16u_t *)(x)))
+#define	I64_P(x) (*((pc_i64u_t *)(x)))
+#define	I32_P(x) (*((pc_i32u_t *)(x)))
+#define	I16_P(x) (*((pc_i16u_t *)(x)))
 
 #ifdef __APPLE__
 #define	CLOCK_MONOTONIC 0

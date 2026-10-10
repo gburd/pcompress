@@ -69,6 +69,8 @@ for s in CRC64 SHA256 SHA512 KECCAK256 KECCAK512 BLAKE256 BLAKE512; do
 	ck "cksum-$s" -c zlib -l3 -S $s
 	# Whole file in one chunk: checksums run in parallel (OpenMP) mode.
 	ck "cksum-$s-single" -c lz4 -l1 -s 64m -S $s
+	# ... and must not depend on how many OpenMP threads the host gives.
+	OMP_THREAD_LIMIT=1 ck "cksum-$s-single-omp1" -c lz4 -l1 -s 64m -S $s
 done
 for e in AES SALSA20; do for k in 16 32; do
 	PWF=1 DARGS="-w pw"

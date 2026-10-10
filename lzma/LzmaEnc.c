@@ -98,11 +98,16 @@ static int ttt = 0;
           *((UInt64 *)(mem)) = val; *((UInt64 *)((Byte *)mem + 8)) = val; \
           *((UInt64 *)((Byte *)mem + 16)) = val; *((UInt64 *)((Byte *)mem + 24)) = val
 #else
-#define MOV_DBL_QUAD(mem, val) \
-          *((UInt64 *)(mem)) = val; *((UInt64 *)((Byte *)mem + 8)) = val
-#define MOV_QUAD_QUAD(mem, val) \
-          *((UInt64 *)(mem)) = val; *((UInt64 *)((Byte *)mem + 8)) = val; \
-          *((UInt64 *)((Byte *)mem + 16)) = val; *((UInt64 *)((Byte *)mem + 24)) = val
+/*
+ * Portable: the targets are UInt32 arrays that are only 4-byte aligned, so
+ * 64-bit pointer stores are undefined behaviour and SIGBUS on SPARC.
+ * memcpy compiles to the same wide stores where unaligned access is legal.
+ */
+#define MOV_DBL_QUAD(mem, val) do { UInt64 v_ = (val); \
+          memcpy((Byte *)(mem), &v_, 8); memcpy((Byte *)(mem) + 8, &v_, 8); } while (0)
+#define MOV_QUAD_QUAD(mem, val) do { UInt64 v_ = (val); \
+          memcpy((Byte *)(mem), &v_, 8); memcpy((Byte *)(mem) + 8, &v_, 8); \
+          memcpy((Byte *)(mem) + 16, &v_, 8); memcpy((Byte *)(mem) + 24, &v_, 8); } while (0)
 #endif
 
 #ifdef __USE_SSE_INTRIN__

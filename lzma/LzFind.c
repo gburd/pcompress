@@ -416,26 +416,13 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
       if (pb[len] == cur[len])
       {
 #ifndef __USE_SSE_INTRIN__
+         /* Compare 8 bytes at a time; memcpy avoids unaligned-access faults. */
          UInt64 a, b;
          while (lenLimit - len > 8) {
-           a = *((UInt64 *)(&pb[len]));
-           b = *((UInt64 *)(&cur[len]));
+           memcpy(&a, &pb[len], 8);
+           memcpy(&b, &cur[len], 8);
            if (a != b) {
-             UInt64 c = a ^ b;
-             if (c & 0xff) goto diff_cont_g;
-             len++;
-             if (c & 0xff00) goto diff_cont_g;
-             len++; c >>= 16;
-             if (c & 0xff) goto diff_cont_g;
-             len++;
-             if (c & 0xff00) goto diff_cont_g;
-             len++; c >>= 16;
-             if (c & 0xff) goto diff_cont_g;
-             len++;
-             if (c & 0xff00) goto diff_cont_g;
-             len++; c >>= 16;
-             if (c & 0xff) goto diff_cont_g;
-             len++;
+             while (pb[len] == cur[len]) len++;	/* endian-neutral */
              goto diff_cont_g;
            }
            len += 8;
@@ -522,26 +509,13 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
       if (pb[len] == cur[len])
       {
 #ifndef __USE_SSE_INTRIN__
+        /* Compare 8 bytes at a time; memcpy avoids unaligned-access faults. */
         UInt64 a, b;
         while (lenLimit - len > 8) {
-          a = *((UInt64 *)(&pb[len]));
-          b = *((UInt64 *)(&cur[len]));
+          memcpy(&a, &pb[len], 8);
+          memcpy(&b, &cur[len], 8);
           if (a != b) {
-            UInt64 c = a ^ b;
-            if (c & 0xff) goto diff_cont;
-            len++;
-            if (c & 0xff00) goto diff_cont;
-            len++; c >>= 16;
-            if (c & 0xff) goto diff_cont;
-            len++;
-            if (c & 0xff00) goto diff_cont;
-            len++; c >>= 16;
-            if (c & 0xff) goto diff_cont;
-            len++;
-            if (c & 0xff00) goto diff_cont;
-            len++; c >>= 16;
-            if (c & 0xff) goto diff_cont;
-            len++;
+            while (pb[len] == cur[len]) len++;	/* endian-neutral */
             goto diff_cont;
           }
           len += 8;

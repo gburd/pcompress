@@ -63,7 +63,8 @@ static inline int blake2bp_init_leaf( blake2b_state *S, uint8_t outlen, uint8_t 
   P->fanout = PARALLELISM_DEGREE;
   P->depth = 2;
   P->leaf_length = 0;
-  P->node_offset = offset;
+  /* Parameter block fields are little-endian (RFC 7693); matters on BE. */
+  store64( &P->node_offset, offset );
   P->node_depth = 0;
   P->inner_length = outlen;
   memset( P->reserved, 0, sizeof( P->reserved ) );
@@ -156,16 +157,16 @@ int BLAKE_NAMESPACE(blake2bp_update) ( blake2bp_state *S, const uint8_t *in, uin
     left = 0;
   }
 
+  /*
+   * One iteration per leaf. Was: one leaf per OpenMP thread id, which
+   * silently skipped leaves (wrong digest) whenever the runtime gave fewer
+   * than PARALLELISM_DEGREE threads (1-CPU hosts, OMP_THREAD_LIMIT, ...).
+   */
 #if defined(_OPENMP)
-  #pragma omp parallel shared(S), num_threads(PARALLELISM_DEGREE)
-#else
-
-  for( size_t id__ = 0; id__ < PARALLELISM_DEGREE; ++id__ )
+  #pragma omp parallel for shared(S) num_threads(PARALLELISM_DEGREE)
 #endif
+  for( int id__ = 0; id__ < PARALLELISM_DEGREE; ++id__ )
   {
-#if defined(_OPENMP)
-    size_t      id__ = omp_get_thread_num();
-#endif
     uint64_t inlen__ = inlen;
     const uint8_t *in__ = ( const uint8_t * )in;
     in__ += id__ * BLAKE2B_BLOCKBYTES;
@@ -246,15 +247,10 @@ int BLAKE_NAMESPACE(blake2bp) ( uint8_t *out, const void *in, const void *key, u
   }
 
 #if defined(_OPENMP)
-  #pragma omp parallel shared(S,hash), num_threads(PARALLELISM_DEGREE)
-#else
-
-  for( size_t id__ = 0; id__ < PARALLELISM_DEGREE; ++id__ )
+  #pragma omp parallel for shared(S,hash) num_threads(PARALLELISM_DEGREE)
 #endif
+  for( int id__ = 0; id__ < PARALLELISM_DEGREE; ++id__ )
   {
-#if defined(_OPENMP)
-    size_t      id__ = omp_get_thread_num();
-#endif
     uint64_t inlen__ = inlen;
     const uint8_t *in__ = ( const uint8_t * )in;
     in__ += id__ * BLAKE2B_BLOCKBYTES;

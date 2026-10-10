@@ -123,7 +123,7 @@ lz4_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		dst2 = (uchar_t *)slab_alloc(NULL, sizeof (int) + bound);
 		if (dst2 == NULL)
 			return (-1);
-		*((int *)dst2) = htonl(rv);
+		I32_P(dst2) = htonl(rv);
 		rv = LZ4_compress_HC((const char *)dst, (char *)(dst2 + sizeof (int)),
 		    rv, bound, LZ4HC_CLEVEL_DEFAULT);
 		if (rv != 0) {
@@ -164,7 +164,7 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	} else if (lzdat->level == 2) {
 		int sz1;
 
-		sz1 = ntohl(*((int *)src));
+		sz1 = ntohl(I32_P(src));
 		rv = LZ4_decompress_safe((const char *)src + sizeof (int),
 		    (char *)dst, (int)srclen - (int)sizeof (int), sz1);
 		if (rv != sz1) {

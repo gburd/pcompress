@@ -560,7 +560,7 @@ redo:
 		tdat->rbytes -= ORIGINAL_CHUNKSZ;
 		tdat->len_cmp -= ORIGINAL_CHUNKSZ;
 		rseg = tdat->compressed_chunk + tdat->rbytes;
-		_chunksize = ntohll(*((int64_t *)rseg));
+		_chunksize = ntohll(I64_P(rseg));
 	}
 
 	/*
@@ -2049,7 +2049,7 @@ plain_index:
 	 * Insert compressed chunk length and checksum into chunk header.
 	 */
 	len_cmp = tdat->len_cmp;
-	*((typeof (len_cmp) *)(tdat->cmp_seg)) = htonll(tdat->len_cmp);
+	U64_P(tdat->cmp_seg) = htonll(tdat->len_cmp);
 	if (!pctx->encrypt_type)
 		serialize_checksum(tdat->checksum, tdat->cmp_seg + sizeof (tdat->len_cmp),
 		    pctx->cksum_bytes);
@@ -2073,7 +2073,7 @@ plain_index:
 		*((typeof (tdat->rbytes) *)(tdat->cmp_seg + tdat->len_cmp)) = htonll(tdat->rbytes);
 		tdat->len_cmp += ORIGINAL_CHUNKSZ;
 		len_cmp += ORIGINAL_CHUNKSZ;
-		*((typeof (len_cmp) *)(tdat->cmp_seg)) = htonll(len_cmp);
+		U64_P(tdat->cmp_seg) = htonll(len_cmp);
 	}
 	/*
 	 * Set the chunk header flags.
@@ -2699,7 +2699,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	 * to be HMAC-ed (archive version 7 and greater).
 	 */
 	if (pctx->encrypt_type) {
-		*((int *)pos) = htonl(pctx->crypto_ctx.saltlen);
+		I32_P(pos) = htonl(pctx->crypto_ctx.saltlen);
 		pos += sizeof (int);
 		serialize_checksum(pctx->crypto_ctx.salt, pos, pctx->crypto_ctx.saltlen);
 		pos += pctx->crypto_ctx.saltlen;
@@ -2712,7 +2712,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 			    XSALSA20_CRYPTO_NONCEBYTES);
 			pos += XSALSA20_CRYPTO_NONCEBYTES;
 		}
-		*((int *)pos) = htonl(pctx->keylen);
+		I32_P(pos) = htonl(pctx->keylen);
 		pos += sizeof (int);
 	}
 	if (Write(compfd, cread_buf, pos - cread_buf) != pos - cread_buf) {
