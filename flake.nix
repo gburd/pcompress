@@ -217,6 +217,9 @@
             gnumake
             gcc
             clang
+            llvmPackages.openmp  # libomp for clang -fopenmp
+            llvmPackages.bintools  # llvm-ar + lld for clang LTO builds
+            lcov  # coverage reports (make coverage)
 
             # Libraries
             openssl

@@ -108,7 +108,7 @@ BZLIB_OBJS = $(BZLIB_SRCS:.c=.o)
 BZLIB_CPPFLAGS = @LIBBZ2_INC@
 
 EXTRA_CPPFLAGS = $(CRYPTO_CPPFLAGS) $(ZLIB_CPPFLAGS) $(BZLIB_CPPFLAGS)
-EXTRA_LDFLAGS = -Wl,-z,muldefs
+EXTRA_LDFLAGS = @EXTRA_LD_FLAGS@
 
 RABINSRCS = rabin/rabin_dedup.c rabin/global/index.c rabin/global/dedupe_config.c
 RABINHDRS = rabin/rabin_dedup.h utils/utils.h rabin/global/index.h rabin/global/dedupe_config.h lzma/lzma_crc.h utils/qsort.h
@@ -279,7 +279,7 @@ BASE_CPPFLAGS = -I. -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I./rabin -I./
 COMMON_CPPFLAGS = $(BASE_CPPFLAGS) -std=gnu99
 COMMON_CPPFLAGS_cpp = $(BASE_CPPFLAGS)
 COMMON_VEC_FLAGS = -ftree-vectorize
-COMMON_LOOP_OPTFLAGS = $(VEC_FLAGS) -floop-interchange -floop-block
+COMMON_LOOP_OPTFLAGS = $(VEC_FLAGS) @GCC_LOOP_FLAGS@
 RPATH=@RPATH@
 DTAGS=@DTAGS@
 LDLIBS = @LDL@ -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
@@ -376,11 +376,11 @@ $(ARCHIVEOBJS): $(ARCHIVESRCS) $(ARCHIVEHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(PJPGOBJS): $(PJPGSRCS) $(PJPGHDRS)
-	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 -fsched-spec-load \
+	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 @GCC_SCHED_FLAGS@ \
 	$(VEC_FLAGS) -DBUILD_LIB $(COMMON_CPPFLAGS_cpp) $(@:.o=.cpp) -o $@
 
 $(PPNMOBJS): $(PPNMSRCS) $(PPNMHDRS)
-	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 -fsched-spec-load \
+	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 @GCC_SCHED_FLAGS@ \
 	$(VEC_FLAGS) -DBUILD_LIB $(COMMON_CPPFLAGS_cpp) $(@:.o=.cpp) -o $@
 
 $(WAVPKOBJS): $(WAVPKSRCS)
@@ -392,15 +392,15 @@ $(WAVPKOBJS): $(WAVPKSRCS)
 	fi
 
 $(DISPACKOBJS): $(DISPACKSRCS) $(DISPACKHDRS)
-	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @DEBUG_STATS_CPPFLAGS@ @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 -fsched-spec-load \
+	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @DEBUG_STATS_CPPFLAGS@ @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 @GCC_SCHED_FLAGS@ \
 	-Wno-variadic-macros $(VEC_FLAGS) $(COMMON_CPPFLAGS_cpp) $(@:.o=.cpp) -o $@
 
 $(DICTOBJS): $(DICTSRCS) $(DICTHDRS)
-	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @DEBUG_STATS_CPPFLAGS@ @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 -fsched-spec-load \
+	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @DEBUG_STATS_CPPFLAGS@ @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 @GCC_SCHED_FLAGS@ \
 	-Wno-variadic-macros $(VEC_FLAGS) $(COMMON_CPPFLAGS_cpp) $(@:.o=.cpp) -o $@
 
 $(SKEIN_BLOCK_OBJ): $(SKEIN_BLOCK_SRC)
-	$(COMPILE) $(SKEIN_FLAGS) $(SKEIN_BLOCK_SRC) -o $@
+	$(COMPILE) $(SKEIN_FLAGS) @GNU_AS_FLAG@ $(SKEIN_BLOCK_SRC) -o $@
 
 $(SKEINOBJS): $(SKEINSRCS) $(SKEINHDRS)
 	$(COMPILE) $(SKEIN_FLAGS) $(@:.o=.c) -o $@
@@ -415,7 +415,7 @@ $(KECCAK_OBJS): $(KECCAK_SRCS) $(KECCAK_HDRS)
 	$(COMPILE) $(KECCAK_FLAGS) $(@:.o=.c) -o $@
 
 $(KECCAK_OBJS_OPT64_ASM2): $(KECCAK_SRC_OPT64_ASM2)
-	$(COMPILE) $(KECCAK_FLAGS) $(@:.o=.s) -o $@
+	$(COMPILE) $(KECCAK_FLAGS) @GNU_AS_FLAG@ $(@:.o=.s) -o $@
 
 $(KECCAK_OBJS_OPT64_ASM3): $(KECCAK_SRC_OPT64_ASM3)
 	$(YASM_GAS) $(@:.o=.s) -o $@
@@ -432,7 +432,7 @@ $(CRYPTO_OBJS): $(CRYPTO_SRCS) $(CRYPTO_HDRS) $(CRYPTO_ASM_OBJS)
 	$(COMPILE) $(GEN_OPT) $(CRYPTO_CPPFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(CRYPTO_ASM_OBJS): $(CRYPTO_ASM_SRCS) $(CRYPTO_ASM_HDRS)
-	$(CRYPTO_ASM_COMPILE) -o $@ $(@:.o=.s)
+	$(CRYPTO_ASM_COMPILE) @GNU_AS_FLAG@ -o $@ $(@:.o=.s)
 
 $(CRYPTO_COMPAT_OBJS): $(CRYPTO_COMPAT_SRCS) $(CRYPTO_COMPAT_HDRS)
 	$(COMPILE) $(GEN_OPT) $(CRYPTO_CPPFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
@@ -496,7 +496,7 @@ $(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
 	-I$(LIBBSCDIR)/libbsc $(@:.o=.c) -o $@
 
 $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
-	ar rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
+	@AR@ rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
 $(LIB): Libarchive $(OBJS)  $(LIBBSCLIB)
 	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS)
@@ -516,34 +516,22 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit
-TEST_LINK_FLAGS = -L. -l$(LINKLIB) $(LDLIBS)
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_blake2
+# Tests link the objects directly: the shared library hides internal symbols.
+# LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 
 test-unit-build: $(LIB)
-	$(GCC) -o buildtmp/test_compress $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/unit/test_compress.c $(TEST_LINK_FLAGS)
-	$(GCC) -o buildtmp/test_xxhash $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/unit/test_xxhash.c $(TEST_LINK_FLAGS)
-	$(GCC) -o buildtmp/test_crc $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/unit/test_crc.c $(TEST_LINK_FLAGS)
-	$(GCC) -o buildtmp/test_slab $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/unit/test_slab.c $(TEST_LINK_FLAGS)
-	$(GCC) -o buildtmp/test_blake2 $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/unit/test_blake2.c $(TEST_LINK_FLAGS)
+	@for t in $(UNIT_TESTS); do \
+		echo "  BUILD buildtmp/$$t"; \
+		$(COMPILE) $(GEN_OPT) $(TEST_CPPFLAGS) test/unit/$$t.c -o buildtmp/$$t.o && \
+		$(LINK.PROG) -o buildtmp/$$t buildtmp/$$t.o $(OBJS) $(LDLIBS) || exit 1; \
+	done
 
 test-unit: test-unit-build
-	buildtmp/test_compress
-	buildtmp/test_xxhash
-	buildtmp/test_crc
-	buildtmp/test_slab
-	buildtmp/test_blake2
+	@for t in $(UNIT_TESTS); do buildtmp/$$t || exit 1; done
 
 test-integration: all
-	(cd test; sh integration/test_compress.sh)
-	(cd test; sh integration/test_archive.sh)
-	(cd test; sh integration/test_edge_cases.sh)
-	(cd test; sh integration/test_crypto.sh)
-	(cd test; sh integration/test_dedup.sh)
-	(cd test; sh integration/test_multithread.sh)
+	(cd test; sh run_all_tests.sh integration)
 
 test-all: all test-unit-build
 	(cd test; sh run_all_tests.sh all)
@@ -552,8 +540,8 @@ test-full: all test-unit-build bench-build
 	(cd test; sh run_all_tests.sh full)
 
 bench-build: $(LIB)
-	$(GCC) -o buildtmp/bench_algos $(GEN_OPT) $(TEST_CPPFLAGS) \
-		test/performance/bench_algos.c $(TEST_LINK_FLAGS)
+	$(COMPILE) $(GEN_OPT) $(TEST_CPPFLAGS) test/performance/bench_algos.c -o buildtmp/bench_algos.o
+	$(LINK.PROG) -o buildtmp/bench_algos buildtmp/bench_algos.o $(OBJS) $(LDLIBS)
 
 bench: bench-build
 	buildtmp/bench_algos
@@ -562,11 +550,11 @@ fuzz-build: $(LIB)
 	@echo "Building fuzz harnesses (requires clang with libFuzzer or AFL++)..."
 	@if command -v clang >/dev/null 2>&1; then \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_decompress \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_decompress.c $(TEST_LINK_FLAGS); \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_decompress.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_crc \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_crc.c $(TEST_LINK_FLAGS); \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_crc.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_compress \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(TEST_LINK_FLAGS); \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
 	else \
 		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
 	fi
@@ -580,7 +568,7 @@ fuzz: fuzz-build
 topclean:
 	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER)
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
-	$(RM) buildtmp/test_compress buildtmp/test_xxhash buildtmp/test_crc buildtmp/test_slab buildtmp/test_blake2 buildtmp/bench_algos
+	$(RM) buildtmp/test_* buildtmp/bench_algos*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress
 	$(RM) test.log
 	$(RM_RF) test/datafiles test/integration/datafiles

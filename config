@@ -51,6 +51,10 @@ ${prog} [<options>]
 --no-sse-detect		Do NOT attempt to probe the system's SSE capability for build flags.
 			Implies '--no-avx-detect' below.
 --no-avx-detect		Do NOT attempt to probe the system's AVX capability for build flags.
+--portable		Build a binary that runs on any CPU of this architecture (no host
+			CPU probing; SIMD paths are still selected at runtime). Use this
+			for distribution packages. Implies '--no-sse-detect'.
+--enable-lto		Enable link-time optimization (-flto) for the library and binary.
 --no-1.3-archive-compat Disable compatibility with compressed archives created with Pcompress
 			version 1.3 (default: retain compatibility). Hash formats changed from
 			version 1.3 to 1.4 so this option is required if files created using
@@ -220,6 +224,7 @@ dtag_val=',--enable-new-dtags'
 lrt="-lrt"
 ldl="-ldl"
 default_opt="O3"
+enable_lto=0
 max_opt="O3"
 libarchive_dir="archive/libarchive"
 enable_wavpack="-D_ENABLE_WAVPACK_"
@@ -378,6 +383,13 @@ do
 	;;
 	--no-avx-detect)
 		avx_detect=0
+	;;
+	--portable)
+		sse_detect=0
+		avx_detect=0
+	;;
+	--enable-lto)
+		enable_lto=1
 	;;
 	--no-1.3-archive-compat)
 		crypto_compat_objs=""
@@ -569,6 +581,33 @@ else
 	fi
 	echo "  GCC version: ${vers}"
 fi
+
+# GCC-only loop/scheduling flags are dropped for clang.
+gcc_loop_flags="-floop-interchange -floop-block"
+gcc_sched_flags="-fsched-spec-load"
+gnu_as_flag=""
+if [ $is_clang -eq 1 ]; then
+	gcc_loop_flags=""
+	gcc_sched_flags=""
+	# The x86 .s sources use GNU as macro directives (.psize, .altmacro).
+	[ $is_x86 -eq 1 ] && [ "$OS" != "Darwin" ] && gnu_as_flag="-fno-integrated-as"
+fi
+
+# Link-time optimization. GCC needs the plugin-aware archiver for the
+# static libbsc/libarchive archives; -flto=auto parallelises LTRANS.
+lto_flags=""
+if [ $enable_lto -eq 1 ]; then
+	if [ $is_clang -eq 1 ]; then
+		# GNU ld cannot read LLVM bitcode without the gold plugin; use lld.
+		lto_flags="-flto=thin -fuse-ld=lld"
+	else
+		lto_flags="-flto=auto -ffat-lto-objects"
+	fi
+	echo "  Link-time optimization: ${lto_flags}"
+fi
+# Honour user/distro CFLAGS and LDFLAGS (e.g. hardening flags).
+extra_opt_flags="${extra_opt_flags} ${lto_flags} ${CFLAGS}"
+extra_ld_flags="${LDFLAGS}"
 
 # ----------------------------------------------------------------
 # SSE / AVX detection (x86 only)
@@ -1293,6 +1332,11 @@ s#@${keccak_srcs_var}@#${keccak_srcs}#g
 s#@${keccak_srcs_asm_var}@#${keccak_srcs_asm}#g
 s#@${extra_opt_flags_var}@#${extra_opt_flags}#g
 s#@${sse_opt_flags_var}@#${sse_opt_flags}#g
+s#@GCC_LOOP_FLAGS@#${gcc_loop_flags}#g
+s#@GNU_AS_FLAG@#${gnu_as_flag}#g
+s#@GCC_SCHED_FLAGS@#${gcc_sched_flags}#g
+s#@EXTRA_LD_FLAGS@#${extra_ld_flags}#g
+s#@AR@#${AR:-ar}#g
 s#@${crypto_compat_objs_var}@#${crypto_compat_objs}#g
 s#@${crypto_compat_flags_var}@#${crypto_compat_flags}#g
 s#@${salsa20_stream_c_var}@#${salsa20_stream_c}#g

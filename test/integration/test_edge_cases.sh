@@ -4,7 +4,7 @@
 # Tests empty files, single-byte inputs, invalid parameters, and corrupted data.
 #
 
-PCOMPRESS="../../pcompress"
+PCOMPRESS="${PCOMPRESS:-$(cd "$(dirname "$0")/../.." && pwd)/pcompress}"
 PASS=0
 FAIL=0
 SKIP=0
@@ -150,6 +150,11 @@ echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "========================================="
 
 if [ $FAIL -gt 0 ]; then
+	exit 1
+fi
+# Nothing ran: treat as failure so a broken harness cannot pass silently.
+if [ $PASS -eq 0 ]; then
+	echo "ERROR: no test cases ran"
 	exit 1
 fi
 exit 0

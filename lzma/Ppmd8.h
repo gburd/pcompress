@@ -32,6 +32,27 @@ This code is based on:
 #ifndef __PPMD8_H
 #define __PPMD8_H
 
+/*
+ * Pcompress: libarchive ships its own Ppmd8_* with different signatures.
+ * Prefix our copy so the two never collide at link time.
+ */
+#define Ppmd8_Alloc		pc_Ppmd8_Alloc
+#define Ppmd8_Construct		pc_Ppmd8_Construct
+#define Ppmd8_DecodeSymbol	pc_Ppmd8_DecodeSymbol
+#define Ppmd8_DecodeToBuffer	pc_Ppmd8_DecodeToBuffer
+#define Ppmd8_EncodeBuffer	pc_Ppmd8_EncodeBuffer
+#define Ppmd8_EncodeSymbol	pc_Ppmd8_EncodeSymbol
+#define Ppmd8_Free		pc_Ppmd8_Free
+#define Ppmd8_Init		pc_Ppmd8_Init
+#define PPMD8_kExpEscape	pc_PPMD8_kExpEscape
+#define Ppmd8_MakeEscFreq	pc_Ppmd8_MakeEscFreq
+#define Ppmd8_RangeDec_Init	pc_Ppmd8_RangeDec_Init
+#define Ppmd8_RangeEnc_FlushData pc_Ppmd8_RangeEnc_FlushData
+#define Ppmd8_Update1		pc_Ppmd8_Update1
+#define Ppmd8_Update1_0		pc_Ppmd8_Update1_0
+#define Ppmd8_Update2		pc_Ppmd8_Update2
+#define Ppmd8_UpdateBin		pc_Ppmd8_UpdateBin
+
 
 #include "Ppmd.h"
 
