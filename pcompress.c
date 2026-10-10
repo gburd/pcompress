@@ -2350,6 +2350,8 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 			if (chunksize < RAB_MIN_CHUNK_SIZE) {
 				pctx->enable_rabin_scan = 0;
 				pctx->enable_rabin_global = 0;
+				pctx->enable_fixed_scan = 0;
+				pctx->enable_delta_encode = 0;
 			}
 
 			/*
@@ -3023,6 +3025,24 @@ init_algo(pc_ctx_t *pctx, const char *algo, int bail)
 {
 	int rv = 1;
 	char algorithm[9];
+
+	/*
+	 * Names are matched by prefix because the file header stores them in
+	 * a fixed 8-byte field. A user-supplied name (bail != 0) must match
+	 * exactly, else "nonexistent" would silently select "none".
+	 */
+	if (bail) {
+		static const char *names[] = { "zlib", "lzmaMt", "lzma", "bzip2",
+		    "ppmd", "lzfx", "lz4", "zstd", "none", "adapt2", "adapt",
+		    "libbsc", NULL };
+		int i;
+
+		for (i = 0; names[i] != NULL; i++)
+			if (strcmp(algo, names[i]) == 0)
+				break;
+		if (names[i] == NULL)
+			return (1);
+	}
 
 	/* Copy given string into known length buffer to avoid memcmp() overruns. */
 	strncpy(algorithm, algo, 8);
