@@ -603,11 +603,13 @@ gnu_as_flag=""
 # libsais evaluates '_BYTE_ORDER == _BIG_ENDIAN', which breaks where
 # _BIG_ENDIAN is defined empty (illumos). Tell it the byte order directly.
 bsc_endian_flag=""
+# libbsc assumes unaligned loads are legal unless told otherwise.
+[ $is_x86 -eq 0 ] && [ $is_arm -eq 0 ] && bsc_endian_flag="-DLIBBSC_NO_UNALIGNED_ACCESS"
 if [ "$OS" = "SunOS" ]; then
 	if echo '__BYTE_ORDER__' | ${GCC} -E -P - 2>/dev/null | grep -q 4321; then
-		bsc_endian_flag='-D__BIG_ENDIAN__'
+		bsc_endian_flag="${bsc_endian_flag} -D__BIG_ENDIAN__"
 	else
-		bsc_endian_flag='-D__LITTLE_ENDIAN__'
+		bsc_endian_flag="${bsc_endian_flag} -D__LITTLE_ENDIAN__"
 	fi
 fi
 if [ $is_clang -eq 1 ]; then
