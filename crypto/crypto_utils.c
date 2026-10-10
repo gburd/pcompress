@@ -315,16 +315,6 @@ init_blake2(void)
 	blake2_module_init(&bdsp, &proc_info);
 }
 
-void
-list_checksums(FILE *strm, char *pad)
-{
-	int i;
-	for (i=0; i<(sizeof (cksum_props)/sizeof (cksum_props[0])); i++) {
-		if (!cksum_props[i].compatible)
-			fprintf(strm, "%s%10s - %s\n", pad, cksum_props[i].name, cksum_props[i].desc);
-	}
-}
-
 /*
  * Check if either the given checksum name or id is valid and
  * return it's properties.
@@ -864,19 +854,6 @@ crypto_clean_pkey(crypto_ctx_t *cctx)
 		salsa20_clean_pkey((salsa20_ctx_t *)(cctx->crypto_ctx));
 	}
 	cctx->pkey = NULL;
-}
-
-void
-cleanup_crypto(crypto_ctx_t *cctx)
-{
-	if (cctx->crypto_alg == CRYPTO_ALG_AES) {
-		aes_cleanup((aes_ctx_t *)(cctx->crypto_ctx));
-	} else {
-		salsa20_cleanup((salsa20_ctx_t *)(cctx->crypto_ctx));
-	}
-	memset(cctx->salt, 0, 32);
-	free(cctx->salt);
-	free(cctx);
 }
 
 int

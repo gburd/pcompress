@@ -100,8 +100,6 @@ typedef struct global_blockentry {
 } global_blockentry_t;
 #pragma pack()
 
-int read_config(char *configfile, archive_config_t *cfg);
-int write_config(char *configfile, archive_config_t *cfg);
 int set_config_s(archive_config_t *cfg, const char *algo, cksum_t ck, cksum_t ck_sim,
 		uint32_t chunksize, size_t file_sz, uint64_t user_chunk_sz,
 		int pct_interval);

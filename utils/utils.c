@@ -83,43 +83,6 @@ init_pcompress() {
 }
 
 /*
- * Fetch the command name that started the current process.
- * The returned string must be freed by the caller.
- */
-const char *
-get_execname(const char *argv0)
-{
-	char path[MAXPATHLEN];
-	char apath[128];
-	char *tmp1, *tmp2;
-	pid_t pid;
-
-	/* The easiest case: we are in linux */
-	if (readlink("/proc/self/exe", path, MAXPATHLEN) != -1) {
-		return (strdup(basename(path)));
-	}
-
-	/* Next easy case: Solaris/Illumos */
-	pid = getpid();
-	sprintf(apath, "/proc/%d/path/a.out", pid);
-	if (readlink(apath, path, MAXPATHLEN) != -1) {
-		return (strdup(basename(path)));
-	}
-
-	/* Oops... not in linux, not in Solaris no  guarantee */
-	/* check if we have something like execve("foobar", NULL, NULL) */
-	if (argv0 == NULL) {
-		/* Give up */
-		return (strdup("Unknown"));
-	}
-
-	tmp1 = strdup(argv0);
-	tmp2 = strdup(basename(tmp1));
-	free(tmp1);
-	return (tmp2);
-}
-
-/*
  * Routines to parse a numeric string which can have the following suffixes:
  * k - Kilobyte
  * m - Megabyte

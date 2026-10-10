@@ -54,36 +54,6 @@ typedef struct {
 	char *index_file;
 } index_t;
 
-archive_config_t *
-init_global_db(char *configfile)
-{
-	archive_config_t *cfg;
-	int rv;
-
-	cfg = calloc(1, sizeof (archive_config_t));
-	if (!cfg) {
-		log_msg(LOG_ERR, 0, "Memory allocation failure\n");
-		return (NULL);
-	}
-
-	rv = read_config(configfile, cfg);
-	if (rv != 0)
-		return (NULL);
-
-	return (cfg);
-}
-
-int
-init_on_disk_index(archive_config_t *cfg)
-{
-#if 0
-        if (file_exists()) {
-
-        }
-#endif
-	return (0);
-}
-
 void
 static cleanup_indx(index_t *indx)
 {

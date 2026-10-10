@@ -109,7 +109,6 @@ int compute_checksum(uchar_t *cksum_buf, int cksum, uchar_t *buf, uint64_t bytes
  * @param strm  Output stream.
  * @param pad   Prefix string for each line.
  */
-void list_checksums(FILE *strm, char *pad);
 
 /**
  * Get properties of a named checksum algorithm.
@@ -168,7 +167,6 @@ uchar_t *crypto_nonce(crypto_ctx_t *cctx);
 void crypto_clean_pkey(crypto_ctx_t *cctx);
 
 /** Clean up all resources in a crypto context. */
-void cleanup_crypto(crypto_ctx_t *cctx);
 
 /**
  * Prompt the user for a password.
