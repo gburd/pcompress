@@ -1418,6 +1418,20 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			}
 		}
 
+		/*
+		 * Listing an archive with a metadata stream decompresses metadata
+		 * only; data reads are served from a dummy buffer. It must exist
+		 * before the extractor thread starts reading.
+		 */
+		if (pctx->list_mode && pctx->meta_stream) {
+			pctx->temp_mmap_buf = (uchar_t *)slab_alloc(NULL, chunksize);
+			pctx->temp_mmap_len = chunksize;
+			if (pctx->temp_mmap_buf == NULL) {
+				log_msg(LOG_ERR, 0, "Out of memory");
+				UNCOMP_BAIL;
+			}
+		}
+
 		uncompfd = -1;
 		if (setup_extractor(pctx) == -1) {
 			log_msg(LOG_ERR, 0, "Setup of extraction context failed.");
@@ -1468,11 +1482,8 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	 * metadata stream, then we do not do any data decompression. Only
 	 * metadata is decompressed.
 	 */
-	if (pctx->list_mode && pctx->meta_stream) {
+	if (pctx->list_mode && pctx->meta_stream)
 		pctx->nthreads = 0;
-		pctx->temp_mmap_buf = (uchar_t *)slab_alloc(NULL, chunksize);
-		pctx->temp_mmap_len = chunksize;
-	}
 
 	if (pctx->nthreads * props.nthreads > 1)
 		log_msg(LOG_INFO, 0, "Scaling to %d threads", pctx->nthreads * props.nthreads);
@@ -2309,6 +2320,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 
 			if (sbuf.st_size == 0) {
 				close(uncompfd);
+				log_msg(LOG_ERR, 0, "File %s is empty; nothing to compress.", filename);
 				return (1);
 			}
 		} else {
