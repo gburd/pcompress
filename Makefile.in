@@ -543,6 +543,25 @@ bench-build: $(LIB)
 	$(COMPILE) $(GEN_OPT) $(TEST_CPPFLAGS) test/performance/bench_algos.c -o buildtmp/bench_algos.o
 	$(LINK.PROG) -o buildtmp/bench_algos buildtmp/bench_algos.o $(OBJS) $(LDLIBS)
 
+# Coverage of project-owned code (configure with --enable-coverage).
+# Third-party trees (lz4, zstd, bsc, libarchive, LZMA SDK, crypto
+# reference code, packJPG/packPNM/dispack/dict) are excluded.
+COV_EXCLUDE = '*/lz4/*' '*/zstd/*' '*/bsc/*' '*/archive/libarchive/*' \
+	'*/lzma/*' '*/crypto/blake2/*' '*/crypto/keccak/*' '*/crypto/skein/*' \
+	'*/crypto/sha2/*' '*/crypto/aes/*' '*/crypto/scrypt/*' '*/crypto/xsalsa20/*' \
+	'*/crypto/old/*' '*/utils/phash/*' '*/filters/packjpg/*' '*/filters/packpnm/*' \
+	'*/filters/dispack/*' '*/filters/dict/*' '*/test/*' '/nix/*' '/usr/*'
+coverage: all test-unit-build
+	lcov -q --zerocounters --directory .
+	-$(MAKE) test-unit
+	-(cd test; sh run_all_tests.sh integration)
+	-sh test/feature_matrix.sh "`pwd`/pcompress" "`pwd`/buildtmp/matrix" quick
+	lcov -q --capture --directory . --output-file coverage.info \
+		--rc branch_coverage=1 --ignore-errors mismatch,negative,inconsistent,unused,empty
+	lcov -q --remove coverage.info $(COV_EXCLUDE) --output-file coverage.info \
+		--rc branch_coverage=1 --ignore-errors unused,empty
+	lcov --summary coverage.info --rc branch_coverage=1
+
 bench: bench-build
 	buildtmp/bench_algos
 

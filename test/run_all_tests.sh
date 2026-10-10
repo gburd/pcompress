@@ -10,6 +10,7 @@
 # Categories:
 #   unit         - C unit tests (fast)
 #   integration  - Shell-based integration tests
+#   matrix       - Full feature round-trip matrix (all algorithms/levels)
 #   legacy       - Original t1-t9 test suite
 #   bench        - Performance benchmarks
 #   fuzz         - Quick fuzz smoke test (60s per target)
@@ -99,6 +100,12 @@ run_integration_tests() {
 	cd "${SCRIPT_DIR}"
 }
 
+# --- Feature matrix (every CLI feature, round-trip verified) ---
+run_feature_matrix() {
+	run_section "Feature matrix" sh "${SCRIPT_DIR}/feature_matrix.sh" \
+	    "${BUILD_DIR}/pcompress" "" ${MATRIX_MODE:-quick}
+}
+
 # --- Legacy Tests (original t1-t9) ---
 run_legacy_tests() {
 	cd "${SCRIPT_DIR}"
@@ -149,19 +156,24 @@ case "$category" in
 	fuzz)
 		run_fuzz_smoke
 		;;
+	matrix)
+		MATRIX_MODE=full run_feature_matrix
+		;;
 	all)
 		run_unit_tests
 		run_integration_tests
+		run_feature_matrix
 		;;
 	full)
 		run_unit_tests
 		run_integration_tests
+		MATRIX_MODE=full run_feature_matrix
 		run_legacy_tests
 		run_benchmarks
 		;;
 	*)
 		echo "Unknown category: $category"
-		echo "Usage: $0 [unit|integration|legacy|bench|fuzz|all|full]"
+		echo "Usage: $0 [unit|integration|matrix|legacy|bench|fuzz|all|full]"
 		exit 1
 		;;
 esac

@@ -70,14 +70,15 @@ for algo in lz4 zlib lzma zstd; do
 		fi
 
 		# Verify extracted files match originals
+		# The archive stores the path as given on the command line (like tar).
 		all_ok=1
 		for f in file1.txt file2.txt binary.bin subdir/nested.txt subdir/zeros.bin; do
-			if [ ! -f "$OUTDIR/arctest/$f" ]; then
+			if [ ! -f "$OUTDIR/$ARCDIR/$f" ]; then
 				log_fail "${label}: missing $f"
 				all_ok=0
 				break
 			fi
-			if ! diff -q "$ARCDIR/$f" "$OUTDIR/arctest/$f" > /dev/null 2>&1; then
+			if ! diff -q "$ARCDIR/$f" "$OUTDIR/$ARCDIR/$f" > /dev/null 2>&1; then
 				log_fail "${label}: $f content mismatch"
 				all_ok=0
 				break

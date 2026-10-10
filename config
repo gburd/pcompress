@@ -55,6 +55,7 @@ ${prog} [<options>]
 			CPU probing; SIMD paths are still selected at runtime). Use this
 			for distribution packages. Implies '--no-sse-detect'.
 --enable-lto		Enable link-time optimization (-flto) for the library and binary.
+--enable-coverage	Build with gcov instrumentation (-O0 --coverage) for 'make coverage'.
 --no-1.3-archive-compat Disable compatibility with compressed archives created with Pcompress
 			version 1.3 (default: retain compatibility). Hash formats changed from
 			version 1.3 to 1.4 so this option is required if files created using
@@ -225,6 +226,7 @@ lrt="-lrt"
 ldl="-ldl"
 default_opt="O3"
 enable_lto=0
+enable_coverage=0
 max_opt="O3"
 libarchive_dir="archive/libarchive"
 enable_wavpack="-D_ENABLE_WAVPACK_"
@@ -390,6 +392,9 @@ do
 	;;
 	--enable-lto)
 		enable_lto=1
+	;;
+	--enable-coverage)
+		enable_coverage=1
 	;;
 	--no-1.3-archive-compat)
 		crypto_compat_objs=""
@@ -604,6 +609,10 @@ if [ $enable_lto -eq 1 ]; then
 		lto_flags="-flto=auto -ffat-lto-objects"
 	fi
 	echo "  Link-time optimization: ${lto_flags}"
+fi
+if [ $enable_coverage -eq 1 ]; then
+	lto_flags="${lto_flags} --coverage"
+	default_opt="O3"; max_opt="O0"
 fi
 # Honour user/distro CFLAGS and LDFLAGS (e.g. hardening flags).
 extra_opt_flags="${extra_opt_flags} ${lto_flags} ${CFLAGS}"
