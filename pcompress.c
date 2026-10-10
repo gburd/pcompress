@@ -3257,6 +3257,18 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	ff.exe_preprocess = 0;
 
 	pthread_mutex_lock(&opt_parse);
+	/*
+	 * Reset getopt() so the library can parse more than once. optind = 1
+	 * is POSIX; glibc additionally needs 0 for a full reset, BSDs optreset.
+	 */
+#if defined(__GLIBC__)
+	optind = 0;
+#else
+	optind = 1;
+#endif
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+	optreset = 1;
+#endif
 	while ((opt = getopt(argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhV")) != -1) {
 		int ovr;
 		int64_t chunksize;
@@ -3456,7 +3468,6 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	}
 opt_done:
 	my_optind = optind;
-	optind = 0;
 	pthread_mutex_unlock(&opt_parse);
 	if (err)
 		return (err);
