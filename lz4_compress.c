@@ -104,30 +104,39 @@ lz4_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	int rv;
 	struct lz4_params *lzdat = (struct lz4_params *)data;
 	int _srclen = srclen;
+	/* Never write past the caller's buffer; LZ4 returns 0 if it won't fit. */
+	int _dstlen = (*dstlen > INT_MAX) ? INT_MAX : (int)*dstlen;
 	uchar_t *dst2;
 
 	if (lzdat->level == 1) {
 		rv = LZ4_compress_default((const char *)src, (char *)dst,
-		    _srclen, LZ4_compressBound(_srclen));
+		    _srclen, _dstlen);
 
 	} else if (lzdat->level == 2) {
+		int bound;
+
 		rv = LZ4_compress_default((const char *)src, (char *)dst,
-		    _srclen, LZ4_compressBound(_srclen));
-		if (rv == 0 || rv > *dstlen) {
+		    _srclen, _dstlen);
+		if (rv == 0 || _dstlen < (int)sizeof (int))
 			return (-1);
-		}
-		dst2 = (uchar_t *)slab_alloc(NULL, rv + sizeof (int) + LZ4_compressBound(rv));
+		bound = LZ4_compressBound(rv);
+		dst2 = (uchar_t *)slab_alloc(NULL, sizeof (int) + bound);
+		if (dst2 == NULL)
+			return (-1);
 		*((int *)dst2) = htonl(rv);
 		rv = LZ4_compress_HC((const char *)dst, (char *)(dst2 + sizeof (int)),
-		    rv, LZ4_compressBound(rv), LZ4HC_CLEVEL_DEFAULT);
+		    rv, bound, LZ4HC_CLEVEL_DEFAULT);
 		if (rv != 0) {
 			rv += sizeof (int);
-			memcpy(dst, dst2, rv);
+			if (rv > _dstlen)
+				rv = 0;
+			else
+				memcpy(dst, dst2, rv);
 		}
 		slab_free(NULL, dst2);
 	} else {
 		rv = LZ4_compress_HC((const char *)src, (char *)dst,
-		    _srclen, LZ4_compressBound(_srclen), LZ4HC_CLEVEL_DEFAULT);
+		    _srclen, _dstlen, LZ4HC_CLEVEL_DEFAULT);
 	}
 	if (rv == 0) {
 		return (-1);
