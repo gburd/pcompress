@@ -52,10 +52,10 @@ typedef struct {
 	uint64_t memused;
 	int hash_entry_size, intervals, hash_slots;
 	char *index_file;
-} index_t;
+} pc_index_t;
 
 void
-static cleanup_indx(index_t *indx)
+static cleanup_indx(pc_index_t *indx)
 {
 	int i, j;
 
@@ -194,7 +194,7 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 	uint32_t hash_slots, intervals, i;
 	uint64_t memreqd;
 	int hash_entry_size;
-	index_t *indx;
+	pc_index_t *indx;
 
 	if (path != NULL) {
 		log_msg(LOG_WARN, 0, "Disk based index not yet implemented.\n");
@@ -216,7 +216,7 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 	/*
 	 * Now initialize the hashtable[s] to setup the index. 
 	 */
-	indx = calloc(1, sizeof (index_t));
+	indx = calloc(1, sizeof (pc_index_t));
 	if (!indx) {
 		free(cfg);
 		return (NULL);
@@ -457,7 +457,7 @@ db_lookup_insert_s(archive_config_t *cfg, uchar_t *sim_cksum, int interval,
 		   uint64_t item_offset, uint32_t item_size, int do_insert)
 {
 	uint32_t htab_entry;
-	index_t *indx = (index_t *)(cfg->db_index);
+	pc_index_t *indx = (pc_index_t *)(cfg->db_index);
 	hash_entry_t **htab, *ent, **pent;
 
 	assert((cfg->similarity_cksum_sz & (sizeof (size_t) - 1)) == 0);
@@ -531,7 +531,7 @@ void
 destroy_global_db_s(archive_config_t *cfg)
 {
 	int i;
-	index_t *indx = (index_t *)(cfg->db_index);
+	pc_index_t *indx = (pc_index_t *)(cfg->db_index);
 
 	cleanup_indx(indx);
 	if (cfg->pct_interval > 0) {

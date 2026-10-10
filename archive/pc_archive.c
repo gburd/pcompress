@@ -30,6 +30,13 @@
  *
  * Sorting is enabled for compression levels greater than 6.
  */
+/* struct FTW and nftw() need X/Open; must precede every system header. */
+#if !defined(_XOPEN_SOURCE) && !defined(__APPLE__)
+#define _XOPEN_SOURCE 700
+#endif
+#if defined(__sun)
+#define __EXTENSIONS__
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -51,8 +58,6 @@
 #include "archive/pc_archive.h"
 #include "meta_stream.h"
 
-#undef _FEATURES_H
-#define _XOPEN_SOURCE 700
 #include <ftw.h>
 #include <stdint.h>
 
@@ -1879,7 +1884,7 @@ out:
 #	define	ELFINT (0x7f454c46U)
 
 /* TZif packed into 32-bit integer. */
-#	define	TZSINT	(0x545a6966U)
+#	define	TZINT	(0x545a6966U)
 
 /* PPMZ packed into 32-bit integer. */
 #	define	PPMINT	(0x50504d5aU)

@@ -599,6 +599,9 @@ fi
 gcc_loop_flags="-floop-interchange -floop-block"
 gcc_sched_flags="-fsched-spec-load"
 gnu_as_flag=""
+# libsais tests '_BIG_ENDIAN == ...'; illumos defines _BIG_ENDIAN empty.
+bsc_endian_flag=""
+[ "$OS" = "SunOS" ] && bsc_endian_flag='-U_BIG_ENDIAN -U_LITTLE_ENDIAN'
 if [ $is_clang -eq 1 ]; then
 	gcc_loop_flags=""
 	gcc_sched_flags=""
@@ -1359,6 +1362,7 @@ s#@${keccak_srcs_asm_var}@#${keccak_srcs_asm}#g
 s#@${extra_opt_flags_var}@#${extra_opt_flags}#g
 s#@${sse_opt_flags_var}@#${sse_opt_flags}#g
 s#@GCC_LOOP_FLAGS@#${gcc_loop_flags}#g
+s#@BSC_ENDIAN_FLAG@#${bsc_endian_flag}#g
 s#@GNU_AS_FLAG@#${gnu_as_flag}#g
 s#@GCC_SCHED_FLAGS@#${gcc_sched_flags}#g
 s#@EXTRA_LD_FLAGS@#${extra_ld_flags}#g

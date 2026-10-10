@@ -67,10 +67,12 @@
 #elif defined( BSD ) && ( BSD >= 199103 ) || defined( __APPLE__ ) || \
       defined( __CYGWIN32__ ) || defined( __DJGPP__ ) || defined( __osf__ )
 #  include <machine/endian.h>
+#elif defined( __sun )
+#  include <sys/byteorder.h>
 #elif defined( __linux__ ) || defined( __GNUC__ ) || defined( __GNU_LIBRARY__ )
 #  if !defined( __MINGW32__ ) && !defined(AVR)
 #    include <endian.h>
-#    if !defined( __BEOS__ )
+#    if !defined( __BEOS__ ) && defined( __linux__ )
 #      include <byteswap.h>
 #    endif
 #  endif
