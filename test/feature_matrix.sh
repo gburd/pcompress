@@ -119,8 +119,11 @@ for opt in "-c adapt2 -l14" "-c lzma -l6 -j -x" "-c zstd -l6 -j -x -T" "-c zstd 
 done
 # -K: do not overwrite newer files on extraction.
 rm -f a.pz; find ax -delete 2>/dev/null; mkdir -p ax/tree
-"$PC" -a -c lz4 -l1 tree a >/dev/null 2>&1; echo newer > ax/tree/one.dat; touch -d '+1 hour' ax/tree/one.dat 2>/dev/null || touch ax/tree/one.dat
-if "$PC" -d -K a.pz ax >d.log 2>&1 && [ "$(cat ax/tree/one.dat)" = newer ] && cmp -s tree/num.dat ax/tree/num.dat; then
+# Skip a large entry (tree/sub/mixed.dat): following entries must still extract.
+mkdir -p ax/tree/sub
+"$PC" -a -c lz4 -l1 tree a >/dev/null 2>&1; echo newer > ax/tree/sub/mixed.dat; touch -d '+1 hour' ax/tree/sub/mixed.dat 2>/dev/null || touch ax/tree/sub/mixed.dat
+"$PC" -d -K a.pz ax >d.log 2>&1
+if [ "$(cat ax/tree/sub/mixed.dat)" = newer ] && cmp -s tree/num.dat ax/tree/num.dat && cmp -s tree/img.ppm ax/tree/img.ppm; then
 	pass=$((pass+1)); echo "PASS archive-K"; else fail=$((fail+1)); echo "FAIL archive-K"; tail -n 3 d.log; fi
 # Multiple paths on the command line; archive to stdout.
 rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax

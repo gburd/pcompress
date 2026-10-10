@@ -36,9 +36,6 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <errno.h>
-#ifndef __APPLE__
-#include <link.h>
-#endif
 #include <signal.h>
 #include <rabin_dedup.h>
 #include <cpuid.h>
@@ -53,7 +50,7 @@
 #include <mach/mach_time.h>
 
 static mach_timebase_info_data_t sTimebaseInfo;
-#else
+#elif defined(__linux__)
 #include <sys/sysinfo.h>
 #endif
 
@@ -409,6 +406,23 @@ get_sys_limits(my_sysinfo *msys_info)
 	msys_info->mem_unit = pagesize;
 	msys_info->sharedram = vm_stat.wire_count * pagesize;
 
+#elif !defined(__linux__)
+	/* POSIX-ish fallback (illumos/Solaris, BSDs): no swap/shared figures. */
+	{
+		long pg = sysconf(_SC_PAGESIZE);
+#ifdef _SC_AVPHYS_PAGES
+		long av = sysconf(_SC_AVPHYS_PAGES);
+#else
+		long av = -1;
+#endif
+		(void) rv;
+		msys_info->mem_unit = pg > 0 ? pg : 4096;
+		msys_info->totalram = get_total_ram();
+		msys_info->freeram = av > 0 ? (uint64_t)av * msys_info->mem_unit :
+		    msys_info->totalram / 2;
+		msys_info->totalswap = msys_info->freeswap = 0;
+		msys_info->sharedram = 0;
+	}
 #else
 	struct sysinfo sys_info;
 	rv = sysinfo(&sys_info);

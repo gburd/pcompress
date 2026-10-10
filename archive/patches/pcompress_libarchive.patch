@@ -307,7 +307,7 @@ index 0c374f48..68703e2f 100644
  
  
 diff --git a/libarchive/archive_virtual.c b/libarchive/archive_virtual.c
-index 97e0b8a0..ea343c8e 100644
+index 97e0b8a0..8b6b77b2 100644
 --- a/libarchive/archive_virtual.c
 +++ b/libarchive/archive_virtual.c
 @@ -113,8 +113,15 @@ archive_read_finish(struct archive *a)
@@ -327,13 +327,21 @@ index 97e0b8a0..ea343c8e 100644
  }
  
  int
-@@ -145,13 +152,27 @@ archive_write_data_block(struct archive *a, const void *buff, size_t s,
+@@ -145,13 +152,43 @@ archive_write_data_block(struct archive *a, const void *buff, size_t s,
  int
  archive_read_next_header(struct archive *a, struct archive_entry **entry)
  {
 -	return ((a->vtable->archive_read_next_header)(a, entry));
 +	int rv;
 +
++	/*
++	 * Pcompress: any unread data of the previous entry lives in the
++	 * data stream; skip it before switching reads to the metadata
++	 * stream, or the skip would consume metadata instead.
++	 */
++	if (a->is_metadata_streaming && a->state == ARCHIVE_STATE_DATA &&
++	    archive_read_data_skip(a) == ARCHIVE_FATAL)
++		return (ARCHIVE_FATAL);
 +	if (a->is_metadata_streaming)
 +		a->cb_is_metadata = 1;
 +	rv = (a->vtable->archive_read_next_header)(a, entry);
@@ -348,6 +356,14 @@ index 97e0b8a0..ea343c8e 100644
 -	return ((a->vtable->archive_read_next_header2)(a, entry));
 +	int rv;
 +
++	/*
++	 * Pcompress: any unread data of the previous entry lives in the
++	 * data stream; skip it before switching reads to the metadata
++	 * stream, or the skip would consume metadata instead.
++	 */
++	if (a->is_metadata_streaming && a->state == ARCHIVE_STATE_DATA &&
++	    archive_read_data_skip(a) == ARCHIVE_FATAL)
++		return (ARCHIVE_FATAL);
 +	if (a->is_metadata_streaming)
 +		a->cb_is_metadata = 1;
 +	rv = (a->vtable->archive_read_next_header2)(a, entry);
@@ -357,7 +373,7 @@ index 97e0b8a0..ea343c8e 100644
  }
  
  int
-@@ -160,3 +181,20 @@ archive_read_data_block(struct archive *a,
+@@ -160,3 +197,20 @@ archive_read_data_block(struct archive *a,
  {
  	return ((a->vtable->archive_read_data_block)(a, buff, s, o));
  }
