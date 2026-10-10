@@ -108,6 +108,7 @@ usage(pc_ctx_t *pctx)
 "       -c <algorithm>\n"
 "                The compression algorithm. Default algorithm when archiving is adapt2.\n"
 "       -v       Enables verbose mode.\n\n"
+"       -h       Show this help.  -V  Show the version.\n\n"
 "       -t <number>\n"
 "                Sets the number of compression threads. Default: core count.\n"
 "       -T       Disable separate metadata stream.\n"
@@ -3256,7 +3257,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	ff.exe_preprocess = 0;
 
 	pthread_mutex_lock(&opt_parse);
-	while ((opt = getopt(argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTn")) != -1) {
+	while ((opt = getopt(argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhV")) != -1) {
 		int ovr;
 		int64_t chunksize;
 
@@ -3272,7 +3273,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->algo = optarg;
 			if (init_algo(pctx, pctx->algo, 1) != 0) {
 				log_msg(LOG_ERR, 0, "Invalid algorithm %s", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3280,21 +3281,21 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			ovr = parse_numeric(&chunksize, optarg);
 			if (ovr == 1) {
 				log_msg(LOG_ERR, 0, "Chunk size too large %s", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 
 			} else if (ovr == 2) {
 				log_msg(LOG_ERR, 0, "Invalid number %s", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			pctx->chunksize = chunksize;
 
 			if (pctx->chunksize < MIN_CHUNK) {
 				log_msg(LOG_ERR, 0, "Minimum chunk size is %ld", MIN_CHUNK);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			if (pctx->chunksize > EIGHTY_PCT(get_total_ram())) {
 				log_msg(LOG_ERR, 0, "Chunk size must not exceed 80%% of total RAM.");
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3302,7 +3303,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->level = atoi(optarg);
 			if (pctx->level < 0 || pctx->level > MAX_LEVEL) {
 				log_msg(LOG_ERR, 0, "Compression level should be in range 0 - 14");
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3310,7 +3311,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->rab_blk_size = atoi(optarg);
 			if (pctx->rab_blk_size < 0 || pctx->rab_blk_size > 5) {
 				log_msg(LOG_ERR, 0, "Average Dedupe block size must be in range 0 (2k), 1 (4k) .. 5 (64k)");
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3322,7 +3323,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->nthreads = atoi(optarg);
 			if (pctx->nthreads < 1 || pctx->nthreads > 256) {
 				log_msg(LOG_ERR, 0, "Thread count should be in range 1 - 256");
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3361,7 +3362,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			if (pctx->encrypt_type == 0) {
 				log_msg(LOG_ERR, 0, "Invalid encryption algorithm. "
 				    "Should be AES or SALSA20.", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3391,7 +3392,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->keylen = atoi(optarg);
 			if ((pctx->keylen != 16 && pctx->keylen != 32) || pctx->keylen > MAX_KEYLEN) {
 				log_msg(LOG_ERR, 0, "Encryption KEY length should be 16 or 32.", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3399,7 +3400,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			if (get_checksum_props(optarg, &(pctx->cksum), &(pctx->cksum_bytes),
 			    &(pctx->mac_bytes), 0) == -1) {
 				log_msg(LOG_ERR, 0, "Invalid checksum type %s", optarg);
-				return (1);
+				{ err = 1; goto opt_done; }
 			}
 			break;
 
@@ -3440,15 +3441,25 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->enable_archive_sort = -1;
 			break;
 
+		    case 'h':
+			{ err = 3; goto opt_done; }
+
+		    case 'V':
+			printf("pcompress %s\n", UTILITY_VERSION);
+			{ err = 4; goto opt_done; }
+
 		    case '?':
 		    default:
-			return (2);
+			{ err = 2; goto opt_done; }
 			break;
 		}
 	}
+opt_done:
 	my_optind = optind;
 	optind = 0;
 	pthread_mutex_unlock(&opt_parse);
+	if (err)
+		return (err);
 
 	if ((pctx->do_compress && pctx->do_uncompress) || (!pctx->do_compress && !pctx->do_uncompress)) {
 		return (2);

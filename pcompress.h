@@ -455,7 +455,8 @@ pc_ctx_t *create_pc_context(void);
  * Initialize a context from a single argument string (space-delimited).
  * @param pctx  Context created by create_pc_context().
  * @param args  Space-separated argument string (as if from command line).
- * @return 0 on success, 2 if help requested, -1 on error.
+ * @return 0 on success, 1 on invalid arguments (reported via log_msg),
+ *         2 on a usage error, 3 if -h was given, 4 if -V was given.
  */
 int init_pc_context_argstr(pc_ctx_t *pctx, char *args);
 
@@ -464,7 +465,8 @@ int init_pc_context_argstr(pc_ctx_t *pctx, char *args);
  * @param pctx  Context created by create_pc_context().
  * @param argc  Argument count.
  * @param argv  Argument vector.
- * @return 0 on success, 2 if help requested, -1 on error.
+ * @return 0 on success, 1 on invalid arguments (reported via log_msg),
+ *         2 on a usage error, 3 if -h was given, 4 if -V was given.
  */
 int init_pc_context(pc_ctx_t *pctx, int argc, char *argv[]);
 

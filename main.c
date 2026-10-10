@@ -48,17 +48,25 @@ main(int argc, char *argv[])
 	err = 0;
 	pctx = create_pc_context();
 
+	/*
+	 * init_pc_context: 0 ok, 1 invalid arguments (already reported),
+	 * 2 usage error, 3 -h, 4 -V.
+	 */
 	err = init_pc_context(pctx, argc, argv);
-	if (err != 0 && err != 2) {
-		log_msg(LOG_ERR, 0, "Invalid arguments to pcompress.\n");
-		log_msg(LOG_ERR, 0, "Please see usage.\n");
+	if (err == 3 || err == 4 || (err == 2 && argc == 1)) {
+		if (err != 4)
+			usage(pctx);
 		destroy_pc_context(pctx);
-		return (err);
-
+		return (0);
 	} else if (err == 2) {
 		usage(pctx);
 		destroy_pc_context(pctx);
-		return (0);
+		return (2);
+	} else if (err != 0) {
+		log_msg(LOG_ERR, 0, "Invalid arguments to pcompress. "
+		    "Run 'pcompress -h' for usage.\n");
+		destroy_pc_context(pctx);
+		return (err);
 	}
 
 	/*
