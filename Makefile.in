@@ -529,7 +529,7 @@ test-unit-build: $(LIB)
 	done
 
 test-unit: test-unit-build
-	@for t in $(UNIT_TESTS); do buildtmp/$$t || exit 1; done
+	@for t in $(UNIT_TESTS); do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
 
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)
