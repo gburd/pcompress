@@ -159,6 +159,19 @@ else
 fi
 rm -f datafiles/arcfail/f datafiles/arcfail.pz; rmdir datafiles/arcfail 2>/dev/null
 
+# '-d x.pz' with no target restores to 'x' (was written to x.pz.out).
+echo derived > datafiles/derive.dat
+rm -f datafiles/derive.dat.pz
+if $PCOMPRESS -c zstd -l 1 datafiles/derive.dat >/dev/null 2>&1 && \
+   mv datafiles/derive.dat datafiles/derive.orig && \
+   $PCOMPRESS -d datafiles/derive.dat.pz >/dev/null 2>&1 && \
+   cmp -s datafiles/derive.orig datafiles/derive.dat; then
+	log_pass "-d without target strips .pz"
+else
+	log_fail "-d without target strips .pz"
+fi
+rm -f datafiles/derive.dat datafiles/derive.orig datafiles/derive.dat.pz datafiles/derive.dat.pz.out
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

@@ -1031,9 +1031,11 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			pctx->to_filename = pctx->archive_members_file;
 			pos = strrchr(filename, '.');
 			if (pos != NULL) {
-				if ((pos[0] == 'p' || pos[0] == 'P') &&
-				    (pos[1] == 'z' || pos[1] == 'Z')) {
+				/* pos points at the '.': was pos[0]/pos[1], never matched. */
+				if ((pos[1] == 'p' || pos[1] == 'P') &&
+				    (pos[2] == 'z' || pos[2] == 'Z') && pos[3] == '\0') {
 					memcpy(to_filename, filename, pos - filename);
+					to_filename[pos - filename] = '\0';
 				} else {
 					pos = NULL;
 				}
