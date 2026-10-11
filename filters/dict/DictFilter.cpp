@@ -69,6 +69,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <ctype.h>
+#include <memory>
 #include "DictFilter.h"
 #include "utils.h"
 #include "allocator.h"
@@ -380,7 +381,7 @@ DictFilter::hash_context_init(hash_context_t *hctx, uint32_t dictsize)
 	hctx->dictcount = 0;
 	hctx->dictsize = dictsize;
 	hctx->collisions = 0;
-	hctx->sentinel = new dict_entry_t[1]();
+	hctx->sentinel = new dict_entry_t();
 }
 
 void
@@ -399,7 +400,7 @@ DictFilter::hash_context_delete(hash_context_t *hctx) {
 			}
 		}
 	}
-	delete hctx->dict;
+	delete[] hctx->dict;
 	delete hctx->sentinel;
 	hctx->dictcount = 0;
 	hctx->collisions = 0;
@@ -444,7 +445,7 @@ DictFilter::hash_add(hash_context_t *hctx, uint8_t *word, uint32_t wordsize, dic
 	if (_de)
 		de = _de;
 	else
-		de = new dict_entry_t[1]();
+		de = new dict_entry_t();
 	de->word = word;
 	de->sz = wordsize;
 	de->lcfirst = lcfirst;
@@ -502,7 +503,7 @@ DictFilter::hash_remove(hash_context_t *hctx, uint8_t *word, uint32_t wordsize, 
 void
 DictFilter::list_context_init(list_context_t *lctx, uint32_t listsize)
 {
-	lctx->head = new dict_entry_t[1]();
+	lctx->head = new dict_entry_t();
 	lctx->tail = lctx->head;
 	lctx->listcount = 0;
 	lctx->listsize = listsize;
@@ -862,7 +863,7 @@ DictFilter::Forward_Dict(uint8_t *src, uint32_t size, uint8_t *dst, uint32_t *ds
 bail:
 	hash_context_delete(&hctx);
 	list_context_delete(&lctx);
-	delete sorted_dict;
+	delete[] sorted_dict;
 
 	return rv;
 }
@@ -1178,7 +1179,7 @@ DictFilter::Forward_Dict_Fasta(uint8_t *src, uint32_t size, uint8_t *dst, uint32
 bail:
 	hash_context_delete(&hctx);
 	list_context_delete(&lctx);
-	delete sorted_dict;
+	delete[] sorted_dict;
 
 	return rv;
 }
@@ -1189,6 +1190,7 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 	uint32_t numWords, i, enclen, pos;
 	uint8_t *srcpos, *end, *dstpos, *dstend, c;
 	decode_dict_entry_t *w_dict;
+	std::unique_ptr<decode_dict_entry_t[]> w_dict_owner;	/* freed on every return */
 
 	end = src + srclen;
 	srcpos = (uint8_t *)memchr((const void *)src, ' ', WORD_MAX);
@@ -1199,6 +1201,7 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 	numWords = from_base_enc(src, srcpos - src);
 	srcpos++;
 	w_dict = new decode_dict_entry_t[numWords];
+	w_dict_owner.reset(w_dict);
 	for (i = 0; i < numWords && srcpos < end; i++) {
 		uint8_t *w_src = srcpos;
 		size_t limit;
@@ -1306,6 +1309,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 	uint32_t numWords, i, enclen, pos;
 	uint8_t *srcpos, *end, *dstpos, *dstend, c;
 	decode_dict_entry_t *w_dict;
+	std::unique_ptr<decode_dict_entry_t[]> w_dict_owner;	/* freed on every return */
 	int flag, flag1, flag2;
 	uint8_t separator[256];
 
@@ -1335,6 +1339,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 	separator[flag2] = 1;
 
 	w_dict = new decode_dict_entry_t[numWords];
+	w_dict_owner.reset(w_dict);
 	for (i = 0; i < numWords && srcpos < end; i++) {
 		size_t limit;
 		uint8_t *w_src;

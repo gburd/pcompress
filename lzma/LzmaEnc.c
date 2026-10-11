@@ -84,8 +84,8 @@ static int ttt = 0;
           "movntiq %[val], 0x8(%[ptr1]);"\
           : \
           : [ptr1] "q" (mem), [val] "q" (val) )
-#define MOV_DBL_QUAD_UNALIGNED(mem, val) \
-          *((UInt64 *)(mem)) = val; *((UInt64 *)((Byte *)mem + 8)) = val
+#define MOV_DBL_QUAD_UNALIGNED(mem, val) do { UInt64 v_ = (val); \
+          memcpy((Byte *)(mem), &v_, 8); memcpy((Byte *)(mem) + 8, &v_, 8); } while (0)
 
 #define MOV_QUAD_QUAD(mem, val) __asm (\
           "movntiq %[val], (%[ptr1]);"\
@@ -94,9 +94,9 @@ static int ttt = 0;
           "movntiq %[val], 0x18(%[ptr1]);"\
           : \
           : [ptr1] "q" (mem), [val] "q" (val) )
-#define MOV_QUAD_QUAD_UNALIGNED(mem, val) \
-          *((UInt64 *)(mem)) = val; *((UInt64 *)((Byte *)mem + 8)) = val; \
-          *((UInt64 *)((Byte *)mem + 16)) = val; *((UInt64 *)((Byte *)mem + 24)) = val
+#define MOV_QUAD_QUAD_UNALIGNED(mem, val) do { UInt64 v_ = (val); \
+          memcpy((Byte *)(mem), &v_, 8); memcpy((Byte *)(mem) + 8, &v_, 8); \
+          memcpy((Byte *)(mem) + 16, &v_, 8); memcpy((Byte *)(mem) + 24, &v_, 8); } while (0)
 #else
 /*
  * Portable: the targets are UInt32 arrays that are only 4-byte aligned, so

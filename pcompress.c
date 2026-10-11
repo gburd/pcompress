@@ -372,6 +372,9 @@ preproc_compress(pc_ctx_t *pctx, compress_func_ptr cmp_func, void *src, uint64_t
 	result = cmp_func(src, srclen, dest+9, &_dstlen, level, chdr,
 	    btype, data);
 	DEBUG_STAT_EN(en = get_wtime_millis());
+	/* actx is on this stack frame: never let adapt_compress() keep it. */
+	if (pctx->adapt_mode)
+		adapt_set_analyzer_ctx(data, NULL);
 
 	if (result > -1 && _dstlen < srclen) {
 		*dest |= PREPROC_COMPRESSED;
@@ -1504,6 +1507,8 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			log_msg(LOG_ERR, 0, "1: Out of memory");
 			UNCOMP_BAIL;
 		}
+		/* Error paths free per-member; unset members must be NULL. */
+		memset(dary[i], 0, sizeof (struct cmp_data));
 		tdat = dary[i];
 		tdat->pctx = pctx;
 		tdat->compressed_chunk = NULL;
@@ -1802,6 +1807,8 @@ uncomp_done:
 			if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan)) {
 				destroy_dedupe_context(dary[i]->rctx);
 			}
+			if (pctx->encrypt_type && dary[i]->chunk_hmac.mac_ctx)
+				hmac_cleanup(&dary[i]->chunk_hmac);
 			Sem_Destroy(&(dary[i]->start_sem));
 			Sem_Destroy(&(dary[i]->cmp_done_sem));
 			Sem_Destroy(&(dary[i]->write_done_sem));
@@ -1819,6 +1826,7 @@ uncomp_done:
 		pthread_join(pctx->archive_thread, NULL);
 		if (pctx->meta_stream) {
 			meta_ctx_done(pctx->meta_ctx);
+			pctx->meta_ctx = NULL;
 			if (pctx->list_mode) {
 				slab_release(NULL, pctx->temp_mmap_buf);
 			}
@@ -2537,6 +2545,8 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 			log_msg(LOG_ERR, 0, "4: Out of memory");
 			COMP_BAIL;
 		}
+		/* Error paths free per-member; unset members must be NULL. */
+		memset(dary[i], 0, sizeof (struct cmp_data));
 		tdat = dary[i];
 		tdat->pctx = pctx;
 		tdat->cmp_seg = NULL;
@@ -2909,6 +2919,7 @@ comp_done:
 	}
 	if (pctx->meta_stream) {
 		meta_ctx_done(pctx->meta_ctx);
+		pctx->meta_ctx = NULL;
 		archiver_close(pctx);
 	}
 
@@ -3011,6 +3022,7 @@ comp_done:
 		while (fn) {
 			fn1 = fn;
 			fn = fn->next;
+			free(fn1->filename);
 			slab_release(NULL, fn1);
 		}
 		Sem_Destroy(&(pctx->read_sem));
@@ -3212,8 +3224,9 @@ create_pc_context(void)
 void DLL_EXPORT
 destroy_pc_context(pc_ctx_t *pctx)
 {
-	if (pctx->do_compress)
-		free((void *)(pctx->filename));
+	cleanup_crypto(&(pctx->crypto_ctx));
+	/* Always heap-owned (realpath() or strdup()), NULL for stdin. */
+	free((void *)(pctx->filename));
 	if (pctx->pwd_file)
 		free(pctx->pwd_file);
 	free((void *)(pctx->exec_name));
@@ -3634,7 +3647,7 @@ opt_done:
 					return (1);
 				}
 				if (valid_paths == 1)
-					pctx->filename = pctx->fn->filename;
+					pctx->filename = strdup(pctx->fn->filename);
 			} else {
 				if ((pctx->filename = realpath(argv[my_optind], NULL)) == NULL) {
 					log_msg(LOG_ERR, 1, "%s", argv[my_optind]);

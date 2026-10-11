@@ -322,7 +322,8 @@ _final (SHA512_Context *sc, uint8_t *hash, int hashWords, int halfWord)
 	
 	if (hash) {
 		for (i = 0; i < hashWords; i++) {
-			*((uint64_t *) hash) = BYTESWAP64(sc->hash[i]);
+			uint64_t w_ = BYTESWAP64(sc->hash[i]);
+			memcpy(hash, &w_, 8);	/* caller's buffer may be unaligned */
 			hash += 8;
 		}
 		if (halfWord) {

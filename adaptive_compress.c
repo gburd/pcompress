@@ -189,6 +189,10 @@ adapt_init(void **data, int *level, int nthreads, uint64_t chunksize,
 
 	if (!adat) {
 		adat = (struct adapt_data *)slab_alloc(NULL, sizeof (struct adapt_data));
+		if (!adat)
+			return (-1);
+		/* actx et al. must start NULL: adapt_compress() tests it. */
+		memset(adat, 0, sizeof (*adat));
 		adat->adapt_mode = 1;
 		rv = ppmd_state_init(&(adat->ppmd_data), level, 0);
 
@@ -235,6 +239,9 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 
 	if (!adat) {
 		adat = (struct adapt_data *)slab_alloc(NULL, sizeof (struct adapt_data));
+		if (!adat)
+			return (-1);
+		memset(adat, 0, sizeof (*adat));	/* see adapt_init() */
 		adat->adapt_mode = 2;
 		adat->ppmd_data = NULL;
 		adat->bsc_data = NULL;
@@ -296,6 +303,10 @@ adapt_deinit(void **data)
 			rv += lzma_deinit(&(adat->lzma_data));
 		if (adat->lz4_data)
 			rv += lz4_deinit(&(adat->lz4_data));
+#ifdef ENABLE_PC_LIBBSC
+		if (adat->bsc_data)
+			rv += libbsc_deinit(&(adat->bsc_data));
+#endif
 #ifdef ENABLE_PC_ZSTD
 		if (adat->zstd_data)
 			rv += zstd_deinit(&(adat->zstd_data));

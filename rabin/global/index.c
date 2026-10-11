@@ -541,5 +541,6 @@ destroy_global_db_s(archive_config_t *cfg)
 		free(cfg->seg_fd_r);
 		close(cfg->seg_fd_w);
 	}
+	free(cfg);	/* calloc()ed by init_global_db_s() */
 }
 

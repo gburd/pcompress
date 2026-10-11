@@ -63,6 +63,8 @@ zlib_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	int ret;
 
 	zs = (z_stream *)slab_alloc(NULL, sizeof (z_stream));
+	if (!zs)
+		return (-1);
 	zs->zalloc = slab_alloc_ui;
 	zs->zfree = slab_free;
 	zs->opaque = NULL;
@@ -79,6 +81,7 @@ zlib_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	}
 	if (ret != Z_OK) {
 		zerr(ret, 0);
+		slab_free(NULL, zs);
 		return (-1);
 	}
 
@@ -102,7 +105,9 @@ zlib_deinit(void **data)
 {
 	if (*data) {
 		z_stream *zs = (z_stream *)(*data);
-		deflateEnd(zs);
+		/* Same struct for both directions; deflateEnd rejects an inflate stream. */
+		if (deflateEnd(zs) == Z_STREAM_ERROR)
+			inflateEnd(zs);
 		slab_free(NULL, *data);
 	}
 	return (0);

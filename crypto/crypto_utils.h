@@ -166,6 +166,9 @@ uchar_t *crypto_nonce(crypto_ctx_t *cctx);
 /** Securely zero and free the derived key in a crypto context. */
 void crypto_clean_pkey(crypto_ctx_t *cctx);
 
+/** Free and wipe the cipher context and salt allocated by init_crypto(). */
+void cleanup_crypto(crypto_ctx_t *cctx);
+
 /** Clean up all resources in a crypto context. */
 
 /**

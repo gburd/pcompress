@@ -656,6 +656,8 @@ hmac_cleanup(mac_ctx_t *mctx)
 {
 	int cksum = mctx->mac_cksum;
 
+	if (mctx->mac_ctx == NULL)	/* never initialised or already cleaned */
+		return (0);
 	if (cksum == CKSUM_BLAKE256 || cksum == CKSUM_BLAKE512) {
 		memset(mctx->mac_ctx, 0, sizeof (blake2b_state));
 		memset(mctx->mac_ctx_reinit, 0, sizeof (blake2b_state));
@@ -688,6 +690,7 @@ hmac_cleanup(mac_ctx_t *mctx)
 	mctx->mac_cksum = 0;
 	free(mctx->mac_ctx);
 	free(mctx->mac_ctx_reinit);
+	mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
 	return (0);
 }
 
@@ -848,6 +851,25 @@ crypto_clean_pkey(crypto_ctx_t *cctx)
 		aes_clean_pkey((aes_ctx_t *)(cctx->crypto_ctx));
 	} else {
 		salsa20_clean_pkey((salsa20_ctx_t *)(cctx->crypto_ctx));
+	}
+	cctx->pkey = NULL;
+}
+
+/* Free and wipe everything init_crypto() allocated. Safe on a zeroed ctx. */
+void
+cleanup_crypto(crypto_ctx_t *cctx)
+{
+	if (cctx->crypto_ctx) {
+		if (cctx->crypto_alg == CRYPTO_ALG_AES)
+			aes_cleanup((aes_ctx_t *)(cctx->crypto_ctx));
+		else
+			salsa20_cleanup((salsa20_ctx_t *)(cctx->crypto_ctx));
+		cctx->crypto_ctx = NULL;
+	}
+	if (cctx->salt) {
+		memset(cctx->salt, 0, cctx->saltlen);
+		free(cctx->salt);
+		cctx->salt = NULL;
 	}
 	cctx->pkey = NULL;
 }

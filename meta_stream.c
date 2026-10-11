@@ -67,6 +67,7 @@ struct _meta_ctx {
 	int running;
 	int delta2_nstrides;
 	int do_compress;
+	int hmac_inited;
 	mac_ctx_t chunk_hmac;
 	algo_props_t props;
 };
@@ -504,11 +505,25 @@ metadata_decompress(void *dat)
  * Create the metadata thread and associated buffers. This writes out compressed
  * metadata chunks into the archive. This is libarchive metadata.
  */
+/* Release everything meta_ctx_create() allocated. */
+static void
+meta_ctx_free(meta_ctx_t *mctx)
+{
+	if (mctx->hmac_inited)
+		hmac_cleanup(&mctx->chunk_hmac);
+	if (mctx->frombuf)
+		slab_release(NULL, mctx->frombuf);
+	if (mctx->tobuf)
+		slab_release(NULL, mctx->tobuf);
+	slab_release(NULL, mctx);
+}
+
 meta_ctx_t *
 meta_ctx_create(void *pc, int file_version, int comp_fd)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)pc;
 	meta_ctx_t *mctx;
+	int rv;
 
 	slab_cache_add(METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	slab_cache_add(sizeof (meta_ctx_t));
@@ -517,30 +532,23 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 		log_msg(LOG_ERR, 1, "Failed to allocate metadata context.");
 		return (NULL);
 	}
+	memset(mctx, 0, sizeof (*mctx));
 
-	mctx->running = 0;
 	if (pctx->encrypt_type) {
 		if (hmac_init(&mctx->chunk_hmac, pctx->cksum,
 		    &(pctx->crypto_ctx)) == -1) {
-			(void) free(mctx);
+			meta_ctx_free(mctx);
 			log_msg(LOG_ERR, 0, "Cannot initialize metadata hmac.");
 			return (NULL);
 		}
+		mctx->hmac_inited = 1;
 	}
 
 	mctx->comp_fd = comp_fd;
-	mctx->frompos = 0;
 	mctx->frombuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
-	if (!mctx->frombuf) {
-		(void) free(mctx);
-		log_msg(LOG_ERR, 1, "Failed to allocate metadata buffer.");
-		return (NULL);
-	}
-
 	mctx->tobuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
-	if (!mctx->tobuf) {
-		(void) free(mctx->frombuf);
-		(void) free(mctx);
+	if (!mctx->frombuf || !mctx->tobuf) {
+		meta_ctx_free(mctx);
 		log_msg(LOG_ERR, 1, "Failed to allocate metadata buffer.");
 		return (NULL);
 	}
@@ -551,9 +559,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	 */
 	mctx->pctx = pctx;
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, mctx->meta_pipes) == -1) {
-		(void) free(mctx->frombuf);
-		(void) free(mctx->tobuf);
-		(void) free(mctx);
+		meta_ctx_free(mctx);
 		log_msg(LOG_ERR, 1, "Unable to create a metadata ctx channel.");
 		return (NULL);
 	}
@@ -562,48 +568,32 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 		mctx->delta2_nstrides = NSTRIDES_EXTRA;
 	else
 		mctx->delta2_nstrides = NSTRIDES_STANDARD;
-	if (pctx->do_compress) {
-		int rv;
 
-		mctx->comp_level = pctx->level;
+	/* Set before the thread starts: the thread reads it. */
+	mctx->do_compress = pctx->do_compress;
+	mctx->comp_level = pctx->level;
+	if (pctx->do_compress) {
 		rv = bzip2_init(&mctx->bzip2_dat, &mctx->comp_level, 1, METADATA_CHUNK_SIZE,
 		    file_version, COMPRESS);
 		bzip2_props(&mctx->props, pctx->level, METADATA_CHUNK_SIZE);
-		if (rv != 0 || pthread_create(&(mctx->meta_thread), NULL, metadata_compress,
-		    (void *)mctx) != 0) {
-			(void) close(mctx->meta_pipes[0]);
-			(void) close(mctx->meta_pipes[1]);
-			(void) free(mctx->frombuf);
-			(void) free(mctx->tobuf);
-			(void) free(mctx);
-			if (rv == 0)
-				log_msg(LOG_ERR, 0, "Lzma init failed.");
-			else
-				log_msg(LOG_ERR, 1, "Unable to create metadata thread.");
-			return (NULL);
-		}
 	} else {
-		int rv;
-
-		mctx->comp_level = pctx->level;
 		rv = bzip2_init(&mctx->bzip2_dat, &mctx->comp_level, 1, METADATA_CHUNK_SIZE,
 		    file_version, DECOMPRESS);
-		if (rv != 0 || pthread_create(&(mctx->meta_thread), NULL, metadata_decompress,
-		    (void *)mctx) != 0) {
-			(void) close(mctx->meta_pipes[0]);
-			(void) close(mctx->meta_pipes[1]);
-			(void) free(mctx->frombuf);
-			(void) free(mctx->tobuf);
-			(void) free(mctx);
-			if (rv == 0)
-				log_msg(LOG_ERR, 0, "Lzma init failed.");
-			else
-				log_msg(LOG_ERR, 1, "Unable to create metadata thread.");
-			return (NULL);
-		}
 	}
-
-	mctx->do_compress = pctx->do_compress;
+	if (rv != 0) {
+		log_msg(LOG_ERR, 0, "Metadata compressor init failed.");
+	} else if (pthread_create(&(mctx->meta_thread), NULL,
+	    pctx->do_compress ? metadata_compress : metadata_decompress,
+	    (void *)mctx) != 0) {
+		log_msg(LOG_ERR, 1, "Unable to create metadata thread.");
+		rv = -1;
+	}
+	if (rv != 0) {
+		(void) close(mctx->meta_pipes[0]);
+		(void) close(mctx->meta_pipes[1]);
+		meta_ctx_free(mctx);
+		return (NULL);
+	}
 	return (mctx);
 }
 
@@ -651,6 +641,7 @@ meta_ctx_done(meta_ctx_t *mctx)
 	if (!mctx->do_compress)
 		close(mctx->comp_fd);
 	pthread_join(mctx->meta_thread, NULL);
+	meta_ctx_free(mctx);
 	return (0);
 }
 
