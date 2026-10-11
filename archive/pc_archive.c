@@ -559,7 +559,9 @@ do_mmap:
 
 		retried = 0;
 		buf = pctx->temp_mmap_buf + (pctx->temp_file_pos - pctx->temp_mmap_pos);
-		namelen = U32_P(buf);
+		/* 2-byte length written by add_pathname(). Was U32_P: on big-endian
+		 * that took the next entry's bytes as the length (SIGSEGV). */
+		namelen = I16_P(buf);
 		pctx->temp_file_pos += 2;
 
 		/*

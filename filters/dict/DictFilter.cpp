@@ -112,70 +112,21 @@ typedef struct decode_dict_entry_s {
 } decode_dict_entry_t;
 
 /*
- * We are always copying small blocks, typically words, ranging
- * from 3 bytes to 20 bytes. So an inline memory copy is more
- * efficient than memcpy() library calls.
+ * Small word copies/compares. Compilers inline memcpy/memcmp of short
+ * runtime lengths well, and these are alignment-safe (the previous
+ * hand-unrolled uint32_t versions faulted on SPARC and used computed
+ * gotos, a GNU extension).
  */
 static inline void
 copy_bytes(void *dst, void *src, size_t len)
 {
-	static void *targets[] = { &&zero, &&one, &&two, &&three };
-
-	uint8_t *to = (uint8_t *)dst;
-	uint8_t *from = (uint8_t *)src;
-
-	while (len >= sizeof (uint32_t)) {
-		*(uint32_t *)to = *(const uint32_t *)from;
-		to += sizeof (uint32_t);
-		from += sizeof (uint32_t);
-		len -= sizeof (uint32_t);
-	}
-
-	/* Unroll final small loop using computed goto. */
-	goto *targets[len];
-three:
-	*to = *from;
-	to++; from++;
-two:
-	*to = *from;
-	to++; from++;
-one:
-	*to = *from;
-zero:
-	return;
+	memcpy(dst, src, len);
 }
 
-/*
- * Local replacement for bcmp() avoiding a library call for comparing
- * words.
- */
 static inline int
 eq_bytes(void *a, void *b, size_t len)
 {
-	static void *targets[] = { &&_zero, &&_one, &&_two, &&_three };
-	uint8_t *to = (uint8_t *)a;
-	uint8_t *from = (uint8_t *)b;
-
-	while (len >= sizeof (uint32_t)) {
-		if (*(uint32_t *)to != *(uint32_t *)from)
-			return (1);
-		to += sizeof (uint32_t);
-		from += sizeof (uint32_t);
-		len -= sizeof (uint32_t);
-	}
-
-	/* Unroll final small loop using computed goto. */
-	goto *targets[len];
-_three:
-	if (*to != *from) return (1);
-	to++; from++;
-_two:
-	if (*to != *from) return (1);
-	to++; from++;
-_one:
-	if (*to != *from) return (1);
-_zero:
-	return (0);
+	return (memcmp(a, b, len) != 0);
 }
 
 /*

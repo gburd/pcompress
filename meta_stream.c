@@ -329,7 +329,7 @@ decompress_data(meta_ctx_t *mctx)
 		 * Verify Header CRC32 in non-crypto mode.
 		 */
 		deserialize_checksum(checksum, cbuf + 25, pctx->cksum_bytes);
-		crc1 = U32_P(cbuf + 25 + CKSUM_MAX);
+		crc1 = LE32(U32_P(cbuf + 25 + CKSUM_MAX));	/* stored little-endian */
 		memset(cbuf + 25 + CKSUM_MAX, 0, CRC32_SIZE);
 		crc2 = lzma_crc32(cbuf, METADATA_HDR_SZ, 0);
 
