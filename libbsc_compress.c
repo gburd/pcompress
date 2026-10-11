@@ -200,7 +200,9 @@ libbsc_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	}
 
 	if (BSC_NEED_ALIGN(src) || BSC_NEED_ALIGN(dst)) {
-		unsigned char *a_src = malloc(srclen), *a_dst = malloc(*dstlen);
+		/* bsc_compress() may write srclen + header, whatever *dstlen is. */
+		unsigned char *a_src = malloc(srclen);
+		unsigned char *a_dst = malloc(srclen + LIBBSC_HEADER_SIZE);
 
 		rv = LIBBSC_NOT_ENOUGH_MEMORY;
 		if (a_src && a_dst) {
@@ -210,6 +212,8 @@ libbsc_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 			    bscdat->features);
 			if (rv > 0 && (uint64_t)rv <= *dstlen)
 				memcpy(dst, a_dst, rv);
+			else if (rv > 0)
+				rv = LIBBSC_NOT_ENOUGH_MEMORY;	/* does not fit: store raw */
 		}
 		free(a_src);
 		free(a_dst);
