@@ -63,7 +63,10 @@ int
 none_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	       int level, uchar_t chdr, int btype, void *data)
 {
+	if (srclen > *dstlen)
+		return (-1);
 	memcpy(dst, src, srclen);
+	*dstlen = srclen;
 	return (0);
 }
 
@@ -71,6 +74,9 @@ int
 none_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		 int level, uchar_t chdr, int btype, void *data)
 {
+	if (srclen > *dstlen)	/* corrupt length: never overrun dst */
+		return (-1);
 	memcpy(dst, src, srclen);
+	*dstlen = srclen;
 	return (0);
 }

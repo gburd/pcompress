@@ -144,19 +144,11 @@ pcompress_HMAC_CTX_copy(HMAC_CTX *dctx, HMAC_CTX *sctx)
 int
 get_crypto_alg(char *name)
 {
-	if (name[0] == 0 || name[1] == 0 || name[2] == 0) {
-		return (0);
-	}
-	if (strncmp(name, "AES", 3) == 0) {
+	/* Exact names only: "AESX" or "SALT123" used to be accepted. */
+	if (strcmp(name, "AES") == 0)
 		return (CRYPTO_ALG_AES);
-	} else {
-		if (name[3] == 0 || name[4] == 0 || name[5] == 0 || name[6] == 0) {
-			return (0);
-		}
-		if (strncmp(name, "SALSA20", 3) == 0) {
-			return (CRYPTO_ALG_SALSA20);
-		}
-	}
+	if (strcmp(name, "SALSA20") == 0)
+		return (CRYPTO_ALG_SALSA20);
 	return (0);
 }
 

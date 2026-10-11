@@ -139,7 +139,11 @@ MU_TEST(test_api_return_codes)
 	snprintf(args, sizeof (args), "pcompress -c zstd -l 99 %s %s", src, cmp_);
 	mu_assert_int_eq(1, run_args(args, NULL, 0));
 	/* Empty argument string is a no-op. */
-	mu_assert_int_eq(0, init_pc_context_argstr(create_pc_context(), (char[]){ "" }));
+	{
+		pc_ctx_t *p = create_pc_context();
+		mu_assert_int_eq(0, init_pc_context_argstr(p, (char[]){ "" }));
+		destroy_pc_context(p);
+	}
 	/* start without init must fail, not crash. */
 	{
 		pc_ctx_t *p = create_pc_context();
