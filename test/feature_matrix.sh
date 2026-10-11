@@ -18,7 +18,8 @@ CORPUS=${CORPUS:-$SRC}
 command -v timeout >/dev/null 2>&1 || timeout() { shift; "$@"; }
 mkdir -p "$W" && cd "$W" || exit 99
 fail=0; pass=0
-if [ ! -f mixed.dat ]; then
+# Reuse a previous corpus only if it is complete (a failed run leaves stubs).
+if [ ! -s mixed.dat ] || [ $(wc -c < mixed.dat) -le 1000000 ] || [ ! -s num.dat ]; then
 	# Deterministic, portable corpus: text, binary, repetitive, random.
 	# CORPUS env: dir of mixed text+binary files (default: the pcompress tree)
 	( cd "$CORPUS" && find . -type f -size -2M 2>/dev/null | LC_ALL=C sort | head -3000 | xargs cat 2>/dev/null ) | head -c 24000000 > mixed.dat
