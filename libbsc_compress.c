@@ -26,6 +26,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <strings.h>
+#include <stdlib.h>
 #include <string.h>
 #include <utils.h>
 #include <pcompress.h>
@@ -48,6 +49,18 @@ bsc_decompress_old(const unsigned char *input, int inputSize,
 
 // 1G
 #define	BSC_MAX_CHUNK	1073741824L
+
+/*
+ * libbsc reads and writes its block header as int at the start of the
+ * caller's buffers, and pcompress's buffers sit at arbitrary offsets
+ * (behind chunk/preprocessing headers). Where unaligned access traps
+ * (SPARC, ...), bounce through an aligned copy. x86-64/ARM64: no copy.
+ */
+#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
+#define	BSC_NEED_ALIGN(p)	0
+#else
+#define	BSC_NEED_ALIGN(p)	(((uintptr_t)(p) & (sizeof (int) - 1)) != 0)
+#endif
 
 struct libbsc_params {
 	int lzpHashSize;
@@ -186,8 +199,24 @@ libbsc_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 			return (-1);
 	}
 
-	rv = bsc_compress(src, dst, srclen, bscdat->lzpHashSize, bscdat->lzpMinLen,
-	    LIBBSC_BLOCKSORTER_BWT, bscdat->bscCoder, bscdat->features);
+	if (BSC_NEED_ALIGN(src) || BSC_NEED_ALIGN(dst)) {
+		unsigned char *a_src = malloc(srclen), *a_dst = malloc(*dstlen);
+
+		rv = LIBBSC_NOT_ENOUGH_MEMORY;
+		if (a_src && a_dst) {
+			memcpy(a_src, src, srclen);
+			rv = bsc_compress(a_src, a_dst, srclen, bscdat->lzpHashSize,
+			    bscdat->lzpMinLen, LIBBSC_BLOCKSORTER_BWT, bscdat->bscCoder,
+			    bscdat->features);
+			if (rv > 0 && (uint64_t)rv <= *dstlen)
+				memcpy(dst, a_dst, rv);
+		}
+		free(a_src);
+		free(a_dst);
+	} else {
+		rv = bsc_compress(src, dst, srclen, bscdat->lzpHashSize, bscdat->lzpMinLen,
+		    LIBBSC_BLOCKSORTER_BWT, bscdat->bscCoder, bscdat->features);
+	}
 	if (rv < 0) {
 		libbsc_err(rv);
 		return (-1);
@@ -203,7 +232,19 @@ libbsc_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	int rv;
 	struct libbsc_params *bscdat = (struct libbsc_params *)data;
 
-	if (bscdat->oldversion)
+	if (BSC_NEED_ALIGN(src) || BSC_NEED_ALIGN(dst)) {
+		unsigned char *a_src = malloc(srclen), *a_dst = malloc(*dstlen);
+
+		rv = LIBBSC_NOT_ENOUGH_MEMORY;
+		if (a_src && a_dst) {
+			memcpy(a_src, src, srclen);
+			rv = bsc_decompress(a_src, srclen, a_dst, *dstlen, bscdat->features);
+			if (rv == LIBBSC_NO_ERROR)
+				memcpy(dst, a_dst, *dstlen);
+		}
+		free(a_src);
+		free(a_dst);
+	} else if (bscdat->oldversion)
 		rv = bsc_decompress_old(src, srclen, dst, *dstlen, bscdat->features);
 	else
 		rv = bsc_decompress(src, srclen, dst, *dstlen, bscdat->features);
