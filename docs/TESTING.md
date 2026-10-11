@@ -49,10 +49,17 @@ use a minimal test framework (`test/unit/minunit.h`).
 | Test Binary     | Source                      | Tests                              |
 |-----------------|-----------------------------|------------------------------------|
 | `test_compress` | `test/unit/test_compress.c` | Algorithm round-trip correctness   |
-| `test_xxhash`   | `test/unit/test_xxhash.c`  | xxHash non-cryptographic hash      |
-| `test_crc`      | `test/unit/test_crc.c`     | CRC32/CRC64 correctness           |
-| `test_slab`     | `test/unit/test_slab.c`    | Slab allocator alloc/free cycles   |
-| `test_blake2`   | `test/unit/test_blake2.c`  | BLAKE2b hash correctness           |
+| `test_xxhash`   | `test/unit/test_xxhash.c`   | xxHash KATs and dispatch           |
+| `test_crc`      | `test/unit/test_crc.c`      | CRC32/CRC64 correctness            |
+| `test_slab`     | `test/unit/test_slab.c`     | Slab allocator alloc/free cycles   |
+| `test_blake2`   | `test/unit/test_blake2.c`   | BLAKE2b/BLAKE2bp RFC 7693 KATs     |
+| `test_sha2`     | `test/unit/test_sha2.c`     | SHA-512, SHA-512/256 KATs          |
+| `test_api`      | `test/unit/test_api.c`      | libpcompress public API contract   |
+| `test_filters`  | `test/unit/test_filters.c`  | LZP/DICT round trip; corrupt LZP never overruns |
+
+The KAT (known-answer) tests are what catch per-architecture SIMD bugs:
+run them on every new CPU/compiler (they found the ARM64 NEON BLAKE2b and
+the big-endian SHA/CRC bugs).
 
 ### Building Unit Tests
 
@@ -74,44 +81,30 @@ LD_LIBRARY_PATH=. ./buildtmp/test_compress
 
 ### Writing New Unit Tests
 
-1. Create a new file in `test/unit/`, for example `test_myfeature.c`.
-2. Include the minunit header:
+1. Create `test/unit/test_myfeature.c` using `test/unit/minunit.h`:
    ```c
+   #include <utils.h>
    #include "minunit.h"
-   ```
-3. Write test functions using `mu_assert` and `mu_run_test`:
-   ```c
-   static int tests_run = 0;
 
-   static char *
-   test_something(void)
-   {
-       int result = my_function(42);
-       mu_assert("expected 100", result == 100);
-       return NULL;
+   MU_TEST(test_something) {
+       mu_assert_int_eq(100, my_function(42));
    }
 
-   static char *
-   all_tests(void)
-   {
-       mu_run_test(test_something);
-       return NULL;
+   MU_TEST_SUITE(suite_myfeature) {
+       MU_RUN_TEST(test_something);
    }
 
-   int
-   main(void)
-   {
-       char *result = all_tests();
-       if (result != NULL) {
-           printf("FAIL: %s\n", result);
-           return 1;
-       }
-       printf("ALL TESTS PASSED (%d tests)\n", tests_run);
-       return 0;
+   int main(void) {
+       MU_RUN_SUITE(suite_myfeature);
+       MU_REPORT();
+       return MU_EXIT_CODE;
    }
    ```
-4. Add the build rule to `Makefile.in` (see existing test targets).
-5. Add the binary to `run_all_tests.sh` under `run_unit_tests()`.
+2. Add `test_myfeature` to `UNIT_TESTS` in `Makefile.in` and to the list in
+   `run_all_tests.sh`. Unit tests link the object files directly, so they
+   can call internal (non-exported) functions. Call `init_pcompress()`
+   first if the code under test hashes (the hash functions are dispatched
+   at run time).
 
 ## Integration Tests
 
@@ -128,6 +121,37 @@ POSIX shell scripts located in `test/integration/`.
 | `test_crypto.sh`        | Encryption (`-e AES`, `-e SALSA20`)             |
 | `test_dedup.sh`         | Deduplication modes (`-D`, `-F`, `-G`)          |
 | `test_multithread.sh`   | Multi-threaded compression and decompression    |
+
+### Feature matrix
+
+`test/feature_matrix.sh <pcompress> <workdir> [quick]` round-trips a
+generated corpus through every algorithm x level x option combination
+(dedupe, delta, LZP, encryption, checksums, pipe mode, archive mode with
+filters, -K, list), and checks the exit status of every failure mode.
+`CORPUS=<dir>` picks the input tree. It is POSIX sh and runs on
+illumos/SPARC. `quick` is ~170 cases; without it ~300.
+
+### Sanitizers
+
+```sh
+CC=clang CXX=clang++ CFLAGS="-fsanitize=address,undefined -g" \
+  LDFLAGS="-fsanitize=address,undefined" ./config --disable-allocator
+make && make test-unit
+cd test && sh run_all_tests.sh integration
+```
+
+`--disable-allocator` makes every buffer a real heap allocation so ASan
+sees overruns. Suppress libomp's internal leak with
+`LSAN_OPTIONS=suppressions=<file>` containing `leak:libomp.so`. The LZMA
+SDK's function-pointer casts are reported by `-fsanitize=function`. They
+are harmless on every supported ABI.
+
+### Cross-architecture interop
+
+Archives must decompress on any architecture. To check this, compress a
+set of files with every algorithm, checksum and cipher on one host
+(ideally big-endian), then decompress them on another. The same is done
+for an archive containing a symlink.
 
 ### Running Integration Tests
 
@@ -202,10 +226,19 @@ sh test/run_all_tests.sh legacy
 - **Stale files**: Previous `.pz` / `.1` output files can cause cascading
   failures. Run `make clean-test` or manually remove stale output before
   re-running.
-- **Algorithm detection**: The `algo_available()` function in integration
-  test scripts checks help text output, which does not list algorithm names.
-  This causes false "not compiled in" reports. A fix is to probe by
-  attempting a small compression instead.
+
+## Coverage
+
+```sh
+./config --enable-coverage --disable-wavpack && make && make coverage
+```
+
+`make coverage` runs the unit tests, the integration suite and the quick
+feature matrix under gcov, then writes `coverage.info` and an HTML report
+under `coverage/`. Third-party trees (lz4, zstd, libbsc, libarchive, the
+LZMA SDK, reference crypto code, packJPG/packPNM/dispack/dict) are
+excluded, so the figure covers pcompress's own code only. Re-run
+`./config` after `Makefile.in` changes so that new tests are included.
 
 ## Fuzz Testing
 
