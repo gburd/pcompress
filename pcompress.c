@@ -407,19 +407,36 @@ preproc_compress(pc_ctx_t *pctx, compress_func_ptr cmp_func, void *src, uint64_t
 
 static int
 preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64_t srclen,
-    void *dst, uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data,
-    algo_props_t *props)
+    uint64_t src_cap, void *dst, uint64_t *dstlen, int level, uchar_t chdr, int btype,
+    void *data, algo_props_t *props)
 {
 	uchar_t *sorc = (uchar_t *)src, type;
 	int result;
 	uint64_t _dstlen = *dstlen, _dstlen1 = *dstlen;
 	DEBUG_STAT_EN(double strt, en);
 
+	/*
+	 * Each stage writes into dst and copies the result back into src,
+	 * which (a chunk segment past its header) holds less than dst: bound
+	 * every stage's output by the smaller of the two.
+	 */
+	if (src_cap < _dstlen1)
+		_dstlen1 = _dstlen = src_cap;
+	if (srclen < 1)
+		return (-1);
 	type = *sorc;
 	++sorc;
 	--srclen;
 	if (type & PREPROC_COMPRESSED) {
+		/* Untrusted header: need the 8-byte length, and it must fit dst. */
+		if (srclen < 8)
+			return (-1);
 		*dstlen = ntohll(U64_P(sorc));
+		if (*dstlen > _dstlen1) {
+			log_msg(LOG_ERR, 0, "Chunk length %" PRIu64 " exceeds buffer, "
+			    "file corrupt ?", *dstlen);
+			return (-1);
+		}
 		sorc += 8;
 		srclen -= 8;
 		DEBUG_STAT_EN(strt = get_wtime_millis());
@@ -563,10 +580,28 @@ redo:
 	if (HDR & CHSIZE_MASK) {
 		uchar_t *rseg;
 
+		/* Corrupt length: the trailing original-size field must fit. */
+		if (tdat->len_cmp < ORIGINAL_CHUNKSZ ||
+		    tdat->rbytes < (int64_t)ORIGINAL_CHUNKSZ) {
+			log_msg(LOG_ERR, 0, "Chunk %d, invalid length. File corrupt ?",
+			    tdat->id);
+			tdat->len_cmp = 0;
+			pctx->t_errored = 1;
+			pctx->main_cancel = 1;
+			goto cont;
+		}
 		tdat->rbytes -= ORIGINAL_CHUNKSZ;
 		tdat->len_cmp -= ORIGINAL_CHUNKSZ;
 		rseg = tdat->compressed_chunk + tdat->rbytes;
 		_chunksize = ntohll(I64_P(rseg));
+		if (_chunksize > tdat->chunksize) {
+			log_msg(LOG_ERR, 0, "Chunk %d, original size too large. "
+			    "File corrupt ?", tdat->id);
+			tdat->len_cmp = 0;
+			pctx->t_errored = 1;
+			pctx->main_cancel = 1;
+			goto cont;
+		}
 	}
 
 	/*
@@ -668,6 +703,22 @@ redo:
 		/* Extract various sizes from dedupe header. */
 		parse_dedupe_hdr(cseg, &blknum, &dedupe_index_sz, &dedupe_data_sz,
 				&dedupe_index_sz_cmp, &dedupe_data_sz_cmp, &_chunksize);
+		/*
+		 * Untrusted sizes: the compressed parts must lie inside this
+		 * chunk, and the restored parts inside the chunk buffer.
+		 */
+		if (tdat->len_cmp < RABIN_HDR_SIZE ||
+		    dedupe_index_sz_cmp > tdat->len_cmp - RABIN_HDR_SIZE ||
+		    dedupe_data_sz_cmp > tdat->len_cmp - RABIN_HDR_SIZE - dedupe_index_sz_cmp ||
+		    dedupe_index_sz > tdat->chunksize || dedupe_data_sz > tdat->chunksize ||
+		    _chunksize > tdat->chunksize) {
+			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe header. File corrupt ?",
+			    tdat->id);
+			tdat->len_cmp = 0;
+			pctx->t_errored = 1;
+			pctx->main_cancel = 1;
+			goto cont;
+		}
 		memcpy(tdat->uncompressed_chunk, cseg, RABIN_HDR_SIZE);
 
 		/*
@@ -681,7 +732,9 @@ redo:
 		if (HDR & COMPRESSED) {
 			if (HDR & CHUNK_FLAG_PREPROC) {
 				rv = preproc_decompress(pctx, tdat->decompress, cmpbuf,
-				    dedupe_data_sz_cmp,	ubuf, &_chunksize, tdat->level,
+				    dedupe_data_sz_cmp,
+				    tdat->compressed_chunk + tdat->buf_size - cmpbuf,
+				    ubuf, &_chunksize, tdat->level,
 				    HDR, pctx->btype, tdat->data, tdat->props);
 			} else {
 				DEBUG_STAT_EN(double strt, en);
@@ -700,6 +753,11 @@ redo:
 				goto cont;
 			}
 		} else {
+			if (_chunksize > dedupe_data_sz_cmp) {	/* stored: sizes must agree */
+				tdat->len_cmp = 0;
+				pctx->t_errored = 1;
+				goto cont;
+			}
 			memcpy(ubuf, cmpbuf, _chunksize);
 		}
 
@@ -707,6 +765,13 @@ redo:
 		cmpbuf = cseg + RABIN_HDR_SIZE;
 		ubuf = tdat->uncompressed_chunk + RABIN_HDR_SIZE;
 
+		if (dedupe_index_sz < 90 && dedupe_index_sz > dedupe_index_sz_cmp) {
+			/* Stored (uncompressed) index larger than its bytes in the file. */
+			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe index.", tdat->id);
+			tdat->len_cmp = 0;
+			pctx->t_errored = 1;
+			goto cont;
+		}
 		if (dedupe_index_sz >= 90 && dedupe_index_sz > dedupe_index_sz_cmp) {
 			/* Index should be at least 90 bytes to have been compressed. */
 			rv = lzma_decompress(cmpbuf, dedupe_index_sz_cmp, ubuf,
@@ -725,6 +790,7 @@ redo:
 		if (HDR & COMPRESSED) {
 			if (HDR & CHUNK_FLAG_PREPROC) {
 				rv = preproc_decompress(pctx, tdat->decompress, cseg, tdat->len_cmp,
+				    tdat->compressed_chunk + tdat->buf_size - cseg,
 				    tdat->uncompressed_chunk, &_chunksize, tdat->level, HDR, pctx->btype,
 				    tdat->data, tdat->props);
 			} else {
@@ -1723,6 +1789,7 @@ redo:
 				    compressed_chunksize);
 				tdat->uncompressed_chunk = (uchar_t *)slab_alloc(NULL,
 				    compressed_chunksize);
+				tdat->buf_size = compressed_chunksize;
 				if (!tdat->compressed_chunk || !tdat->uncompressed_chunk) {
 					log_msg(LOG_ERR, 0, "2: Out of memory");
 					UNCOMP_BAIL;

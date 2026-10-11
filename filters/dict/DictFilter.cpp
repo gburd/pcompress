@@ -1193,13 +1193,16 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 	std::unique_ptr<decode_dict_entry_t[]> w_dict_owner;	/* freed on every return */
 
 	end = src + srclen;
-	srcpos = (uint8_t *)memchr((const void *)src, ' ', WORD_MAX);
-	if (srcpos - src > 12) {
+	srcpos = (uint8_t *)memchr((const void *)src, ' ', srclen < WORD_MAX ? srclen : WORD_MAX);
+	if (srcpos == NULL || srcpos - src > 12) {
 		return (0);
 	}
 
 	numWords = from_base_enc(src, srcpos - src);
 	srcpos++;
+	/* Untrusted count: each word takes at least one byte of input. */
+	if (numWords > srclen)
+		return (0);
 	w_dict = new decode_dict_entry_t[numWords];
 	w_dict_owner.reset(w_dict);
 	for (i = 0; i < numWords && srcpos < end; i++) {
@@ -1209,8 +1212,8 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 		limit = end - srcpos;
 		if (limit > WORD_MAX+1) limit = WORD_MAX+1;
 		srcpos = (uint8_t *)memchr((const void *)srcpos, ' ', limit);
-		if (srcpos - w_src > WORD_MAX)
-			return (0);
+		if (srcpos == NULL || srcpos == w_src || srcpos - w_src > WORD_MAX)
+			return (0);	/* no terminator, empty or over-long word */
 
 		w_dict[i].sz = srcpos - w_src;
 		w_dict[i].word = w_src;
@@ -1243,8 +1246,9 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 			} else if (c == flag) {
 				toklen--;
 				dpos = from_base_enc(srcpos+pos+1, toklen);
+				if (dpos >= numWords) return (0);	/* corrupt index */
 
-				if (dstpos + w_dict[dpos].sz > dstend) {
+				if (dstpos + w_dict[dpos].sz + 1 > dstend) {	/* word + separator */
 					log_msg(LOG_ERR, 0, "Overflow in DICT decode.\n");
 					return (0);
 				}
@@ -1255,8 +1259,9 @@ DictFilter::Inverse_Dict(uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t *
 			} else if (c == flag1) {
 				toklen--;
 				dpos = from_base_enc(srcpos+pos+1, toklen);
+				if (dpos >= numWords) return (0);	/* corrupt index */
 
-				if (dstpos + w_dict[dpos].sz > dstend) {
+				if (dstpos + w_dict[dpos].sz + 1 > dstend) {	/* word + separator */
 					log_msg(LOG_ERR, 0, "Overflow in DICT decode.\n");
 					return (0);
 				}
@@ -1314,13 +1319,16 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 	uint8_t separator[256];
 
 	end = src + srclen;
-	srcpos = (uint8_t *)memchr((const void *)src, ' ', WORD_MAX);
-	if (srcpos - src > 12) {
+	srcpos = (uint8_t *)memchr((const void *)src, ' ', srclen < WORD_MAX ? srclen : WORD_MAX);
+	if (srcpos == NULL || srcpos - src > 12) {
 		return (0);
 	}
 
 	numWords = from_base_enc(src, srcpos - src);
 	srcpos++;
+	/* Untrusted count: each word takes at least one byte of input. */
+	if (numWords > srclen)
+		return (0);
 
 	if ((srclen - (srcpos - src)) < 10) {
 		return (0);
@@ -1348,8 +1356,8 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 		limit = end - srcpos;
 		if (limit > WORD_MAX+1) limit = WORD_MAX+1;
 		srcpos = (uint8_t *)memchr((const void *)srcpos, ' ', limit);
-		if (srcpos - w_src > WORD_MAX)
-			return (0);
+		if (srcpos == NULL || srcpos == w_src || srcpos - w_src > WORD_MAX)
+			return (0);	/* no terminator, empty or over-long word */
 
 		w_dict[i].sz = srcpos - w_src;
 		w_dict[i].word = w_src;
@@ -1373,6 +1381,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 			if (pc == flag) {
 				toklen --;
 				dpos = from_base_enc(srcpos+pos+1, toklen);
+				if (dpos >= numWords) return (0);	/* corrupt index */
 
 				if (dstpos + w_dict[dpos].sz > dstend) {
 					log_msg(LOG_ERR, 0, "1: Overflow in DICT decode.");
@@ -1384,6 +1393,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 			} else if (pc == flag1) {
 				toklen --;
 				dpos = from_base_enc(srcpos+pos+1, toklen);
+				if (dpos >= numWords) return (0);	/* corrupt index */
 
 				if (dstpos + w_dict[dpos].sz > dstend) {
 					log_msg(LOG_ERR, 0, "2: Overflow in DICT decode.");
@@ -1425,6 +1435,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 		if (pc == flag) {
 			toklen --;
 			dpos = from_base_enc(srcpos+pos+1, toklen);
+			if (dpos >= numWords) return (0);	/* corrupt index */
 
 			if (dstpos + w_dict[dpos].sz > dstend) {
 				log_msg(LOG_ERR, 0, "5: Overflow in DICT decode.\n");
@@ -1436,6 +1447,7 @@ DictFilter::Inverse_Dict_Fasta(uint8_t *src, uint32_t srclen, uint8_t *dst, uint
 		} else if (pc == flag1) {
 			toklen --;
 			dpos = from_base_enc(srcpos+pos+1, toklen);
+			if (dpos >= numWords) return (0);	/* corrupt index */
 
 			if (dstpos + w_dict[dpos].sz > dstend) {
 				log_msg(LOG_ERR, 0, "6: Overflow in DICT decode.\n");
