@@ -48,7 +48,7 @@
 
 #define BLAKE_NAMESPACE(x) x##_neon
 
-static const uint64_t blake2b_IV[8] __attribute__((aligned(64))) = {
+BLAKE_ALIGN(64) static const uint64_t blake2b_IV[8] = {
   0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL,
   0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
   0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL,

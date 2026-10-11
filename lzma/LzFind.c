@@ -35,6 +35,14 @@
 #endif
 #define	PREFETCH_T0(addr,nrOfBytesAhead) _mm_prefetch(((char *)(addr))+nrOfBytesAhead,_MM_HINT_T0)
 #define	PREFETCH_FETCH_DIST 64
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define	PREFETCH_T0(addr,nrOfBytesAhead) __prefetch(((const char *)(addr))+nrOfBytesAhead)
+#else
+#define	PREFETCH_T0(addr,nrOfBytesAhead) _mm_prefetch(((const char *)(addr))+nrOfBytesAhead,_MM_HINT_T0)
+#endif
+#define	PREFETCH_FETCH_DIST 64
 #else
 #define	PREFETCH_T0(addr,nrOfBytesAhead) __builtin_prefetch(((const char *)(addr))+nrOfBytesAhead)
 #define	PREFETCH_FETCH_DIST 64

@@ -39,7 +39,13 @@
  * This gives us BYTE_ORDER macro both on Linux and Solaris derived
  * systems.
  */
+#ifdef _WIN32
+#include <stdint.h>
+#define LITTLE_ENDIAN 1234 /* all Windows targets are little-endian */
+#define BYTE_ORDER LITTLE_ENDIAN
+#else
 #include <arpa/nameser_compat.h>
+#endif
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 #       include "crc32_table_le.h"

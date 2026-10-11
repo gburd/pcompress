@@ -31,9 +31,6 @@
 
 #include <stddef.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 #ifndef EXTERN_C_BEGIN
 #ifdef __cplusplus
@@ -68,7 +65,7 @@ EXTERN_C_BEGIN
 typedef int SRes;
 
 #ifdef _WIN32
-typedef DWORD WRes;
+typedef unsigned long WRes; /* == DWORD; avoids lzma/windows.h shim shadowing the SDK header */
 #else
 typedef int WRes;
 #endif

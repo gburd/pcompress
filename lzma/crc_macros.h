@@ -35,7 +35,12 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
+#ifdef _WIN32
+#include <stddef.h>
+#include <stdint.h>
+#else
 #include <utils.h>
+#endif
 
 #ifdef WORDS_BIGENDIAN
 /* xz-utils gets these from tuklib; the big-endian CRC code needs them. */
