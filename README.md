@@ -317,8 +317,8 @@ Standard Usage
                 This can be a filename or a directory depending on how the archive was created.
                 If single file compression was used then this can be the name of the target
                 file that will hold the uncompressed data.
-                If this is omitted then an output file is created by appending '.out' to the
-                compressed filename.
+                If this is omitted the output file is the compressed filename without its
+                '.pz' suffix, or with '.out' appended if it has none.
 
                 If Archiving was done then this should be the name of a directory into which
                 extracted files are restored. The directory is created if it does not exist.
