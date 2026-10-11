@@ -225,7 +225,7 @@ int
 zlib_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		int level, uchar_t chdr, int btype, void *data)
 {
-	int err;
+	int err = Z_OK;
 	unsigned int slen, dlen;
 	uint64_t _srclen = srclen;
 	uint64_t _dstlen = *dstlen;
@@ -253,9 +253,16 @@ zlib_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		err = inflate(zs, Z_NO_FLUSH);
 		if (err != Z_OK && err != Z_STREAM_END) {
 			zerr(err, 0);
+			inflateReset(zs);	/* stream is reused for the next chunk */
 			return (-1);
 		}
 
+		if (err != Z_STREAM_END && zs->avail_in == slen && zs->avail_out == dlen) {
+			/* No progress: output full or stream stuck (corrupt input). */
+			zerr(Z_BUF_ERROR, 0);
+			inflateReset(zs);
+			return (-1);
+		}
 		dst1 += (dlen - zs->avail_out);
 		_dstlen -= (dlen - zs->avail_out);
 		src1 += (slen - zs->avail_in);
@@ -264,11 +271,24 @@ zlib_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		if (err == Z_STREAM_END) {
 			if (_srclen > 0) {
 				zerr(Z_DATA_ERROR, 0);
+				inflateReset(zs);
 				return (-1);
 			} else {
 				break;
 			}
 		}
+		if (_dstlen == 0 && _srclen > 0) {
+			/* More input than the destination can hold. */
+			zerr(Z_BUF_ERROR, 0);
+			inflateReset(zs);
+			return (-1);
+		}
+	}
+	if (err != Z_STREAM_END) {
+		/* Input ended before the deflate stream did: truncated. */
+		zerr(Z_DATA_ERROR, 0);
+		inflateReset(zs);
+		return (-1);
 	}
 
 	*dstlen = *dstlen - _dstlen;
