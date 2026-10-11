@@ -364,6 +364,7 @@ typedef struct pc_ctx {
 	uint32_t archive_members_count;
 	void *archive_ctx, *archive_sort_buf;
 	pthread_t archive_thread;
+	int archive_thread_started;	/* archive_thread is joinable */
 	char archive_temp_file[MAXPATHLEN];
 	int archive_temp_fd;
 	uint64_t archive_temp_size, archive_size;

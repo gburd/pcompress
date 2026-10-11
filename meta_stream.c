@@ -636,6 +636,8 @@ meta_ctx_send(meta_ctx_t *mctx, const void **buf, size_t *len)
 int
 meta_ctx_done(meta_ctx_t *mctx)
 {
+	if (mctx == NULL)	/* setup failed before the context was created */
+		return (0);
 	meta_ctx_close_src_channel(mctx);
 	meta_ctx_close_sink_channel(mctx);
 	if (!mctx->do_compress)

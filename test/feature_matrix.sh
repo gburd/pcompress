@@ -56,7 +56,7 @@ ck() { # name, compress-args...; input $IN; DARGS = extra decompress args
 }
 algos="lzfx lz4 zlib bzip2 lzma lzmaMt zstd ppmd libbsc adapt adapt2 none"
 # libbsc is refused on big-endian hosts (upstream libbsc does not round-trip).
-case "$(printf '\001\000' | od -An -tu2 | tr -d ' ')" in 256) algos=${algos% libbsc*}" adapt adapt2 none"; BE=1 ;; esac
+[ "$(printf '\001\000' | od -An -tu2 | tr -d ' \n' | sed 's/^0*//')" = 256 ] && { algos=${algos% libbsc*}" adapt adapt2 none"; BE=1; }
 levels="1 6 9 14"; [ -n "$Q" ] && levels="6"
 for IN in mixed.dat num.dat one.dat small.dat; do
 	for a in $algos; do for l in $levels; do

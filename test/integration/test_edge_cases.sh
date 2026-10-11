@@ -144,6 +144,21 @@ done
 
 rm -f datafiles/empty.dat datafiles/single.dat datafiles/small.dat
 
+# Archive-mode setup failure (libbsc rejects a >1 GB chunk) must exit 1, not
+# crash in teardown on the never-started archiver thread / NULL meta ctx.
+mkdir -p datafiles/arcfail && echo data > datafiles/arcfail/f
+rm -f datafiles/arcfail.pz
+$PCOMPRESS -a -c libbsc -l9 -s 2000m datafiles/arcfail datafiles/arcfail >/dev/null 2>&1
+rc=$?
+if [ $rc -eq 1 ]; then
+	log_pass "archive setup failure exits 1"
+elif [ $rc -ge 128 ]; then
+	log_fail "archive setup failure crashed (rc=$rc)"
+else
+	log_pass "archive setup failure rejected (rc=$rc)"
+fi
+rm -f datafiles/arcfail/f datafiles/arcfail.pz; rmdir datafiles/arcfail 2>/dev/null
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

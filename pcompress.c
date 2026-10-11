@@ -1823,7 +1823,10 @@ uncomp_done:
 		if (uncompfd != -1) close(uncompfd);
 	}
 	if (pctx->archive_mode) {
-		pthread_join(pctx->archive_thread, NULL);
+		if (pctx->archive_thread_started) {
+			pthread_join(pctx->archive_thread, NULL);
+			pctx->archive_thread_started = 0;
+		}
 		if (pctx->meta_stream) {
 			meta_ctx_done(pctx->meta_ctx);
 			pctx->meta_ctx = NULL;
@@ -3017,7 +3020,10 @@ comp_done:
 	if (pctx->archive_mode) {
 		struct fn_list *fn, *fn1;
 
-		pthread_join(pctx->archive_thread, NULL);
+		if (pctx->archive_thread_started) {
+			pthread_join(pctx->archive_thread, NULL);
+			pctx->archive_thread_started = 0;
+		}
 		fn = pctx->fn;
 		while (fn) {
 			fn1 = fn;
@@ -3194,6 +3200,8 @@ create_pc_context(void)
 {
 	pc_ctx_t *ctx = (pc_ctx_t *)malloc(sizeof (pc_ctx_t));
 
+	if (ctx == NULL)
+		return (NULL);
 	if (ossl_check_version() != 0) {
 		fprintf(stderr, "FATAL: Incompatible OpenSSL version detected.\n"
 		    "       Compiled with: %s\n"
