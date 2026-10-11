@@ -120,8 +120,6 @@ static int detect_type_by_data(uchar_t *buf, size_t len);
 static int
 arc_open_callback(struct archive *arc, void *ctx)
 {
-	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
-
 	/*
 	 * The handoff state (read_sem/write_sem, arc_buf*) is initialised in
 	 * setup_archiver()/setup_extractor() before any thread runs. On
@@ -1612,7 +1610,7 @@ archive_list_entry(struct archive *a, struct archive_entry *entry, int typ)
 		if (sz > 0)
 			return (copy_data_skip(a, entry, typ));
 	} else {
-		printf("%12" PRId64 " %13s %s\n", 0LL, strtm, archive_entry_pathname(entry));
+		printf("%12" PRId64 " %13s %s\n", (int64_t)0, strtm, archive_entry_pathname(entry));
 	}
 	return (ARCHIVE_OK);
 }

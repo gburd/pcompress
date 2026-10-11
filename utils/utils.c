@@ -525,7 +525,8 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 		fputs(msg, stderr);
 
 	} else if (ldest.type == LOG_FILE) {
-		(void) write(ldest.fd, msg, strlen(msg));
+		if (write(ldest.fd, msg, strlen(msg)) < 0)
+			fputs(msg, stderr);	/* log file unwritable: don't lose it */
 	} else {
 		ldest.cb(msg);
 	}
