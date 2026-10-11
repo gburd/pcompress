@@ -56,11 +56,54 @@ with the existing `.pz` file format.
   - Comprehensive developer documentation (docs/)
   - Testing framework with unit, integration, fuzz, and benchmark suites
 
+  - Validated on x86-64, AArch64, RISC-V 64 and big-endian SPARC64
+  - pcompress(1) man page and DESIGN.md
+
   In Progress:
-  - Cross-platform validation (macOS, FreeBSD)
+  - macOS and FreeBSD validation; native Windows port
 
 See `docs/MIGRATION_v4.md` for upgrade details and `docs/ARCHITECTURE.md`
 for the system design overview.
+
+Building
+========
+
+Requirements: a 64-bit Unix (Linux, illumos/Solaris, macOS and the BSDs
+are expected to work), a C/C++ compiler (GCC or Clang) with OpenMP,
+OpenSSL >= 1.1.1, zlib, bzip2, POSIX threads and GNU make. `yasm` is
+optional (x86-64 assembler fast paths). The bundled libraries (lz4, zstd,
+libbsc, libarchive, optionally WavPack) are git submodules:
+
+    git clone --recursive https://codeberg.org/gregburd/pcompress.git
+    cd pcompress
+    ./config --disable-wavpack      # ./config --help lists every option
+    make -j
+    make test-unit                  # unit tests
+    (cd test && sh run_all_tests.sh integration)
+    make install PREFIX=/usr/local  # binary, libpcompress.so.1, pcompress(1)
+
+Useful `./config` options: `--portable` (no host-CPU tuning; for
+packages), `--enable-lto`, `--enable-debug`, `--enable-coverage` (then
+`make coverage`), `--disable-zstd`, `--disable-allocator`,
+`--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and `LDFLAGS` from the
+environment are honoured; Clang is used with `CC=clang CXX=clang++`.
+
+With Nix: `nix build` (runs the test suite in the sandbox) or
+`nix develop` for a shell with every tool; see `docs/NIX.md`.
+
+Platforms
+---------
+
+Tested on x86-64 (GCC, Clang, both with LTO), AArch64 (Graviton4,
+192 cores / 2 NUMA nodes), RISC-V 64 and big-endian SPARC64 (illumos,
+GCC 13). Archives are byte-order independent: a file written on one
+architecture decompresses on any other. libbsc is not available on
+big-endian hosts (upstream libbsc does not round-trip there). The core
+compressors also build with MSVC on Windows ARM64, but a full Windows port
+(POSIX semaphores, mmap, fork-free I/O) has not been done.
+
+Documentation: `pcompress(1)` (`man ./pcompress.1`) for usage, and
+`DESIGN.md` for the stream format, threading model and invariants.
 
 LICENSING
 =========

@@ -2,13 +2,15 @@ Copyright (c) 2012 Moinak Ghosh
 
 Prerequisites
 =============
-64-bit System.
-GCC 4.4 (with mpfr, ppl and cloog support packages for loop
-	 vectorization).
-libz (zlib) and development packages.
-Libbz2 and development packages.
-OpenSSL version 0.9.8 or greater.
-Libarchive 3.x or greater and its development packages.
+64-bit system (Linux, illumos/Solaris, macOS, BSD).
+GCC or Clang with OpenMP (Clang needs libomp).
+zlib and bzip2 with development headers.
+OpenSSL 1.1.1 or newer with development headers.
+POSIX threads, GNU make, perl (for the bundled libarchive build).
+yasm (optional, x86-64 only).
+The bundled lz4, zstd, libbsc, libarchive and WavPack sources are git
+submodules: clone with --recursive or run
+'git submodule update --init --recursive'.
 
 Basic Installation
 ==================
@@ -18,9 +20,11 @@ The simplest process to build and install this utility is:
 make
 make install
 
-The current makefiles and config scripts assume Gcc compiler is
-in the PATH. Please update PATH before running config if that is
-not the case.
+config uses gcc by default; set CC and CXX (e.g. CC=clang
+CXX=clang++) to use another compiler. CFLAGS and LDFLAGS from the
+environment are honoured. For distribution packages use
+'./config --portable' so the binary does not depend on the build
+host's CPU features (SIMD paths are still chosen at run time).
 
 In order to remove all binaries:
 make clean
@@ -44,7 +48,15 @@ NOTE: Basic Installation does not enable support for Libbsc, a
 Testing
 =======
 
-After running make as given above you can run:
+Fast checks (a few minutes):
+make test-unit            unit tests (test/unit)
+make test-integration     round-trip, crypto, dedupe, archive, edge cases
+sh test/feature_matrix.sh `pwd`/pcompress /tmp/pcm quick
+                          every algorithm x level x option combination
+make coverage             all of the above under gcov (needs
+                          ./config --enable-coverage and lcov)
+
+See docs/TESTING.md for details. The legacy exhaustive suite is:
 make test
 
 This will generate some data files from /usr/bin /usr/share and
