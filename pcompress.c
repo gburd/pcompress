@@ -1133,7 +1133,9 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		int saltlen, noncelen;
 		uchar_t *salt1, *salt2;
 		uchar_t nonce[MAX_NONCE], n1[MAX_NONCE];
-		uchar_t pw[MAX_PW_LEN];
+		uchar_t pw[MAX_PW_LEN + 1];	/* + NUL: a MAX_PW_LEN-byte password file
+					 * wrote pw[MAX_PW_LEN] (stack overflow;
+					 * broke decryption with clang) */
 		int pw_len;
 		mac_ctx_t hdr_mac;
 		uchar_t hdr_hash1[pctx->mac_bytes], hdr_hash2[pctx->mac_bytes];
@@ -2217,7 +2219,9 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	compressed_chunksize = 0;
 
 	if (pctx->encrypt_type) {
-		uchar_t pw[MAX_PW_LEN];
+		uchar_t pw[MAX_PW_LEN + 1];	/* + NUL: a MAX_PW_LEN-byte password file
+					 * wrote pw[MAX_PW_LEN] (stack overflow;
+					 * broke decryption with clang) */
 		int pw_len = -1;
 
 		compressed_chunksize += pctx->mac_bytes;
