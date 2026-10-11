@@ -131,6 +131,18 @@ libbsc_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	struct libbsc_params *bscdat;
 	int rv;
 
+#ifdef WORDS_BIGENDIAN
+	/*
+	 * libbsc 3.3 does not round-trip on big-endian hosts (its own CLI
+	 * fails or crashes decoding on SPARC). Refuse rather than write data
+	 * that cannot be read back; adapt modes fall back to other codecs.
+	 */
+	(void) bscdat; (void) rv;
+	*data = NULL;
+	if (op == COMPRESS)
+		log_msg(LOG_ERR, 0, "libbsc is not supported on big-endian hosts.\n");
+	return (op == COMPRESS ? 1 : -1);
+#endif
 	if (chunksize > BSC_MAX_CHUNK) {
 		log_msg(LOG_ERR, 0, "Max allowed chunk size for LIBBSC is: %s \n",
 		    bytes_to_size(BSC_MAX_CHUNK));

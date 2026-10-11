@@ -245,7 +245,8 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		if (rv == 0)
 			rv = lzma_init(&(adat->lzma_data), &lv, nthreads, chunksize, file_version, op);
 		lv = *level;
-#ifdef ENABLE_PC_LIBBSC
+#if defined(ENABLE_PC_LIBBSC) && !defined(WORDS_BIGENDIAN)
+		/* libbsc is optional here: without it, text goes to PPMD. */
 		if (rv == 0)
 			rv = libbsc_init(&(adat->bsc_data), &lv, nthreads, chunksize, file_version, op);
 #endif
