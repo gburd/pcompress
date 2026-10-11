@@ -119,9 +119,6 @@ salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int p
 	}
 
 	if (enc) {
-		int i;
-		uint64_t *n, *n1;
-
 		// Derive 192-bit nonce
 		if (RAND_status() != 1 || RAND_bytes(IV, XSALSA20_CRYPTO_NONCEBYTES) != 1) {
 			if (geturandom_bytes(IV, XSALSA20_CRYPTO_NONCEBYTES) != 0) {
@@ -135,13 +132,7 @@ salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int p
 						saltlen, PBE_ROUNDS, EVP_sha256(), 32, IV);
 			}
 		}
-		n = (uint64_t *)IV;
-		n1 = (uint64_t *)(ctx->nonce);
-		for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
-			*n1 = LE64(*n);
-			n++;
-			n1++;
-		}
+		memcpy(ctx->nonce, IV, XSALSA20_CRYPTO_NONCEBYTES);	/* random bytes */
 
 		// Nullify stack components
 		memset(num, 0, 25);
@@ -155,39 +146,57 @@ salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int p
 	return (0);
 }
 
+/*
+ * Per-chunk nonce: add the chunk id to the 192-bit nonce, viewed as three
+ * little-endian 64-bit words (the historical x86 behaviour, kept so
+ * existing archives decrypt). Byte-wise so big-endian and strict-alignment
+ * hosts derive the same nonce.
+ */
+static uint64_t
+nonce_ld(const uchar_t *p)
+{
+	uint64_t v = 0;
+	int i;
+	for (i = 7; i >= 0; i--) v = (v << 8) | p[i];
+	return (v);
+}
+
+static void
+nonce_st(uchar_t *p, uint64_t v)
+{
+	int i;
+	for (i = 0; i < 8; i++) { p[i] = (uchar_t)v; v >>= 8; }
+}
+
+static void
+nonce_add(uchar_t *nonce, uint64_t carry)
+{
+	int i;
+	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
+		uint64_t w = nonce_ld(nonce + 8 * i);
+		if (UINT64_MAX - w < carry) {
+			carry = carry - (UINT64_MAX - w);
+			nonce_st(nonce + 8 * i, 0);
+		} else {
+			nonce_st(nonce + 8 * i, w + carry);
+			return;
+		}
+	}
+	/* Wrapped all words (as before): fold into word 0. */
+	nonce_st(nonce, nonce_ld(nonce) + carry);
+}
+
 int
 salsa20_encrypt(salsa20_ctx_t *ctx, uchar_t *plaintext, uchar_t *ciphertext, uint64_t len, uint64_t id)
 {
 	uchar_t nonce[XSALSA20_CRYPTO_NONCEBYTES];
 	int i, rv;
-	uint64_t *n, carry;
 
 	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES; i++) nonce[i] = ctx->nonce[i];
-	carry = id;
-	n = (uint64_t *)nonce;
-	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
-		if (UINT64_MAX - *n < carry) {
-			carry = carry - (UINT64_MAX - *n);
-			*n = 0;
-		} else {
-			*n += carry;
-			carry = 0;
-			break;
-		}
-		++n;
-	}
-	if (carry) {
-		n = (uint64_t *)nonce;
-		*n += carry;
-		carry = 0;
-	}
+	nonce_add(nonce, id);
 
 	rv = crypto_xsalsa20(ciphertext, plaintext, len, nonce, ctx->key, ctx->keylen);
-	n = (uint64_t *)nonce;
-	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
-		*n = 0;
-		++n;
-	}
+	memset(nonce, 0, sizeof (nonce));
 	return (rv);
 }
 
@@ -196,34 +205,12 @@ salsa20_decrypt(salsa20_ctx_t *ctx, uchar_t *ciphertext, uchar_t *plaintext, uin
 {
 	uchar_t nonce[XSALSA20_CRYPTO_NONCEBYTES];
 	int i, rv;
-	uint64_t *n, carry;
 
 	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES; i++) nonce[i] = ctx->nonce[i];
-	carry = id;
-	n = (uint64_t *)nonce;
-	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
-		if (UINT64_MAX - *n < carry) {
-			carry = carry - (UINT64_MAX - *n);
-			*n = 0;
-		} else {
-			*n += carry;
-			carry = 0;
-			break;
-		}
-		++n;
-	}
-	if (carry) {
-		n = (uint64_t *)nonce;
-		*n += carry;
-		carry = 0;
-	}
+	nonce_add(nonce, id);
 
 	rv = crypto_xsalsa20(plaintext, ciphertext, len, nonce, ctx->key, ctx->keylen);
-	n = (uint64_t *)nonce;
-	for (i = 0; i < XSALSA20_CRYPTO_NONCEBYTES/8; i++) {
-		*n = 0;
-		++n;
-	}
+	memset(nonce, 0, sizeof (nonce));
 	return (rv);
 }
 

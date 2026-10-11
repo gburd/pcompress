@@ -47,7 +47,7 @@ run_section() {
 
 # --- Unit Tests ---
 run_unit_tests() {
-	for t in test_compress test_xxhash test_crc test_slab test_blake2 test_sha2 test_api; do
+	for t in test_compress test_xxhash test_crc test_slab test_blake2 test_sha2 test_api test_filters; do
 		if [ -x "${BUILD_DIR}/buildtmp/$t" ]; then
 			run_section "Unit: $t" "${BUILD_DIR}/buildtmp/$t"
 		else

@@ -194,10 +194,10 @@ LZP_MATCH_NOT_FOUND:
 }
 
 static
-int bsc_lzp_decode_block(const unsigned char * input, const unsigned char * inputEnd, unsigned char * output, int hashSize, int minLen)
+int bsc_lzp_decode_block(const unsigned char * input, const unsigned char * inputEnd, unsigned char * output, unsigned char * outputLimit, int hashSize, int minLen)
 {
     int *lookup, i;
-    if (inputEnd - input < 4)
+    if (inputEnd - input < 4 || outputLimit - output < 4)
     {
         return LZP_UNEXPECTED_EOB;
     }
@@ -207,6 +207,8 @@ int bsc_lzp_decode_block(const unsigned char * input, const unsigned char * inpu
     {
         unsigned int            mask        = (int)(1 << hashSize) - 1;
         const unsigned char *   outputStart = output;
+        /* Match copies run in 4-byte steps and may overshoot by 3. */
+        const unsigned char *   outputSafe  = outputLimit - 4;
 
         unsigned int context = 0;
         for (i = 0; i < 4; ++i)
@@ -218,15 +220,32 @@ int bsc_lzp_decode_block(const unsigned char * input, const unsigned char * inpu
         {
             unsigned int index = ((context >> 15) ^ context ^ (context >> 3)) & mask;
             int value = lookup[index]; lookup[index] = (int)(output - outputStart);
+            if (output >= outputLimit)
+            {
+                slab_free(NULL, lookup);
+                return LZP_UNEXPECTED_EOB;
+            }
             if (*input == LZP_MATCH_FLAG && value > 0)
             {
                 input++;
+                if (input >= inputEnd)
+                {
+                    slab_free(NULL, lookup);
+                    return LZP_UNEXPECTED_EOB;
+                }
                 if (*input != 255)
                 {
-                    int len = minLen; while (1) { len += *input; if (*input++ != 254) break; }
+                    int len = minLen; while (input < inputEnd) { len += *input; if (*input++ != 254) break; }
 
                     const unsigned char * reference = outputStart + value;
                           unsigned char * outputEnd = output + len;
+
+                    /* Corrupt input: a match past the end of the output. */
+                    if (outputEnd > outputSafe || reference >= output)
+                    {
+                        slab_free(NULL, lookup);
+                        return LZP_UNEXPECTED_EOB;
+                    }
 
                     if (output - reference < 4)
                     {
@@ -409,73 +428,58 @@ int64_t lzp_compress(const unsigned char * input, unsigned char * output, int64_
     return bsc_lzp_compress_serial(input, output, n, hashSize, minLen);
 }
 
-int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int64_t n, int hashSize, int minLen, int features)
+int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int64_t n, int64_t outLen, int hashSize, int minLen, int features)
 {
+    if (n < 1) return LZP_UNEXPECTED_EOB;
     int nBlocks = input[0];
 
     if (nBlocks == 1)
     {
-        return bsc_lzp_decode_block(input + 1, input + n, output, hashSize, minLen);
+        return bsc_lzp_decode_block(input + 1, input + n, output, output + outLen, hashSize, minLen);
     }
+    /* Block table must fit in the input. */
+    if (nBlocks < 1 || 1 + 8 * (int64_t)nBlocks > n) return LZP_UNEXPECTED_EOB;
 
     int decompressionResult[ALPHABET_SIZE];
+    int64_t inPtr[ALPHABET_SIZE], outPtr[ALPHABET_SIZE];
+    int inSize[ALPHABET_SIZE], outSize[ALPHABET_SIZE];
+    int blockId;
 
-#ifdef LZP_OPENMP
-
-    if (features & LZP_FEATURE_MULTITHREADING)
+    /* Validate the (untrusted) block table once: every block in bounds. */
     {
-        #pragma omp parallel for schedule(dynamic)
-        for (int blockId = 0; blockId < nBlocks; ++blockId)
-        {
-            int inputPtr = 0;  for (int p = 0; p < blockId; ++p) inputPtr  += ((int)LE32((uint32_t)I32_P(input + 1 + 8 * p + 4)));
-            int outputPtr = 0; for (int p = 0; p < blockId; ++p) outputPtr += ((int)LE32((uint32_t)I32_P(input + 1 + 8 * p + 0)));
-
-            inputPtr += 1 + 8 * nBlocks;
-
-            int inputSize  = ((int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 4)));
-            int outputSize = ((int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 0)));
-
-            if (inputSize != outputSize)
-            {
-                decompressionResult[blockId] = bsc_lzp_decode_block(input + inputPtr, input + inputPtr + inputSize, output + outputPtr, hashSize, minLen);
-            }
-            else
-            {
-                decompressionResult[blockId] = inputSize; memcpy(output + outputPtr, input + inputPtr, inputSize);
-            }
-        }
-    }
-    else
-
-#endif
-
-    {
-	int blockId, p;
-
+        int64_t ip = 1 + 8 * (int64_t)nBlocks, op = 0;
         for (blockId = 0; blockId < nBlocks; ++blockId)
         {
-            int64_t inputPtr = 0;  for (p = 0; p < blockId; ++p) inputPtr  += ((int)LE32((uint32_t)I32_P(input + 1 + 8 * p + 4)));
-            int64_t outputPtr = 0; for (p = 0; p < blockId; ++p) outputPtr += ((int)LE32((uint32_t)I32_P(input + 1 + 8 * p + 0)));
+            outSize[blockId] = (int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 0));
+            inSize[blockId]  = (int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 4));
+            if (inSize[blockId] < 0 || outSize[blockId] < 0 ||
+                ip + inSize[blockId] > n || op + outSize[blockId] > outLen)
+                return LZP_UNEXPECTED_EOB;
+            inPtr[blockId] = ip; outPtr[blockId] = op;
+            ip += inSize[blockId]; op += outSize[blockId];
+        }
+    }
 
-            inputPtr += 1 + 8 * nBlocks;
-
-            int inputSize  = ((int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 4)));
-            int outputSize = ((int)LE32((uint32_t)I32_P(input + 1 + 8 * blockId + 0)));
-
-            if (inputSize != outputSize)
-            {
-                decompressionResult[blockId] = bsc_lzp_decode_block(input + inputPtr, input + inputPtr + inputSize, output + outputPtr, hashSize, minLen);
-            }
-            else
-            {
-                decompressionResult[blockId] = inputSize; memcpy(output + outputPtr, input + inputPtr, inputSize);
-            }
+#ifdef LZP_OPENMP
+    #pragma omp parallel for schedule(dynamic) if (features & LZP_FEATURE_MULTITHREADING)
+#endif
+    for (blockId = 0; blockId < nBlocks; ++blockId)
+    {
+        if (inSize[blockId] != outSize[blockId])
+        {
+            decompressionResult[blockId] = bsc_lzp_decode_block(input + inPtr[blockId],
+                input + inPtr[blockId] + inSize[blockId], output + outPtr[blockId],
+                output + outPtr[blockId] + outSize[blockId], hashSize, minLen);
+        }
+        else
+        {
+            decompressionResult[blockId] = inSize[blockId];
+            memcpy(output + outPtr[blockId], input + inPtr[blockId], inSize[blockId]);
         }
     }
 
     int64_t dataSize = 0;
     int result = LZP_NO_ERROR;
-    int blockId;
     for (blockId = 0; blockId < nBlocks; ++blockId)
     {
         if (decompressionResult[blockId] < LZP_NO_ERROR) result = decompressionResult[blockId];

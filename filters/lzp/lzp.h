@@ -95,12 +95,13 @@ extern "C" {
     * @param input      - the input memory block of n bytes.
     * @param output     - the output memory block.
     * @param n          - the length of the input memory block.
+    * @param outLen     - capacity of the output block (decoding never writes past it).
     * @param hashSize   - the hash table size.
     * @param minLen     - the minimum match length.
     * @param features   - the set of additional features.
     * @return The length of original memory block if no error occurred, error code otherwise.
     */
-    int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int64_t n, int hashSize, int minLen, int features);
+    int64_t lzp_decompress(const unsigned char * input, unsigned char * output, int64_t n, int64_t outLen, int hashSize, int minLen, int features);
 
     int lzp_hash_size(int level);
 #ifdef __cplusplus

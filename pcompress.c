@@ -454,7 +454,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 		int64_t result;
 		hashsize = lzp_hash_size(level);
 		result = lzp_decompress((const uchar_t *)src, (uchar_t *)dst, srclen,
-					hashsize, LZP_DEFAULT_LZPMINLEN, 0);
+					_dstlen1, hashsize, LZP_DEFAULT_LZPMINLEN, 0);
 		if (result > 0) {
 			memcpy(src, dst, result);
 			srclen = result;

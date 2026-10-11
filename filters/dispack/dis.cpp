@@ -236,25 +236,22 @@ enum Streams
 
 /****************************************************************************/
 
-// These helper functions assume that this code is being compiled on a
-// little-endian platform with no alignment restrictions on data accesses.
-// If this isn't a safe assumption, change these functions appropriately.
-// All byte order dependent operations end up calling them.
-//
-// I also use the VC++ _byteswap intrinsics to implement big endian stores;
-// if your compiler doesn't have them, it should be trivial to get rid of them.
+// All byte order dependent operations end up calling these helpers.
 
+// Byte-wise: x86 code is little-endian, and the host may be big-endian or
+// strict-alignment (the original pointer casts SIGBUS on SPARC). Compilers
+// fold these into single loads/stores where that is legal.
 static inline sU8 Load8(const sU8 *s)       { return *s; }
-static inline sU16 Load16(const sU8 *s)     { return *((const sU16 *) s); }
-static inline sU16 Load16B(const sU8 *s)    { return _byteswap_ushort(Load16(s)); }
-static inline sU32 Load32(const sU8 *s)     { return *((const sU32 *) s); }
-static inline sU32 Load32B(const sU8 *s)    { return _byteswap_ulong(Load32(s)); }
+static inline sU16 Load16(const sU8 *s)     { return (sU16) (s[0] | (s[1] << 8)); }
+static inline sU16 Load16B(const sU8 *s)    { return (sU16) ((s[0] << 8) | s[1]); }
+static inline sU32 Load32(const sU8 *s)     { return (sU32) s[0] | ((sU32) s[1] << 8) | ((sU32) s[2] << 16) | ((sU32) s[3] << 24); }
+static inline sU32 Load32B(const sU8 *s)    { return ((sU32) s[0] << 24) | ((sU32) s[1] << 16) | ((sU32) s[2] << 8) | (sU32) s[3]; }
 
 static inline void Store8(sU8 *d,sU8 v)     { *d = v; }
-static inline void Store16(sU8 *d,sU16 v)   { *((sU16 *) d) = v; }
-static inline void Store16B(sU8 *d,sU16 v)  { *((sU16 *) d) = _byteswap_ushort(v); }
-static inline void Store32(sU8 *d,sU32 v)   { *((sU32 *) d) = v; }
-static inline void Store32B(sU8 *d,sU32 v)  { *((sU32 *) d) = _byteswap_ulong(v); }
+static inline void Store16(sU8 *d,sU16 v)   { d[0] = (sU8) v; d[1] = (sU8) (v >> 8); }
+static inline void Store16B(sU8 *d,sU16 v)  { d[0] = (sU8) (v >> 8); d[1] = (sU8) v; }
+static inline void Store32(sU8 *d,sU32 v)   { d[0] = (sU8) v; d[1] = (sU8) (v >> 8); d[2] = (sU8) (v >> 16); d[3] = (sU8) (v >> 24); }
+static inline void Store32B(sU8 *d,sU32 v)  { d[0] = (sU8) (v >> 24); d[1] = (sU8) (v >> 16); d[2] = (sU8) (v >> 8); d[3] = (sU8) v; }
 
 static inline sU8 Fetch8(sU8 *&s)           { return *s++; }
 static inline sU16 Fetch16(sU8 *&s)         { sU16 v = Load16(s);   s += 2; return v; }
