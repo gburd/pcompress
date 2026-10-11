@@ -94,7 +94,7 @@ done
 # Test dedup with encryption
 echo ""
 echo "--- Dedup + Encryption ---"
-PWFILE="$TMPDIR/pcompress_dedup_pw"
+PWFILE="${TMPDIR:-/tmp}/pcompress_dedup_pw"
 for algo in lz4 zlib; do
 	if ! algo_available "$algo"; then
 		continue

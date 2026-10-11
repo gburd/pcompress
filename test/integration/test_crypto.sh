@@ -9,7 +9,7 @@ PCOMPRESS="${PCOMPRESS:-$(cd "$(dirname "$0")/../.." && pwd)/pcompress}"
 PASS=0
 FAIL=0
 SKIP=0
-PWFILE="$TMPDIR/pcompress_test_pwf"
+PWFILE="${TMPDIR:-/tmp}/pcompress_test_pwf"
 
 log_pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 log_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
