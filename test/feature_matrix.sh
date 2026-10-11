@@ -22,7 +22,7 @@ fail=0; pass=0
 if [ ! -s mixed.dat ] || [ $(wc -c < mixed.dat) -le 1000000 ] || [ ! -s num.dat ]; then
 	# Deterministic, portable corpus: text, binary, repetitive, random.
 	# CORPUS env: dir of mixed text+binary files (default: the pcompress tree)
-	( cd "$CORPUS" && find . -type f -size -2M 2>/dev/null | LC_ALL=C sort | head -3000 | xargs cat 2>/dev/null ) | head -c 24000000 > mixed.dat
+	( cd "$CORPUS" && find . -type f -size -4096 2>/dev/null | LC_ALL=C sort | head -3000 | xargs cat 2>/dev/null ) | head -c 24000000 > mixed.dat
 	[ $(wc -c < mixed.dat) -gt 1000000 ] || { echo "corpus too small"; exit 99; }
 	head -c 4000000 /dev/urandom > rnd.dat
 	cat mixed.dat rnd.dat mixed.dat > dup.dat      # dedupe-friendly
