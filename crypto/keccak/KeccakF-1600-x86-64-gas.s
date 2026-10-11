@@ -764,3 +764,5 @@ KeccakExtract1024bits:
 	movq		%r8,  15*8(%rsi)
 	ret
 
+
+	.section .note.GNU-stack,"",@progbits

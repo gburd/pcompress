@@ -432,3 +432,7 @@ K512:
 	dq 0x4cc5d4becb3e42b6,0x597f299cfc657e2a 
 	dq 0x5fcb6fab3ad6faec,0x6c44198c4a475817
 
+
+%ifidn __OUTPUT_FORMAT__,elf64
+section .note.GNU-stack noalloc noexec nowrite progbits
+%endif
