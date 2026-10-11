@@ -77,6 +77,19 @@ stdenv.mkDerivation (finalAttrs: {
   ]
   ++ lib.optional stdenv.cc.isClang llvmPackages.openmp;
 
+  # ./config is a hand-written script, not autoconf. --portable: no host
+  # CPU probing (SIMD paths are still chosen at run time).
+  configureScript = "./config";
+  dontDisableStatic = true;
+  configureFlags = [
+    "--portable"
+    "--disable-wavpack"
+  ];
+  checkTarget = "check";
+  enableParallelBuilding = true;
+
+  doCheck = true;
+
   # The bundled libraries are built in-tree (pcompress patches libarchive).
   postUnpack = ''
     for d in lz4 bsc zstd archive/libarchive; do
@@ -91,22 +104,9 @@ stdenv.mkDerivation (finalAttrs: {
     chmod -R u+w "$sourceRoot/lz4" "$sourceRoot/bsc" "$sourceRoot/zstd" "$sourceRoot/archive/libarchive"
   '';
 
-  # ./config is a hand-written script, not autoconf. --portable: no host
-  # CPU probing (SIMD paths are still chosen at run time).
-  configureScript = "./config";
-  dontDisableStatic = true;
-  configureFlags = [
-    "--portable"
-    "--disable-wavpack"
-  ];
   preConfigure = ''
     patchShebangs config test
   '';
-
-  enableParallelBuilding = true;
-
-  doCheck = true;
-  checkTarget = "check";
 
   postInstall = ''
     # The binary links libpcompress.so.1 from $out/lib.
