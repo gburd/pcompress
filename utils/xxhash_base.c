@@ -65,7 +65,7 @@ unsigned int (*xxh32_result)(void* state) = NULL;
 unsigned int (*xxh32_getIntermediateResult)(void* state) = NULL;
 
 void
-XXH32_module_init() {
+XXH32_module_init(void) {
 #if defined(__x86_64__) || defined(__i386__)
 	if (proc_info.avx512_avail) {
 		xxh32 = XXH32_AVX512;

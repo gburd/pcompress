@@ -118,7 +118,7 @@ hash6432shift(uint64_t key)
 }
 
 void
-slab_init()
+slab_init(void)
 {
 	int i;
 	uint64_t slab_sz;
@@ -509,7 +509,7 @@ slab_release(void *p, void *address)
 
 #else
 void
-slab_init() {}
+slab_init(void) {}
 
 void
 slab_cleanup(int quiet) {}

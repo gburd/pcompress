@@ -1788,7 +1788,7 @@ start_extractor(pc_ctx_t *pctx) {
  * http://burtleburtle.net/bob/hash/perfect.html
  */
 int
-init_archive_mod() {
+init_archive_mod(void) {
 	int rv = 0;
 
 	pthread_mutex_lock(&init_mutex);
@@ -1835,7 +1835,7 @@ init_filters(struct filter_flags *ff)
 }
 
 void
-disable_all_filters()
+disable_all_filters(void)
 {
 	struct filter_flags ff;
 

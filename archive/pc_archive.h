@@ -111,7 +111,7 @@ int archiver_close(void *ctx);
 /**@{*/
 
 /** Initialize the archive module (register built-in filters). */
-int init_archive_mod();
+int init_archive_mod(void);
 
 /**
  * Register a content filter for a specific file extension.
@@ -126,7 +126,7 @@ int insert_filter_data(filter_func_ptr func, void *filter_private, const char *e
 void init_filters(struct filter_flags *ff);
 
 /** Disable all content filters. */
-void disable_all_filters();
+void disable_all_filters(void);
 
 
 #ifdef	__cplusplus

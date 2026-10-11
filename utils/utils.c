@@ -71,7 +71,7 @@ struct RiffHdr {
 };
 
 void
-init_pcompress() {
+init_pcompress(void) {
 	cpuid_basic_identify(&proc_info);
 	XXH32_module_init();
 #ifdef __APPLE__
@@ -321,7 +321,7 @@ set_threadcounts(algo_props_t *props, int *nthreads, int nprocs, algo_threads_ty
 }
 
 uint64_t
-get_total_ram()
+get_total_ram(void)
 {
 #ifndef __APPLE__
 	uint64_t phys_pages, page_size;
@@ -532,7 +532,7 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 }
 
 char *
-get_temp_dir()
+get_temp_dir(void)
 {
 	char *tmp;
 	char tmpdir[MAXPATHLEN];
@@ -573,7 +573,7 @@ Int_Handler(int signo)
 }
 
 void
-handle_signals()
+handle_signals(void)
 {
 	pthread_mutex_lock(&f_mutex);
 	if (!f_inited) {

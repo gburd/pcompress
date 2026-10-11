@@ -150,7 +150,7 @@ This way, it becomes possible to generate intermediate hashes, and then continue
 To free memory context, use XXH32_result().
 */
 
-void XXH32_module_init();
+void XXH32_module_init(void);
 
 #if defined (__cplusplus)
 }

@@ -40,7 +40,7 @@
 #include <inttypes.h>
 
 /** Initialize the slab allocator. Must be called before any slab_alloc. */
-void slab_init();
+void slab_init(void);
 
 /**
  * Clean up and release all slab allocator memory.

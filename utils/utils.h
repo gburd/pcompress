@@ -374,14 +374,14 @@ extern int64_t Read_Adjusted(int fd, uchar_t *buf, uint64_t count,
 extern int64_t Write(int fd, const void *buf, uint64_t count);
 extern void set_threadcounts(algo_props_t *props, int *nthreads, int nprocs,
 	algo_threads_type_t typ);
-extern uint64_t get_total_ram();
+extern uint64_t get_total_ram(void);
 extern double get_wtime_millis(void);
 extern double get_mb_s(uint64_t bytes, double strt, double en);
 extern void get_sys_limits(my_sysinfo *msys_info);
 extern int chk_dir(char *dir);
 extern void init_algo_props(algo_props_t *props);
-extern void init_pcompress();
-extern char *get_temp_dir();
+extern void init_pcompress(void);
+extern char *get_temp_dir(void);
 extern int file_exists(char *path);
 
 #ifndef _MPLV2_LICENSE_
@@ -446,7 +446,7 @@ void log_msg(log_level_t log_level, int show_errno, const char *format, ...);
  * Tempfile cleanup handlers and tempfile registration routines.
  */
 void Int_Handler(int signo);
-void handle_signals();
+void handle_signals(void);
 void add_fname(char *fn);
 void rm_fname(char *fn);
 
