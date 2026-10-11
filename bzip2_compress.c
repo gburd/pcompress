@@ -220,10 +220,29 @@ bzip2_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 			bzerr(ret);
 			return (-1);
 		}
+		if (ret != BZ_STREAM_END && bzs.avail_in == slen && bzs.avail_out == dlen) {
+			/* No progress: output full or corrupt input (looped forever). */
+			BZ2_bzDecompressEnd(&bzs);
+			bzerr(BZ_OUTBUFF_FULL);
+			return (-1);
+		}
 		dst1 += (dlen - bzs.avail_out);
 		_dstlen -= (dlen - bzs.avail_out);
 		src1 += (slen - bzs.avail_in);
 		_srclen -= (slen - bzs.avail_in);
+		if (ret == BZ_STREAM_END)
+			break;
+		if (_dstlen == 0 && _srclen > 0) {
+			BZ2_bzDecompressEnd(&bzs);
+			bzerr(BZ_OUTBUFF_FULL);
+			return (-1);
+		}
+	}
+	if (ret != BZ_STREAM_END) {
+		/* Input ended mid-stream: truncated. */
+		BZ2_bzDecompressEnd(&bzs);
+		bzerr(BZ_UNEXPECTED_EOF);
+		return (-1);
 	}
 
 	/* normal termination */

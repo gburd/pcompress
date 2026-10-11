@@ -34,22 +34,35 @@ This code is based on:
 #define kTop (1 << 24)
 #define kBot (1 << 15)
 
+/* Bounded input: corrupt/truncated data reads zeros and sets overflow. */
+static Byte RangeDec_NextByte(CPpmd8 *p)
+{
+  if (p->bufUsed < p->bufLen)
+    return p->buf[p->bufUsed++];
+  p->overflow = 1;
+  return 0;
+}
+
 Bool Ppmd8_RangeDec_Init(CPpmd8 *p)
 {
   unsigned i;
   p->Low = 0;
   p->Range = 0xFFFFFFFF;
   p->Code = 0;
-  for (i = 0; i < 4; i++) {
-    p->Code = (p->Code << 8) | p->buf[p->bufUsed];
-    p->bufUsed++;
-  }
+  for (i = 0; i < 4; i++)
+    p->Code = (p->Code << 8) | RangeDec_NextByte(p);
   return (p->Code < 0xFFFFFFFF);
 }
 
 static UInt32 RangeDec_GetThreshold(CPpmd8 *p, UInt32 total)
 {
-  return p->Code / (p->Range /= total);
+  /* Corrupt input can drive Range below total: report, don't divide by 0. */
+  if (total == 0 || (p->Range /= total) == 0) {
+    p->overflow = 1;
+    p->Range = 1;
+    return 0;
+  }
+  return p->Code / p->Range;
 }
 
 static void RangeDec_Decode(CPpmd8 *p, UInt32 start, UInt32 size)
@@ -62,8 +75,7 @@ static void RangeDec_Decode(CPpmd8 *p, UInt32 start, UInt32 size)
   while ((p->Low ^ (p->Low + p->Range)) < kTop ||
       (p->Range < kBot && ((p->Range = (0 - p->Low) & (kBot - 1)), 1)))
   {
-    p->Code = (p->Code << 8) | p->buf[p->bufUsed];
-    p->bufUsed++;
+    p->Code = (p->Code << 8) | RangeDec_NextByte(p);
     p->Range <<= 8;
     p->Low <<= 8;
   }
@@ -89,7 +101,7 @@ int Ppmd8_DecodeToBuffer(CPpmd8 *p, Byte *buf, size_t buflen, size_t *decodedlen
   int _sym;
 
   *decodedlen = 0;
-  for (_cnt = 0; _cnt < buflen; _cnt++) {
+  for (_cnt = 0; _cnt < buflen && !p->overflow; _cnt++) {
   if (p->MinContext->NumStats != 0)
   {
     CPpmd_State *s = Ppmd8_GetStats(p, p->MinContext);

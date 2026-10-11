@@ -141,6 +141,14 @@ lz_fx_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		lz_fx_err(rv);
 		return (-1);
 	}
+	/*
+	 * When the output does not fit, lzfx returns 0 and reports the size it
+	 * would have needed: that is an error for us, not a length.
+	 */
+	if (_dstlen > *dstlen) {
+		lz_fx_err(LZFX_ESIZE);
+		return (-1);
+	}
 	*dstlen = _dstlen;
 	return (0);
 }
