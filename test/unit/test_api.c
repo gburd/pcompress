@@ -84,7 +84,11 @@ reset_files(void)
 MU_TEST(test_api_roundtrip_algos)
 {
 	static const char *algos[] = { "lz4", "zlib", "zstd", "lzma", "bzip2",
-	    "lzfx", "ppmd", "libbsc", "adapt", "adapt2", "none", NULL };
+	    "lzfx", "ppmd", "adapt", "adapt2", "none",
+#ifndef WORDS_BIGENDIAN
+	    "libbsc",	/* refused on big-endian hosts */
+#endif
+	    NULL };
 	char args[1024];
 	int i;
 

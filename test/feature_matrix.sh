@@ -54,6 +54,8 @@ ck() { # name, compress-args...; input $IN; DARGS = extra decompress args
 	fi
 }
 algos="lzfx lz4 zlib bzip2 lzma lzmaMt zstd ppmd libbsc adapt adapt2 none"
+# libbsc is refused on big-endian hosts (upstream libbsc does not round-trip).
+case "$(printf '\001\000' | od -An -tu2 | tr -d ' ')" in 256) algos=${algos% libbsc*}" adapt adapt2 none"; BE=1 ;; esac
 levels="1 6 9 14"; [ -n "$Q" ] && levels="6"
 for IN in mixed.dat num.dat one.dat small.dat; do
 	for a in $algos; do for l in $levels; do
@@ -114,7 +116,8 @@ rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
 if timeout 600 "$PC" -a -c zstd -l6 -j -x tree a >c.log 2>&1 && "$PC" -i a.pz >d.log 2>&1 && grep -q num.dat d.log; then
 	pass=$((pass+1)); echo "PASS archive-list"; else fail=$((fail+1)); echo "FAIL archive-list"; tail -n 3 c.log d.log; fi
 # Filters (packJPG/packPNM/dispack) must restore files exactly; also -T/-n/-v/-m/-K.
-for opt in "-c adapt2 -l14" "-c lzma -l6 -j -x" "-c zstd -l6 -j -x -T" "-c zstd -l6 -n -v" "-c libbsc -l9 -j" "-c adapt -l11 -G"; do
+bsc_arc="-c libbsc -l9 -j"; [ -n "$BE" ] && bsc_arc="-c ppmd -l9 -j"
+for opt in "-c adapt2 -l14" "-c lzma -l6 -j -x" "-c zstd -l6 -j -x -T" "-c zstd -l6 -n -v" "$bsc_arc" "-c adapt -l11 -G"; do
 	rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
 	if timeout 600 "$PC" -a $opt tree a >c.log 2>&1 && timeout 600 "$PC" -d -m a.pz ax >d.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
 		pass=$((pass+1)); echo "PASS archive $opt"; else fail=$((fail+1)); echo "FAIL archive $opt"; tail -n 3 c.log d.log; diff -r tree ax/tree 2>&1 | head -3; fi
