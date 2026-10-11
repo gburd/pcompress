@@ -1,0 +1,332 @@
+.\" Copyright (C) 2012-2013 Moinak Ghosh. All rights reserved.
+.\" Licensed under the GNU Lesser General Public License v3 or later.
+.Dd October 10, 2026
+.Dt PCOMPRESS 1
+.Os
+.Sh NAME
+.Nm pcompress
+.Nd parallel, deduplicating, multi-algorithm compressor and archiver
+.Sh SYNOPSIS
+.Nm
+.Fl c Ar algorithm
+.Op Fl l Ar level
+.Op Fl s Ar size
+.Op Fl t Ar threads
+.Op Fl S Ar checksum
+.Op Fl DEFGLPx
+.Op Fl B Ar 0-5
+.Op Fl e Ar cipher Op Fl w Ar pwfile Op Fl k Ar keylen
+.Op Fl CM
+.Ar file
+.Op Ar target | Fl
+.Nm
+.Fl p
+.Fl c Ar algorithm
+.Op Ar options
+.Nm
+.Fl a
+.Op Fl c Ar algorithm
+.Op Fl l Ar level
+.Op Fl jnTvx
+.Op Ar options
+.Ar path ...
+.Ar archive | Fl
+.Nm
+.Fl d
+.Op Fl mK
+.Op Fl w Ar pwfile
+.Ar file | Fl
+.Op Ar target
+.Nm
+.Fl i
+.Ar archive
+.Nm
+.Fl h | Fl V
+.Sh DESCRIPTION
+.Nm
+splits its input into chunks and compresses them in parallel, one chunk
+per thread.
+It can deduplicate data within a chunk or across the whole input, delta-encode
+similar blocks, run content-aware filters, and encrypt and authenticate
+every chunk.
+With
+.Fl a
+it archives files and directories into a PAX stream and compresses that.
+Each chunk carries a checksum of its original data, which is verified on
+decompression.
+.Pp
+Output files get a
+.Pa .pz
+suffix unless the name already has one.
+.Nm
+refuses to overwrite an existing output file.
+.Sh MODES
+.Bl -tag -width Ds
+.It Fl c Ar algorithm
+Compress a single
+.Ar file
+into
+.Ar target ,
+or into
+.Ar file Ns Pa .pz
+if no target is given.
+If
+.Ar target
+is
+.Fl ,
+write to standard output.
+.It Fl p
+Pipe mode: read standard input, write standard output.
+Requires
+.Fl c .
+.It Fl a
+Archive mode.
+Every
+.Ar path
+is archived; the last argument names the archive
+.Pq or Fl No for standard output .
+The default algorithm is
+.Cm adapt2 .
+Paths are stored as given on the command line, as with
+.Xr tar 1 .
+.It Fl d
+Decompress
+.Ar file
+.Pq or standard input if Fl .
+For a single-file stream,
+.Ar target
+names the output file; it defaults to the input name without
+.Pa .pz ,
+or with
+.Pa .out
+appended.
+When the input is
+.Fl
+and no target is given, output goes to standard output.
+For an archive,
+.Ar target
+is the directory to extract into, created if necessary; it defaults
+to the current directory.
+.It Fl i
+List the members of an archive without extracting them.
+.It Fl h
+Print usage and exit.
+.It Fl V
+Print the version and exit.
+.El
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl l Ar level
+Compression level, 1 (fastest) to 14 (smallest); default 6
+.Pq 1 for Cm lz4 .
+Unless advanced options are given, higher levels also turn on
+features, see
+.Sx LEVELS .
+.It Fl s Ar size
+Maximum chunk size; a number with an optional
+.Cm k ,
+.Cm m
+or
+.Cm g
+suffix.
+Default 8m, larger at levels above 8.
+Minimum 2048 bytes, maximum 80% of physical memory.
+Deduplication needs chunks of at least 1m
+.Pq 2m for Fl G .
+.It Fl t Ar threads
+Number of worker threads, 1 to 256; default is the number of CPUs.
+Each thread holds about two chunks in memory.
+.It Fl S Ar checksum
+Chunk verification checksum:
+.Cm CRC64 , SHA256 , SHA512 , KECCAK256 , KECCAK512 , BLAKE256
+.Pq default
+or
+.Cm BLAKE512 .
+.Cm CRC64
+cannot be used with deduplication.
+.It Fl D
+Deduplicate variable-sized blocks within each chunk, using Rabin
+fingerprinting.
+.It Fl F
+Deduplicate fixed-size blocks.
+Cannot be combined with
+.Fl D
+or
+.Fl E .
+.It Fl G
+Deduplicate across the whole input using an in-memory index
+.Pq with Fl D No by default, or Fl F .
+When the index would not fit in memory, a segmented index is kept on
+disk instead.
+Not available in pipe mode, and a stream compressed with
+.Fl G
+must be decompressed to a file, not to standard output.
+.It Fl E
+Delta-encode blocks that are similar to an earlier block, using bsdiff;
+implies
+.Fl D .
+Repeat
+.Pq Fl EE
+to accept less similar blocks.
+Cannot be combined with
+.Fl G .
+.It Fl B Ar n
+Average deduplication block size: 0 = 2KB, 1 = 4KB, ... 5 = 64KB.
+.It Fl L
+LZP pre-compression.
+.It Fl P
+Adaptive delta encoding of numeric tables.
+.It Fl x
+Dispack filter for 32-bit x86 Windows executables
+.Pq archive mode only .
+.It Fl j
+PackJPG and PackPNM filters for JPEG and PNM images, and WavPack for
+WAV audio if built in
+.Pq archive mode only .
+.It Fl T
+Do not store archive metadata in a separate stream.
+.It Fl n
+Do not sort archive members by type before archiving.
+.It Fl v
+Verbose: list archive members as they are processed.
+.It Fl m
+On extraction restore all permissions, ACLs and extended attributes;
+ownership is restored only when run as root.
+.It Fl K
+On extraction do not overwrite files that are newer than the archived
+copy.
+.It Fl e Ar cipher
+Encrypt with
+.Cm AES
+or
+.Cm SALSA20
+in counter mode, keyed by scrypt from a password.
+Every chunk and the header are authenticated with an HMAC.
+A new key is derived for every run.
+.It Fl w Ar pwfile
+Read the password from
+.Ar pwfile ,
+which is overwritten with zeros afterwards.
+Otherwise the password is prompted for on the terminal.
+Required in pipe mode.
+.It Fl k Ar keylen
+Key length in bytes, 16 or 32; default 32.
+.It Fl C
+Print compression statistics.
+.Fl CC
+also prints the offset and length of every deduplication block.
+.It Fl M
+Print memory allocator statistics.
+.El
+.Sh ALGORITHMS
+.Bl -tag -width "adapt2" -compact
+.It Cm lzfx
+fast, average ratio
+.It Cm lz4
+very fast
+.It Cm zlib
+fast, good ratio
+.It Cm zstd
+fast with a very good ratio; multithreaded within a chunk
+.It Cm bzip2
+slow, better ratio than zlib
+.It Cm lzma
+very slow, very high ratio
+.It Cm lzmaMt
+multithreaded lzma
+.It Cm ppmd
+slow, best for text
+.It Cm libbsc
+block-sorting, fast with a high ratio
+.It Cm adapt
+per chunk: ppmd for text, bzip2 otherwise
+.It Cm adapt2
+per chunk: ppmd for text, lzma otherwise; best for archives
+.It Cm none
+no compression, for use with deduplication
+.El
+.Sh LEVELS
+Without any of
+.Fl DEFGLPjx ,
+the level selects features:
+.Bl -tag -width "11-14" -compact
+.It 1-3
+compression only
+.It 4
+global deduplication, 8KB blocks
+.It 5-8
+plus adaptive delta encoding
+.It 9
+plus dispack, larger chunks
+.It 10
+plus LZP and extra delta passes
+.It 11-14
+plus PackJPG/PackPNM/WavPack
+.El
+.Pp
+Global deduplication is not enabled automatically when the output or
+input is a pipe.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev ALLOCATOR_BYPASS
+If set, use
+.Xr malloc 3
+directly instead of the built-in slab allocator.
+.It Ev PCOMPRESS_INDEX_MEM
+Memory limit for the global deduplication index, in megabytes.
+.It Ev PCOMPRESS_CACHE_DIR
+Directory for global deduplication temporary files; defaults to
+.Ev TMPDIR
+then
+.Ev HOME .
+.It Ev PCOMPRESS_CHUNK_HASH_GLOBAL
+Block hash for global deduplication:
+.Cm SHA256
+.Pq default ,
+.Cm SHA512 , KECCAK256 , KECCAK512 , BLAKE256 , BLAKE512 , SKEIN256
+or
+.Cm SKEIN512 .
+.El
+.Sh EXIT STATUS
+.Ex -std
+Status 2 means a usage error.
+A corrupt or truncated input, a failed checksum or HMAC, and any write
+or extraction error are reported and make
+.Nm
+exit with status 1.
+.Sh EXAMPLES
+Compress a file with zstd at level 9 and restore it:
+.Bd -literal -offset indent
+$ pcompress -c zstd -l9 data.tar
+$ pcompress -d data.tar.pz data.tar.restored
+.Ed
+.Pp
+Archive a directory with all features, then extract it elsewhere:
+.Bd -literal -offset indent
+$ pcompress -a -l14 src/ src-backup
+$ pcompress -d src-backup.pz /tmp/restore
+.Ed
+.Pp
+Stream through a pipe with encryption:
+.Bd -literal -offset indent
+$ tar cf - dir | pcompress -p -c lz4 -e AES -w pw > dir.tar.pz
+$ pcompress -d -w pw - < dir.tar.pz | tar xf -
+.Ed
+.Sh SEE ALSO
+.Xr bzip2 1 ,
+.Xr gzip 1 ,
+.Xr tar 1 ,
+.Xr xz 1 ,
+.Xr zstd 1
+.Pp
+.Pa README.md
+and
+.Pa DESIGN.md
+in the source distribution.
+.Sh AUTHORS
+.An Moinak Ghosh
+.Sh BUGS
+Archives with a metadata stream cannot be extracted from a pipe;
+create them with
+.Fl T
+if that is needed.

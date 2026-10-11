@@ -623,4 +623,8 @@ install: $(PROG)
 	@cp README.md $(DESTDIR)$(PREFIX)/share/doc/$(PROG)/README
 	@chmod 0444 $(DESTDIR)$(PREFIX)/share/doc/$(PROG)/README
 
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
+	@cp pcompress.1 $(DESTDIR)$(PREFIX)/share/man/man1/pcompress.1
+	@chmod 0444 $(DESTDIR)$(PREFIX)/share/man/man1/pcompress.1
+
 
