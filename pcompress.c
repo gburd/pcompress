@@ -536,13 +536,16 @@ perform_decompress(void *dat)
 redo:
 	defer_index_wait = 0;
 	Sem_Wait(&tdat->start_sem);
-	if (pctx->main_cancel)
-		return (NULL);
-
-	if (unlikely(tdat->cancel)) {
+	/*
+	 * Cancelled (by another chunk's failure or by shutdown): still hand
+	 * an empty result to the writer, which may be waiting on this chunk.
+	 * Returning silently left it blocked on cmp_done_sem, and the main
+	 * thread on write_done_sem (~2% of decompressions of a corrupt file).
+	 */
+	if (unlikely(tdat->cancel || pctx->main_cancel)) {
 		tdat->len_cmp = 0;
 		Sem_Post(&tdat->cmp_done_sem);
-		return (0);
+		return (NULL);
 	}
 
 	/*
@@ -1174,9 +1177,15 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			UNCOMP_BAIL;
 		}
 		saltlen = ntohl(saltlen);
+		/* Untrusted header field: bound before allocating. */
+		if (saltlen <= 0 || saltlen > MAX_SALTLEN) {
+			log_msg(LOG_ERR, 0, "Invalid salt length %d. File corrupt ?", saltlen);
+			UNCOMP_BAIL;
+		}
 		salt1 = (uchar_t *)malloc(saltlen);
 		salt2 = (uchar_t *)malloc(saltlen);
-		if (Read(compfd, salt1, saltlen) < saltlen) {
+		if (salt1 == NULL || salt2 == NULL ||
+		    Read(compfd, salt1, saltlen) < saltlen) {
 			free(salt1);  free(salt2);
 			log_msg(LOG_ERR, 1, "Read: ");
 			UNCOMP_BAIL;
@@ -1209,6 +1218,13 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				UNCOMP_BAIL;
 			}
 			pctx->keylen = ntohl(pctx->keylen);
+			if (pctx->keylen != 16 && pctx->keylen != 32) {
+				memset(salt2, 0, saltlen); free(salt2);
+				memset(salt1, 0, saltlen); free(salt1);
+				log_msg(LOG_ERR, 0, "Invalid key length %d. File corrupt ?",
+				    pctx->keylen);
+				UNCOMP_BAIL;
+			}
 		}
 
 		if (Read(compfd, hdr_hash1, pctx->mac_bytes) < pctx->mac_bytes) {
@@ -1826,6 +1842,13 @@ uncomp_done:
 	}
 	if (pctx->archive_mode) {
 		if (pctx->archive_thread_started) {
+			/*
+			 * On error the extractor may be blocked waiting for data
+			 * that will never come: signal end of stream first
+			 * (a no-op if the writer already did).
+			 */
+			if (err)
+				archiver_close(pctx);
 			pthread_join(pctx->archive_thread, NULL);
 			pctx->archive_thread_started = 0;
 		}
@@ -2181,7 +2204,13 @@ do_cancel:
 			Sem_Post(&tdat->start_sem);
 			if (tdat->rctx && pctx->enable_rabin_global)
 				Sem_Post(tdat->rctx->index_sem_next);
-			Sem_Post(&tdat->write_done_sem);
+			/*
+			 * The writer is exiting: chunks queued behind this one will
+			 * never be written, so release every slot or the main
+			 * thread blocks forever waiting for a later one.
+			 */
+			for (p = 0; p < w->nprocs; p++)
+				Sem_Post(&w->dary[p]->write_done_sem);
 			return (0);
 		}
 		if (tdat->decompressing && tdat->rctx && pctx->enable_rabin_global) {

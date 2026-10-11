@@ -152,7 +152,7 @@ do_last:
 		memset(pblk, 0, 16);
 		return;
 	}
-	for (; pos < buflen-15; pos += 16) {
+	for (; pos + 16 <= buflen; pos += 16) {	/* buflen-15 wrapped for buflen < 15 */
 		__m128i cblk, dat, odat;
 
 		PREFETCH_WRITE(outbuf+pos, 0);
