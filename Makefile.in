@@ -534,6 +534,9 @@ test-unit: test-unit-build
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)
 
+# What packagers run: fast, no network, no root.
+check: test-unit test-integration
+
 test-all: all test-unit-build
 	(cd test; sh run_all_tests.sh all)
 

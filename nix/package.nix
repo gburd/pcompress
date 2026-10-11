@@ -93,22 +93,20 @@ stdenv.mkDerivation (finalAttrs: {
 
   # ./config is a hand-written script, not autoconf. --portable: no host
   # CPU probing (SIMD paths are still chosen at run time).
-  configurePhase = ''
-    runHook preConfigure
+  configureScript = "./config";
+  dontDisableStatic = true;
+  configureFlags = [
+    "--portable"
+    "--disable-wavpack"
+  ];
+  preConfigure = ''
     patchShebangs config test
-    ./config --prefix=$out --portable --disable-wavpack
-    runHook postConfigure
   '';
 
   enableParallelBuilding = true;
 
   doCheck = true;
-  checkPhase = ''
-    runHook preCheck
-    make test-unit
-    (cd test && sh run_all_tests.sh integration)
-    runHook postCheck
-  '';
+  checkTarget = "check";
 
   postInstall = ''
     # The binary links libpcompress.so.1 from $out/lib.
