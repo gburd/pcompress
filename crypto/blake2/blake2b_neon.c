@@ -40,7 +40,7 @@
 
 #include "blake2.h"
 #include "blake2-impl.h"
-#if defined(__aarch64__) || defined(__arm64__)
+#if (defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)) && !defined(PC_FORCE_GENERIC)
 #include <arm_neon.h>
 #include "blake2b-round-neon.h"
 #define BLAKE2B_USE_NEON 1

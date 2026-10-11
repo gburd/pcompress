@@ -55,10 +55,8 @@ static inline uint64x2_t neon_ror64_32(uint64x2_t x)
 	return vreinterpretq_u64_u32(vrev64q_u32(vreinterpretq_u32_u64(x)));
 }
 
-static inline uint64x2_t neon_ror64(uint64x2_t x, int c)
-{
-	return vorrq_u64(vshrq_n_u64(x, c), vshlq_n_u64(x, 64 - c));
-}
+/* Macro: the NEON shift count must be a compile-time constant. */
+#define neon_ror64(x, c) vorrq_u64(vshrq_n_u64((x), (c)), vshlq_n_u64((x), 64 - (c)))
 
 /*
  * BLAKE2b G function - quarter round.
@@ -162,43 +160,33 @@ static const uint8_t blake2b_sigma_neon[12][16] = {
   { 14, 10,  4,  8,  9, 15, 13,  6,  1, 12,  0,  2, 11,  7,  5,  3 },
 };
 
-#define LOAD_MSG_NEON(buf, r, i, j) \
+/*
+ * Lane layout matches the SSE code: row1l = (v0, v1), row1h = (v2, v3).
+ * Column step G1 uses x = m[sigma[2i]] for i = 0..3, so b0 = (s0, s2),
+ * b1 = (s4, s6); G2 uses y = m[sigma[2i+1]]: (s1, s3), (s5, s7). The
+ * diagonal step uses s8..s15 the same way. (Was (s0, s1), (s2, s3), ...:
+ * every NEON digest was wrong.)
+ */
+#define MSG_PAIR_NEON(buf, r, a, b) \
   vcombine_u64( \
-    vld1_u64((const uint64_t *)((buf) + blake2b_sigma_neon[r][2*(i)])), \
-    vld1_u64((const uint64_t *)((buf) + blake2b_sigma_neon[r][2*(i)+1])) \
-  )
+    vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][a]), \
+    vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][b]))
 
 #define ROUND_NEON(r, buf) \
   do { \
     uint64x2_t b0, b1; \
-    b0 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][0]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][1])); \
-    b1 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][2]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][3])); \
+    b0 = MSG_PAIR_NEON(buf, r, 0, 2); \
+    b1 = MSG_PAIR_NEON(buf, r, 4, 6); \
     G1_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h,b0,b1); \
-    b0 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][4]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][5])); \
-    b1 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][6]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][7])); \
+    b0 = MSG_PAIR_NEON(buf, r, 1, 3); \
+    b1 = MSG_PAIR_NEON(buf, r, 5, 7); \
     G2_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h,b0,b1); \
     DIAGONALIZE_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h); \
-    b0 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][8]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][9])); \
-    b1 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][10]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][11])); \
+    b0 = MSG_PAIR_NEON(buf, r, 8, 10); \
+    b1 = MSG_PAIR_NEON(buf, r, 12, 14); \
     G1_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h,b0,b1); \
-    b0 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][12]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][13])); \
-    b1 = vcombine_u64( \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][14]), \
-      vld1_u64((const uint64_t *)(buf) + blake2b_sigma_neon[r][15])); \
+    b0 = MSG_PAIR_NEON(buf, r, 9, 11); \
+    b1 = MSG_PAIR_NEON(buf, r, 13, 15); \
     G2_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h,b0,b1); \
     UNDIAGONALIZE_NEON(row1l,row2l,row3l,row4l,row1h,row2h,row3h,row4h); \
   } while(0)
