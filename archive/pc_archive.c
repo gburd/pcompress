@@ -122,11 +122,16 @@ arc_open_callback(struct archive *arc, void *ctx)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	Sem_Init(&(pctx->read_sem), 0, 0);
-	Sem_Init(&(pctx->write_sem), 0, 0);
-	pctx->arc_buf = NULL;
-	pctx->arc_buf_pos = 0;
-	pctx->arc_buf_size = 0;
+	/*
+	 * The handoff state (read_sem/write_sem, arc_buf*) is initialised in
+	 * setup_archiver()/setup_extractor() before any thread runs. On
+	 * extraction this callback runs on the extractor thread, possibly
+	 * after the writer has already published the first buffer; resetting
+	 * the state here discarded that buffer, the extractor saw EOF and
+	 * the writer waited forever (~9% of extractions under load).
+	 */
+	(void) arc;
+	(void) ctx;
 	return (ARCHIVE_OK);
 }
 
@@ -974,6 +979,11 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 		archive_set_metadata_streaming(arc, 1);
 	archive_write_set_format_pax_restricted(arc);
 	archive_write_set_bytes_per_block(arc, 0);
+	pctx->arc_buf = NULL;
+	pctx->arc_buf_pos = 0;
+	pctx->arc_buf_size = 0;
+	Sem_Init(&(pctx->read_sem), 0, 0);
+	Sem_Init(&(pctx->write_sem), 0, 0);
 	archive_write_open(arc, pctx, arc_open_callback,
 			   creat_write_callback, creat_close_callback);
 	pctx->archive_ctx = arc;
@@ -1022,6 +1032,11 @@ setup_extractor(pc_ctx_t *pctx)
 	archive_read_support_format_all(arc);
 	pctx->archive_ctx = arc;
 	pctx->arc_writing = 0;
+	pctx->arc_buf = NULL;
+	pctx->arc_buf_pos = 0;
+	pctx->arc_buf_size = 0;
+	Sem_Init(&(pctx->read_sem), 0, 0);
+	Sem_Init(&(pctx->write_sem), 0, 0);
 
 	return (0);
 }
