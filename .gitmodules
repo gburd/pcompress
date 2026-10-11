@@ -1,15 +1,20 @@
 [submodule "lz4"]
 	path = lz4
 	url = https://github.com/lz4/lz4.git
+	ignore = dirty
 [submodule "bsc"]
 	path = bsc
 	url = https://github.com/IlyaGrebnov/libbsc.git
+	ignore = dirty
 [submodule "zstd"]
 	path = zstd
 	url = https://github.com/facebook/zstd.git
+	ignore = dirty
 [submodule "archive/libarchive"]
 	path = archive/libarchive
 	url = https://github.com/libarchive/libarchive.git
+	ignore = dirty
 [submodule "wavpack"]
 	path = wavpack
 	url = https://github.com/dbry/WavPack.git
+	ignore = dirty
