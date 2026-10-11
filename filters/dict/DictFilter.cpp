@@ -1529,7 +1529,7 @@ dict_decode(uint8_t *from, uint64_t fromlen, uint8_t *to, uint64_t *dstlen)
 
 	fl = (u32)fromlen;
 	DEBUG_STAT_EN(strt = get_wtime_millis());
-	dl = U32_P(from);
+	dl = LE32(U32_P(from));	/* written LE32 by dict_encode */
 	if (dl > *dstlen) {
 		log_msg(LOG_ERR, 0, "Destination overflow in dict_decode. Need: %" PRIu64 ", Got: %" PRIu64 "\n",
 		    dl, *dstlen);
