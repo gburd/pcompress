@@ -1,0 +1,75 @@
+# Codeberg (Forgejo Actions) CI for pcompress.
+#
+# Same recipe as GitHub CI (ci/build-test.sh). Codeberg's hosted runners
+# allow 4 CPUs / 8 GB / 10 minutes per job, so each job is one build plus
+# its tests; the long platform matrix runs on GitHub (.github/workflows).
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-gcc:
+    runs-on: codeberg-medium
+    container: { image: "debian:trixie" }
+    steps:
+      - name: Dependencies
+        run: |
+          apt-get update -q
+          apt-get install -yq --no-install-recommends git ca-certificates nodejs \
+            build-essential libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config yasm
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Build and test
+        run: JOBS=4 sh ci/build-test.sh quick
+
+  linux-clang-asan:
+    runs-on: codeberg-medium
+    container: { image: "debian:trixie" }
+    steps:
+      - name: Dependencies
+        run: |
+          apt-get update -q
+          apt-get install -yq --no-install-recommends git ca-certificates nodejs \
+            build-essential clang libclang-rt-dev libomp-dev libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Build and test under ASan + UBSan
+        env: { CC: clang, CXX: clang++, PCOMPRESS_SANITIZE: "1" }
+        run: JOBS=4 sh ci/build-test.sh quick
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-gcc, linux-clang-asan]
+    runs-on: codeberg-small
+    container: { image: "debian:trixie" }
+    steps:
+      - name: Dependencies
+        run: |
+          apt-get update -q
+          apt-get install -yq --no-install-recommends git ca-certificates nodejs curl jq
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with: { submodules: recursive, fetch-depth: 0 }
+      - name: Source tarball and Codeberg release
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git config --global --add safe.directory '*'
+          f=$(sh ci/make-dist.sh "$TAG" .)
+          sha256sum "$f" > "$f.sha256"
+          id=$(curl -sf -H "Authorization: token $TOKEN" "$API/releases/tags/$TAG" | jq -r .id) ||
+          id=$(curl -sf -X POST -H "Authorization: token $TOKEN" -H 'Content-Type: application/json' \
+                 -d "{\"tag_name\":\"$TAG\",\"name\":\"pcompress ${TAG#v}\",\"body\":\"See the Changelog. Source tarball includes the bundled submodules.\"}" \
+                 "$API/releases" | jq -r .id)
+          for a in "$f" "$f.sha256"; do
+            curl -sf -X POST -H "Authorization: token $TOKEN" -F "attachment=@$a" \
+              "$API/releases/$id/assets?name=$(basename "$a")" >/dev/null
+          done

@@ -1,122 +1,101 @@
-# Pcompress Release Build Pipeline
-#
-# Triggered on version tags (v*). Builds release binaries for
-# multiple platforms and creates a GitHub release with artifacts.
-
+# Release: on a v* tag, build and test on every platform, then publish
+# a GitHub release with
+#   - pcompress-<ver>.tar.gz: full source including the bundled submodules
+#     (GitHub's automatic archives omit them, so they cannot be built)
+#   - pcompress-<ver>-<os>-<arch>.tar.gz: binary, library and man page
+#   - SHA256SUMS
 name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build"
+        required: true
 
 permissions:
   contents: write
 
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
 jobs:
-  # ---------------------------------------------------------------
-  # Build release binaries for each platform
-  # ---------------------------------------------------------------
-  build-release:
-    name: "Release / ${{ matrix.os }} / ${{ matrix.arch }}"
-    runs-on: ${{ matrix.os }}
+  source:
+    name: Source tarball
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive, ref: "${{ env.TAG }}", fetch-depth: 0 }
+      - name: Create tarball with submodules
+        run: |
+          v=${TAG#v}; d=pcompress-$v
+          git archive --format=tar --prefix=$d/ HEAD > src.tar
+          git submodule foreach --quiet --recursive \
+            'git archive --format=tar --prefix='$d'/$sm_path/ HEAD > $toplevel/sub-$name.tar'
+          for t in sub-*.tar; do tar --concatenate -f src.tar "$t"; done
+          gzip -9n < src.tar > $d.tar.gz
+          tar tzf $d.tar.gz | grep -q "$d/zstd/lib/zstd.h"
+      - uses: actions/upload-artifact@v4
+        with: { name: source, path: "pcompress-*.tar.gz" }
+
+  binaries:
+    name: "Binary ${{ matrix.name }}"
+    needs: source
+    runs-on: ${{ matrix.runner }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - os: ubuntu-22.04
-            arch: x86_64
-            artifact_name: pcompress-linux-x86_64
-
-          - os: ubuntu-24.04
-            arch: x86_64
-            artifact_name: pcompress-linux-x86_64-ubuntu24
-
-          - os: macos-13
-            arch: x86_64
-            artifact_name: pcompress-macos-x86_64
-
-          - os: macos-14
-            arch: arm64
-            artifact_name: pcompress-macos-arm64
-
+          - { name: linux-x86_64, runner: ubuntu-22.04 }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm }
+          - { name: macos-arm64, runner: macos-15 }
+          - { name: macos-x86_64, runner: macos-13 }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install dependencies (Ubuntu)
-        if: startsWith(matrix.os, 'ubuntu')
+      - uses: actions/download-artifact@v4
+        with: { name: source }
+      - name: Unpack the released source (what users build)
+        run: tar xzf pcompress-*.tar.gz && mv pcompress-*/ src
+      - name: Dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc g++ \
-            libssl-dev zlib1g-dev libbz2-dev \
-            yasm nasm pkg-config
-
-      - name: Install dependencies (macOS)
-        if: startsWith(matrix.os, 'macos')
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends build-essential \
+            libssl-dev zlib1g-dev libbz2-dev autoconf automake libtool pkg-config yasm
+      - name: Dependencies (macOS)
+        if: runner.os == 'macOS'
         run: |
-          brew install openssl@3 zlib bzip2 pkg-config yasm nasm
-
-      - name: Configure
-        run: |
-          config_flags="--disable-wavpack"
-          if [ "${{ matrix.os }}" = "macos-13" ] || [ "${{ matrix.os }}" = "macos-14" ]; then
-            config_flags="${config_flags} --with-openssl=$(brew --prefix openssl@3)"
-          fi
-          ./config ${config_flags}
-
-      - name: Build
-        run: make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-
-      - name: Run tests
-        run: |
-          if [ -d test ]; then
-            cd test
-            sh run_all_tests.sh unit || true
-            cd ..
-          fi
-
+          brew install openssl@3 libomp autoconf automake libtool pkg-config
+          echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          omp=$(brew --prefix libomp)
+          echo "CFLAGS=-Xpreprocessor -fopenmp -I$omp/include" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$omp/lib -lomp" >> "$GITHUB_ENV"
+      - name: Build and test (portable)
+        run: sh src/ci/build-test.sh full --portable --prefix=/usr/local
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME}"
-          pkg_dir="${{ matrix.artifact_name }}-${version}"
-          mkdir -p "${pkg_dir}"
-          cp pcompress "${pkg_dir}/" 2>/dev/null || true
-          cp libpcompress.* "${pkg_dir}/" 2>/dev/null || true
-          cp README.md LICENSE "${pkg_dir}/" 2>/dev/null || true
-          tar czf "${{ matrix.artifact_name }}-${version}.tar.gz" "${pkg_dir}"
+          v=${TAG#v}; d=pcompress-$v-${{ matrix.name }}
+          make -C src install DESTDIR="$PWD/stage" PREFIX=/usr/local
+          mkdir -p $d && cp -R stage/usr/local/. $d/
+          cp src/README.md src/COPYING src/COPYING.LESSER $d/
+          tar czf $d.tar.gz $d
+      - uses: actions/upload-artifact@v4
+        with: { name: "bin-${{ matrix.name }}", path: "pcompress-*-${{ matrix.name }}.tar.gz" }
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: "*.tar.gz"
-          retention-days: 14
-
-  # ---------------------------------------------------------------
-  # Create GitHub Release
-  # ---------------------------------------------------------------
-  create-release:
-    name: "Create Release"
-    runs-on: ubuntu-latest
-    needs: build-release
+  publish:
+    name: Publish release
+    needs: [source, binaries]
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: release-artifacts/**/*.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+      - name: Create release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag \
+              --title "pcompress ${TAG#v}" --generate-notes
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber dist/*

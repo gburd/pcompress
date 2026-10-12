@@ -1,0 +1,4 @@
+# LeakSanitizer suppressions for CI (third-party runtime internals).
+leak:libomp.so
+leak:__kmp
+leak:libgomp.so
