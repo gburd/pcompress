@@ -91,7 +91,7 @@ aes_module_init(processor_cap_t *pc)
 	enc_setkey = AES_set_encrypt_key;
 	enc_encrypt = AES_encrypt;
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(PC_NO_AES_ASM)
 	if (pc->proc_type == PROC_X64_INTEL || pc->proc_type == PROC_X64_AMD) {
 		if (pc->aes_avail) {
 			enc_setkey = aesni_set_encrypt_key;

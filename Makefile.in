@@ -225,7 +225,7 @@ LIBBSCWRAPOBJ = libbsc_compress.o
 LIBBSCDIR = @LIBBSCDIR@
 LIBBSCLFLAGS = -L$(LIBBSCDIR) -lbsc
 LIBBSCLIB = @LIBBSCLIB@
-LIBBSCGEN_OPT = -fopenmp
+LIBBSCGEN_OPT = @OMP_FLAGS@
 LIBBSCCPPFLAGS = -I$(LIBBSCDIR)/libbsc -DENABLE_PC_LIBBSC
 
 TRANSP_SRCS = filters/transpose/transpose.c
@@ -286,7 +286,7 @@ DTAGS=@DTAGS@
 PROG_RPATH=@PROG_RPATH@
 LDLIBS = @LDL@ -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
 	-L./buildtmp -Wl,$(RPATH)@OPENSSL_LIBDIR@ -lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
-	-lpthread -Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
+	-lpthread @OMP_LIBS@ -Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
 OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) @ZSTD_OBJS@ $(ZSTD_ASM_OBJS) @ZSTD_WRAPOBJ@ $(CRCOBJS) \
 $(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
@@ -294,22 +294,22 @@ $(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2
 @CRYPTO_COMPAT_OBJS@ $(CRYPTO_ASM_OBJS) $(ARCHIVEOBJS) $(PJPGOBJS) $(DISPACKOBJS) $(PPNMOBJS) \
 $(WAVPKOBJS) $(DICTOBJS)
 
-DEBUG_LINK = $(GPP) -pthread @LIBBSCGEN_OPT@ @EXTRA_OPT_FLAGS@ -fopenmp -fPIC
+DEBUG_LINK = $(GPP) -pthread @LIBBSCGEN_OPT@ @EXTRA_OPT_FLAGS@ @OMP_FLAGS@ -fPIC
 DEBUG_COMPILE = $(GCC) -g -c @EXTRA_OPT_FLAGS@ -fPIC @USE_CLANG_AS@
 DEBUG_COMPILE_cpp = $(GPP) -g -c @EXTRA_OPT_FLAGS@ -fPIC @USE_CLANG_AS@
 DEBUG_VEC_FLAGS =
 DEBUG_LOOP_OPTFLAGS =
-DEBUG_GEN_OPT = -O -fno-omit-frame-pointer @LIBBSCGEN_OPT@ -fopenmp
+DEBUG_GEN_OPT = -O -fno-omit-frame-pointer @LIBBSCGEN_OPT@ @OMP_FLAGS@
 DEBUG_CPPFLAGS = $(COMMON_CPPFLAGS)
 DEBUG_FPTR_FLAG =
 
-RELEASE_LINK = $(GPP) -pthread @LIBBSCGEN_OPT@ @EXTRA_OPT_FLAGS@ -fopenmp -fPIC
+RELEASE_LINK = $(GPP) -pthread @LIBBSCGEN_OPT@ @EXTRA_OPT_FLAGS@ @OMP_FLAGS@ -fPIC
 RELEASE_COMPILE = $(GCC) -c @EXTRA_OPT_FLAGS@ -fPIC -fvisibility=hidden @USE_CLANG_AS@
 RELEASE_COMPILE_cpp = $(GPP) -c @EXTRA_OPT_FLAGS@ -fPIC -fvisibility=hidden @USE_CLANG_AS@
 RELEASE_VEC_FLAGS = $(COMMON_VEC_FLAGS)
 RELEASE_LOOP_OPTFLAGS = $(COMMON_LOOP_OPTFLAGS)
 RELEASE_CPPFLAGS = $(COMMON_CPPFLAGS) -DNDEBUG
-RELEASE_GEN_OPT = -O3 @LIBBSCGEN_OPT@ -fopenmp
+RELEASE_GEN_OPT = -O3 @LIBBSCGEN_OPT@ @OMP_FLAGS@
 RELEASE_FPTR_FLAG = -fomit-frame-pointer
 
 NO_SLAB_CPPFLAGS = -DDEBUG_NO_SLAB
@@ -575,11 +575,11 @@ fuzz-build: $(LIB)
 	@echo "Building fuzz harnesses (requires clang with libFuzzer or AFL++)..."
 	@if command -v clang >/dev/null 2>&1; then \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_decompress \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_decompress.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_decompress.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_crc \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_crc.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_crc.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_compress \
-			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(OBJS) $(LDLIBS) -lstdc++ -fopenmp; \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 	else \
 		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
 	fi

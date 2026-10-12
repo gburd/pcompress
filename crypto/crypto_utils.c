@@ -363,18 +363,34 @@ deserialize_checksum(uchar_t *checksum, uchar_t *buf, int cksum_bytes)
  * Perform keyed hashing. With Skein/Blake/Keccak, HMAC is not used, rather
  * their native MAC features are used which are more optimal than HMAC.
  */
+/*
+ * blake2b_state (64) and Keccak's hashState (32) are declared over-aligned
+ * and their SIMD code relies on it; malloc() only guarantees 16 (SIGSEGV
+ * with clang's AVX code). Contexts are released with free().
+ */
+static void *
+aligned_ctx_alloc(size_t sz)
+{
+	void *p = NULL;
+
+	if (posix_memalign(&p, 64, sz) != 0)
+		return (NULL);
+	return (p);
+}
+#define	blake_state_alloc()	aligned_ctx_alloc(sizeof (blake2b_state))
+
 int
 hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 {
 	mctx->mac_cksum = cksum;
 
 	if (cksum == CKSUM_BLAKE256) {
-		blake2b_state *ctx = (blake2b_state *)malloc(sizeof (blake2b_state));
+		blake2b_state *ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) return (-1);
 		if (bdsp.blake2b_init_key(ctx, 32, cctx->pkey, cctx->keylen) != 0)
 			return (-1);
 		mctx->mac_ctx = ctx;
-		ctx = (blake2b_state *)malloc(sizeof (blake2b_state));
+		ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) {
 			free(mctx->mac_ctx);
 			return (-1);
@@ -383,12 +399,12 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		mctx->mac_ctx_reinit = ctx;
 
 	} else if (cksum == CKSUM_BLAKE512) {
-		blake2b_state *ctx = (blake2b_state *)malloc(sizeof (blake2b_state));
+		blake2b_state *ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) return (-1);
 		if (bdsp.blake2b_init_key(ctx, 64, cctx->pkey, cctx->keylen) != 0)
 			return (-1);
 		mctx->mac_ctx = ctx;
-		ctx = (blake2b_state *)malloc(sizeof (blake2b_state));
+		ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) {
 			free(mctx->mac_ctx);
 			return (-1);
@@ -490,7 +506,7 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		}
 
 	} else if (cksum == CKSUM_KECCAK256 || cksum == CKSUM_KECCAK512) {
-		hashState *ctx = (hashState *)malloc(sizeof (hashState));
+		hashState *ctx = (hashState *)aligned_ctx_alloc(sizeof (hashState));
 		if (!ctx) return (-1);
 
 		if (cksum == CKSUM_KECCAK256) {
@@ -504,7 +520,7 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 			return (-1);
 		mctx->mac_ctx = ctx;
 
-		ctx = (hashState *)malloc(sizeof (hashState));
+		ctx = (hashState *)aligned_ctx_alloc(sizeof (hashState));
 		if (!ctx) {
 			free(mctx->mac_ctx);
 			return (-1);
@@ -777,7 +793,11 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 			memcpy(cctx->salt, salt, saltlen);
 
 			if (crypto_alg == CRYPTO_ALG_AES) {
-				if (aes_init(actx, cctx->salt, saltlen, pwd, pwd_len, U64_P(nonce),
+				uint64_t n64;
+
+				/* Plain copy: GCC/aarch64 ICEs passing an aligned(1) value. */
+				memcpy(&n64, nonce, sizeof (n64));
+				if (aes_init(actx, cctx->salt, saltlen, pwd, pwd_len, n64,
 				    enc_dec) != 0) {
 					log_msg(LOG_ERR, 0, "Failed to initialize AES context\n");
 					return (-1);

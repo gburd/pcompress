@@ -319,6 +319,40 @@ then
 fi
 
 # Check bitness of system/toolchain
+# OpenMP: GCC/clang take -fopenmp; Apple clang needs -Xpreprocessor
+# -fopenmp plus libomp (Homebrew), found via CFLAGS/LDFLAGS or brew --prefix.
+echo "Checking for OpenMP ..."
+cat << _EOF > tst.c
+#include <omp.h>
+int main(void) { int n = 0;
+#pragma omp parallel
+{ n = omp_get_num_threads(); }
+return n > 0 ? 0 : 1; }
+_EOF
+omp_flags=
+omp_libs=
+for cand in "-fopenmp|" "-Xpreprocessor -fopenmp|-lomp"; do
+	_cf=${cand%%|*}; _lf=${cand#*|}
+	if ${GCC} ${CFLAGS:-} ${_cf} tst.c -o tst ${LDFLAGS:-} ${_lf} >/dev/null 2>&1; then
+		omp_flags=$_cf; omp_libs=$_lf; break
+	fi
+	if [ "$(uname)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+		_omp=$(brew --prefix libomp 2>/dev/null)
+		if [ -n "$_omp" ] && ${GCC} ${CFLAGS:-} ${_cf} -I$_omp/include tst.c -o tst \
+		    ${LDFLAGS:-} -L$_omp/lib ${_lf} >/dev/null 2>&1; then
+			omp_flags="$_cf -I$_omp/include"; omp_libs="-L$_omp/lib $_lf"; break
+		fi
+	fi
+done
+rm -f tst tst.c
+if [ -z "$omp_flags" ]; then
+	echo "ERROR: no working OpenMP for ${GCC}."
+	echo "  Debian/Ubuntu: apt install libomp-dev (clang) / gcc has it built in"
+	echo "  macOS: brew install libomp"
+	exit 1
+fi
+echo "  OpenMP: ${omp_flags} ${omp_libs}"
+
 echo "Checking for 32-bit/64-bit platform ..."
 bitness=$(./tst)
 if [ "$bitness" -lt 8 ]
@@ -805,8 +839,21 @@ fi
 
 if [ "$OS" = "Darwin" ]
 then
+	# The x86 .s files are ELF/GAS only: use the portable C/OpenSSL code
+	# paths on Intel Macs as on ARM (runtime SIMD dispatch is unaffected).
+	if [ $is_x86 -eq 1 ]; then
+		aes_asm_srcs=""
+		salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
+		salsa20_stream_asm=
+		salsa20_debug='\$\(XSALSA20_DEBUG\)'
+		skeinblock='\$\(SKEIN_BLOCK_C\)'
+		keccak_srcs='\$\(KECCAK_SRC_OPT64\)'
+		keccak_srcs_asm=
+		keccak_hdrs='\$\(KECCAK_HDRS_OPT64\)'
+		extra_opt_flags="${extra_opt_flags} -DPC_NO_AES_ASM"
+	fi
 	crypto_asm_compile='\$\(CRYPTO_ASM_COMPILE2\)'
-	use_clang_as="-Wa,-q"
+	use_clang_as=""
 	soname_opt="install_name,@rpath/"
 	rpath="-rpath,"
 	dtag_val=""
@@ -1363,6 +1410,8 @@ s#@${libbsclibvar}@#${libbsc_lib}#g
 s#@${libbsclflagsvar}@#${libbsclflags}#g
 s#@${libbscwrapobjvar}@#${libbscwrapobj}#g
 s#@${libbscgenoptvar}@#${libbscgenopt}#g
+s#@OMP_FLAGS@#${omp_flags}#g
+s#@OMP_LIBS@#${omp_libs}#g
 s#@${libbsccppflagsvar}@#${libbsccppflags}#g
 s#@${skeinblockvar}@#${skeinblock}#g
 s#@${openssllibdirvar}@#${openssl_libdir}#g
