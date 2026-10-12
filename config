@@ -867,11 +867,13 @@ then
 	rpath="-rpath,"
 fi
 
+# Installed binary: the install prefix, plus <bindir>/../lib so a binary
+# tarball works wherever it is unpacked.
 if [ "$OS" = "Darwin" ]; then
 	# @rpath/libpcompress.dylib.1: build tree (tests) and install prefix.
-	prog_rpath="-Wl,-rpath,$(pwd) -Wl,-rpath,${prefix}/lib"
+	prog_rpath="-Wl,-rpath,$(pwd) -Wl,-rpath,${prefix}/lib -Wl,-rpath,@loader_path/../lib"
 else
-	prog_rpath="-Wl,${rpath}${prefix}/lib${dtag_val}"
+	prog_rpath="-Wl,${rpath}${prefix}/lib${dtag_val} '-Wl,${rpath}\$\$ORIGIN/../lib${dtag_val}'"
 fi
 
 # ----------------------------------------------------------------

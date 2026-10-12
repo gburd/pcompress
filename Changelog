@@ -1,3 +1,9 @@
+== 4.0.1 Release ==
+Binary tarballs run from wherever they are unpacked: the binary finds
+  libpcompress through $ORIGIN/../lib (@loader_path on macOS), so no
+  LD_LIBRARY_PATH is needed. The release workflow checks this.
+Codeberg releases are published by CI alongside GitHub's.
+
 == 4.0.0 Release ==
 Compatibility: the file format version is unchanged (10, as in 3.1).
 Verified: files from the earlier 4.0 development builds and the

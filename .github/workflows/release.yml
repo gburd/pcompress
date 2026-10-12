@@ -72,6 +72,11 @@ jobs:
           make -C src install DESTDIR="$PWD/stage" PREFIX=/usr/local
           mkdir -p $d && cp -R stage/usr/local/. $d/
           cp src/README.md src/COPYING src/COPYING.LESSER $d/
+          # The unpacked tarball must run from anywhere, with no env vars.
+          mv $d /tmp/$d && env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH /tmp/$d/bin/pcompress -V
+          printf 'relocatable binary check\n' > /tmp/rel.txt
+          /tmp/$d/bin/pcompress -c zstd -l3 /tmp/rel.txt && /tmp/$d/bin/pcompress -d /tmp/rel.txt.pz /tmp/rel.out
+          cmp /tmp/rel.txt /tmp/rel.out && mv /tmp/$d $d
           tar czf $d.tar.gz $d
       - uses: actions/upload-artifact@v4
         with: { name: "bin-${{ matrix.name }}", path: "pcompress-*-${{ matrix.name }}.tar.gz" }
