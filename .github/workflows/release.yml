@@ -29,14 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { submodules: recursive, ref: "${{ env.TAG }}", fetch-depth: 0 }
       - name: Create tarball with submodules
-        run: |
-          v=${TAG#v}; d=pcompress-$v
-          git archive --format=tar --prefix=$d/ HEAD > src.tar
-          git submodule foreach --quiet --recursive \
-            'git archive --format=tar --prefix='$d'/$sm_path/ HEAD > $toplevel/sub-$name.tar'
-          for t in sub-*.tar; do tar --concatenate -f src.tar "$t"; done
-          gzip -9n < src.tar > $d.tar.gz
-          tar tzf $d.tar.gz | grep -q "$d/zstd/lib/zstd.h"
+        run: sh ci/make-dist.sh "$TAG" . < /dev/null
       - uses: actions/upload-artifact@v4
         with: { name: source, path: "pcompress-*.tar.gz" }
 
