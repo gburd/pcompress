@@ -1225,6 +1225,14 @@ do
 		echo "Make sure the development package for the library is installed."
 		exit 1
 	fi
+	# Never add a system include directory with -I: it moves the SDK's C
+	# headers ahead of libc++'s wrappers (breaks C++ on macOS, where
+	# pkg-config reports zlib in .../MacOSX.sdk/usr/include).
+	eval "_inc=\${${var}}"
+	case "${_inc}" in
+	-I/usr/include|-I/usr/include/|-I*/SDKs/*/usr/include|-I*/SDKs/*/usr/include/)
+		eval "${var}=\"\"" ;;
+	esac
 done
 
 echo "Generating Makefile ..."
