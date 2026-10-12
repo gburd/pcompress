@@ -47,9 +47,6 @@
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
-#include <mach/mach_time.h>
-
-static mach_timebase_info_data_t sTimebaseInfo;
 #elif defined(__linux__)
 #include <sys/sysinfo.h>
 #endif
@@ -74,9 +71,6 @@ void
 init_pcompress(void) {
 	cpuid_basic_identify(&proc_info);
 	XXH32_module_init();
-#ifdef __APPLE__
-	(void) mach_timebase_info(&sTimebaseInfo);
-#endif
 }
 
 /*
@@ -343,21 +337,6 @@ get_total_ram(void)
 #endif
 }
 
-#ifdef __APPLE__
-#define	NANO_SEC (1000000000ULL)
-int
-clock_gettime(int clk_id, struct timespec *ts)
-{
-	if (clk_id == CLOCK_MONOTONIC) {
-		uint64_t nanotime = mach_absolute_time() *
-		    sTimebaseInfo.numer / sTimebaseInfo.denom;
-		ts->tv_sec = nanotime / NANO_SEC;
-		ts->tv_nsec = nanotime % NANO_SEC;
-		return (0);
-	}
-	return (EINVAL);
-}
-#endif
 
 double
 get_wtime_millis(void)
@@ -711,7 +690,9 @@ semctr_next()
 int
 Sem_Init(Sem_t *sem, int pshared, int value)
 {
-	sprintf(sem->name, "%u", semctr_next());
+	/* Names are system-wide: include the pid so concurrent runs don't collide. */
+	snprintf(sem->name, sizeof (sem->name), "/pc%x.%x", (unsigned)getpid() & 0xffffff,
+	    semctr_next() & 0xffff);
 	sem->sem1 = sem_open(sem->name, O_CREAT|O_EXCL, S_IRUSR|S_IWUSR, value);
 	if (sem->sem1 == SEM_FAILED)
 		return (-1);

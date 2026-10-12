@@ -144,7 +144,7 @@ INTERN inline char* scan_header_hdr( iostream* stream );
 INTERN inline void progress_bar( int current, int last );
 INTERN inline char* create_filename( const char* base, const char* extension );
 INTERN inline char* unique_filename( const char* base, const char* extension );
-INTERN inline void set_extension( const char* filename, const char* extension );
+INTERN inline void set_extension( char* filename, const char* extension );
 INTERN inline void add_underscore( char* filename );
 #endif
 INTERN inline bool file_exists( const char* filename );
@@ -2805,7 +2805,7 @@ INTERN inline char* unique_filename( const char* base, const char* extension )
 	changes extension of filename
 	----------------------------------------------- */
 #if !defined(BUILD_LIB)
-INTERN inline void set_extension( const char* filename, const char* extension )
+INTERN inline void set_extension( char* filename, const char* extension )
 {
 	char* extstr;
 	

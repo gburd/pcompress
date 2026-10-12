@@ -807,7 +807,7 @@ if [ "$OS" = "Darwin" ]
 then
 	crypto_asm_compile='\$\(CRYPTO_ASM_COMPILE2\)'
 	use_clang_as="-Wa,-q"
-	soname_opt="install_name,"
+	soname_opt="install_name,@rpath/"
 	rpath="-rpath,"
 	dtag_val=""
 	lrt="-liconv"
@@ -818,6 +818,13 @@ fi
 if [ "$OS" = "FreeBSD" ]
 then
 	rpath="-rpath,"
+fi
+
+if [ "$OS" = "Darwin" ]; then
+	# @rpath/libpcompress.dylib.1: build tree (tests) and install prefix.
+	prog_rpath="-Wl,-rpath,$(pwd) -Wl,-rpath,${prefix}/lib"
+else
+	prog_rpath="-Wl,${rpath}${prefix}/lib${dtag_val}"
 fi
 
 # ----------------------------------------------------------------
@@ -1339,6 +1346,7 @@ s#@LIBARCHIVE_DIR@#${libarchive_dir}#g
 s#soname#${soname_opt}#g
 s#${default_opt}#${max_opt}#g
 s#@DTAGS@#${dtag_val}#g
+s#@PROG_RPATH@#${prog_rpath}#g
 s#@${linkvar}@#\\\$\\(${typ}_${linkvar}\\)#g
 s#@${compilevar}@#\\\$\\(${typ}_${compilevar}\\)#g
 s#@${compilecppvar}@#\\\$\\(${typ}_${compilecppvar}\\)#g

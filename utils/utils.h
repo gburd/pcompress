@@ -213,10 +213,7 @@ typedef int16_t pc_i16u_t;
 #define	I32_P(x) (*((pc_i32u_t *)(x)))
 #define	I16_P(x) (*((pc_i16u_t *)(x)))
 
-#ifdef __APPLE__
-#define	CLOCK_MONOTONIC 0
-#define	CLOCK_REALTIME  1
-#endif
+/* macOS >= 10.12 provides clock_gettime() and the CLOCK_* ids natively. */
 
 /*
  * Public checksum properties. CKSUM_MAX_BYTES must be updated if a
@@ -455,15 +452,12 @@ void rm_fname(char *fn);
  */
 int is_incompressible(int type);
 
-#ifdef __APPLE__
-int clock_gettime(int clk_id, struct timespec *ts);
-#endif
 
 /*
  * Routines to handle compatibility.
  */
 typedef struct _compat_sem {
-	char name[15];
+	char name[32];
 	sem_t sem, *sem1;
 } Sem_t;
 

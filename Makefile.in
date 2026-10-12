@@ -282,6 +282,8 @@ COMMON_VEC_FLAGS = -ftree-vectorize
 COMMON_LOOP_OPTFLAGS = $(VEC_FLAGS) @GCC_LOOP_FLAGS@
 RPATH=@RPATH@
 DTAGS=@DTAGS@
+# The installed binary finds libpcompress.so.1 in $(PREFIX)/lib.
+PROG_RPATH=@PROG_RPATH@
 LDLIBS = @LDL@ -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
 	-L./buildtmp -Wl,$(RPATH)@OPENSSL_LIBDIR@ -lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
 	-lpthread -Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
@@ -505,7 +507,7 @@ $(LIB): Libarchive $(OBJS)  $(LIBBSCLIB)
 
 ./buildtmp/$(PROG): $(LIB) $(PROGOBJS)
 	mkdir -p buildtmp
-	$(LINK.PROG) -o $@ $(PROGOBJS) $(LDLIBS) -L. -l$(LINKLIB)
+	$(LINK.PROG) -o $@ $(PROGOBJS) $(LDLIBS) -L. -l$(LINKLIB) $(PROG_RPATH)
 
 $(PROG): ./buildtmp/$(PROG)
 	cat utils/pcompress.sh | sed "s#<PC_PATH>#`pwd`#" > pcompress
