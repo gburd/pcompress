@@ -108,6 +108,12 @@ stdenv.mkDerivation (finalAttrs: {
     patchShebangs config test
   '';
 
+  # LLVM libomp's topology probe asserts in the build sandbox on aarch64
+  # (kmp_affinity.cpp); pcompress does not rely on thread affinity.
+  preCheck = ''
+    export KMP_AFFINITY=disabled
+  '';
+
   postInstall = ''
     # The binary links libpcompress.so.1 from $out/lib.
     chmod u+w $out/bin/pcompress
