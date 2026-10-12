@@ -31,15 +31,10 @@ git submodule update --init --recursive
 
 This replaces the old approach of bundled source copies.
 
-### CMake Support (Planned)
-
-A CMake build system is being added alongside the existing `config`/`make`
-system. Both will be supported during the transition.
-
 ### OpenSSL Compatibility
 
 v4.x includes a compatibility layer for OpenSSL 1.1.x and 3.x APIs. The
-minimum supported OpenSSL version remains 0.9.8, but the build system now
+minimum supported OpenSSL version is 1.1.1, and the build system now
 handles API differences automatically.
 
 ## New Features

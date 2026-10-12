@@ -36,7 +36,6 @@
             pkg-config
             yasm
             autoreconfHook
-            cmake
             gnumake
             gcc
             clang
