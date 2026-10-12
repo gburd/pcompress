@@ -1918,7 +1918,11 @@ uncomp_done:
 				archiver_close(pctx);
 			pthread_join(pctx->archive_thread, NULL);
 			pctx->archive_thread_started = 0;
+		} else if (pctx->archive_ctx) {
+			/* Set up but never handed to the extractor thread, which frees it. */
+			archive_read_free((struct archive *)pctx->archive_ctx);
 		}
+		pctx->archive_ctx = NULL;
 		if (pctx->meta_stream) {
 			meta_ctx_done(pctx->meta_ctx);
 			pctx->meta_ctx = NULL;
@@ -2493,8 +2497,12 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 		 * extension appended unless '-' was specified to output to stdout.
 		 */
 		if (filename) {
+			char *d;
+
 			strcpy(tmpfile1, filename);
-			strcpy(tmpfile1, dirname(tmpfile1));
+			/* dirname() may return a pointer into its argument: memmove. */
+			d = dirname(tmpfile1);
+			memmove(tmpfile1, d, strlen(d) + 1);
 		} else {
 			char *tmp1;
 			if (!(pctx->archive_mode)) {
@@ -3121,7 +3129,11 @@ comp_done:
 		if (pctx->archive_thread_started) {
 			pthread_join(pctx->archive_thread, NULL);
 			pctx->archive_thread_started = 0;
+		} else if (pctx->archive_ctx) {
+			/* Set up but never handed to the archiver thread, which frees it. */
+			archive_write_free((struct archive *)pctx->archive_ctx);
 		}
+		pctx->archive_ctx = NULL;
 		fn = pctx->fn;
 		while (fn) {
 			fn1 = fn;
