@@ -1,3 +1,44 @@
+== 4.0.0 Release ==
+Compatibility: the file format version is unchanged (10, as in 3.1).
+Verified: files from the earlier 4.0 development builds and the
+test/backward_compat reference archives decompress byte-identically.
+
+Correctness and security:
+Every ARM64 BLAKE2b digest was wrong (NEON); BLAKE2bp was wrong with few
+  OpenMP threads; SHA256/SHA512 now give the same digest on every CPU.
+Big-endian (SPARC) support: DICT, LZP, CRC, metadata and archive fixes;
+  SALSA20 files are now portable between byte orders; libbsc is refused
+  on big-endian (upstream does not round-trip there).
+Strict-alignment CPUs: no more SIGBUS (dedupe, libbsc, lzp, LZMA, xxhash,
+  dispack).
+Hardened every decoder against corrupt or truncated input: no hangs
+  (zlib, bzip2, PPMd, worker/writer shutdown, archive extraction), crashes
+  or overruns (LZP, DICT, lzfx, AES-CTR, chunk/dedupe/encryption headers).
+Fixed a stack overflow when reading a 16-byte password file, archive
+  extraction that silently produced nothing on illumos, an archive
+  extraction hang (~9% of runs), -K extraction desync, 1-byte chunks,
+  '-d foo.pz' writing foo.pz.out, and exit status 0 on write failures.
+Memory: fixed leaks and allocator mismatches found by ASan/LSan/UBSan;
+  64-byte-aligned BLAKE2/Keccak HMAC state (clang/AVX crash).
+
+Usability:
+Usage errors exit 2, -h/-V exit 0; unknown -c/-e names are rejected.
+New pcompress(1) man page and DESIGN.md; installed binary finds its
+  library via rpath.
+
+Build and portability:
+Builds and passes its tests on Linux x86_64/arm64/riscv64, illumos SPARC,
+  macOS arm64/x86_64 with GCC and Clang (incl. LTO); config options
+  --portable, --enable-lto, --enable-coverage; OpenMP probing (Apple
+  clang + libomp); non-executable stack; MSVC can build the core
+  compressors. The unbuildable CMake build was removed.
+
+Testing:
+Unit tests (KATs for every hash, crypto, filters, every compressor's
+  corrupt-input paths), integration and error-path suites, a feature
+  matrix of ~170 option combinations, CI on Codeberg and GitHub
+  (incl. ASan/UBSan and the Nix package), nightly full matrix/Valgrind.
+
 == 3.1 Bugfix Release ==
 Avoid auto-selection variable chunking for buffer sizes below threshold.
 Do not auto-select Global Dedupe for below threshold buffers.
