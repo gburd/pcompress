@@ -77,6 +77,9 @@ stdenv.mkDerivation (finalAttrs: {
   ]
   ++ lib.optional stdenv.cc.isClang llvmPackages.openmp;
 
+  strictDeps = true;
+  __structuredAttrs = true;
+
   # ./config is a hand-written script, not autoconf. --portable: no host
   # CPU probing (SIMD paths are still chosen at run time).
   configureScript = "./config";
