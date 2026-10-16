@@ -171,6 +171,7 @@ Developer documentation is available in the `docs/` directory:
 - `docs/PORTING.md` -- Porting to new architectures (ARM64, RISC-V)
 - `docs/PERFORMANCE.md` -- Algorithm selection matrix and tuning guide
 - `docs/TESTING.md` -- Testing framework, test categories, CI integration
+- `docs/ROADMAP.md` -- Plan to make libpcompress a reentrant library (CLI + backup tools)
 - `docs/DEPENDENCIES.md` -- Dependency management and submodule details
 - `docs/NIX.md` -- Building and developing with Nix flakes
 - `docs/MIGRATION_v4.md` -- Migration guide from v3.x to v4.x
