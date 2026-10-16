@@ -1,3 +1,7 @@
+== 4.0.2 Release ==
+'make -j check' no longer relinks libpcompress while the tests run it
+  (archive tests failed under parallel make, e.g. in nixpkgs' ofborg).
+
 == 4.0.1 Release ==
 Binary tarballs run from wherever they are unpacked: the binary finds
   libpcompress through $ORIGIN/../lib (@loader_path on macOS), so no
