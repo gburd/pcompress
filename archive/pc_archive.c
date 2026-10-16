@@ -141,7 +141,7 @@ creat_close_callback(struct archive *arc, void *ctx)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	pctx->arc_closed = 1;
+	__atomic_store_n(&pctx->arc_closed, 1, __ATOMIC_RELAXED);
 	if (pctx->arc_buf) {
 		Sem_Post(&(pctx->read_sem));
 	} else {
@@ -157,7 +157,7 @@ creat_write_callback(struct archive *arc, void *ctx, const void *buf, size_t len
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 	size_t remaining;
 
-	if (pctx->arc_closed) {
+	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
 		archive_set_error(arc, ARCHIVE_EOF, "End of file when writing archive.");
 		return (-1);
 	}
@@ -191,7 +191,7 @@ creat_write_callback(struct archive *arc, void *ctx, const void *buf, size_t len
 	pctx->arc_writing = 1;
 
 	remaining = len;
-	while (remaining && !pctx->arc_closed) {
+	while (remaining && !__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
 		uchar_t *tbuf;
 
 		tbuf = pctx->arc_buf + pctx->arc_buf_pos;
@@ -256,7 +256,7 @@ archiver_read(void *ctx, void *buf, uint64_t count)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	if (pctx->arc_closed)
+	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED))
 		return (0);
 
 	if (pctx->arc_buf != NULL) {
@@ -280,7 +280,7 @@ archiver_close(void *ctx)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	pctx->arc_closed = 1;
+	__atomic_store_n(&pctx->arc_closed, 1, __ATOMIC_RELAXED);
 	pctx->arc_buf = NULL;
 	pctx->arc_buf_size = 0;
 	Sem_Post(&(pctx->write_sem));
@@ -293,7 +293,7 @@ extract_close_callback(struct archive *arc, void *ctx)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	pctx->arc_closed = 1;
+	__atomic_store_n(&pctx->arc_closed, 1, __ATOMIC_RELAXED);
 	if (pctx->arc_buf) {
 		Sem_Post(&(pctx->write_sem));
 	} else {
@@ -307,7 +307,7 @@ extract_read_callback(struct archive *arc, void *ctx, const void **buf)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	if (pctx->arc_closed) {
+	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
 		pctx->arc_buf_size = 0;
 		log_msg(LOG_WARN, 0, "End of file.");
 		archive_set_error(arc, ARCHIVE_EOF, "End of file.");
@@ -367,7 +367,7 @@ archiver_write(void *ctx, void *buf, uint64_t count)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
-	if (pctx->arc_closed) {
+	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
 		log_msg(LOG_WARN, 0, "Archive extractor closed unexpectedly");
 		return (0);
 	}
@@ -1300,9 +1300,19 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
  * Thread function. Archive members and write to pipe. The dispatcher thread
  * reads from the other end and compresses.
  */
+static void *archiver_thread_run(pc_ctx_t *pctx);
+static void *extractor_thread_run(pc_ctx_t *pctx);
+
 static void *
 archiver_thread_func(void *dat) {
 	pc_ctx_t *pctx = (pc_ctx_t *)dat;
+
+	log_bind(&pctx->log);
+	return (archiver_thread_run(pctx));
+}
+
+static void *
+archiver_thread_run(pc_ctx_t *pctx) {
 	char fpath[PATH_MAX], *name, *bnchars = NULL; // Silence compiler
 	int warn, rbytes, fpathlen = 0; // Silence compiler
 	uint32_t ctr;
@@ -1658,6 +1668,13 @@ prefix_entry(struct archive_entry *entry, const char *dir)
 static void *
 extractor_thread_func(void *dat) {
 	pc_ctx_t *pctx = (pc_ctx_t *)dat;
+
+	log_bind(&pctx->log);
+	return (extractor_thread_run(pctx));
+}
+
+static void *
+extractor_thread_run(pc_ctx_t *pctx) {
 	char fpath[PATH_MAX], todir[PATH_MAX];
 	int flags, rv;
 	uint32_t ctr;

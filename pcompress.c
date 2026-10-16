@@ -73,7 +73,84 @@ struct wdata {
 	pc_ctx_t *pctx;
 };
 
-pthread_mutex_t opt_parse = PTHREAD_MUTEX_INITIALIZER;
+/*
+ * Reentrant getopt for the library. getopt() keeps its state in process
+ * globals (optind, optarg), which the library cannot share with the
+ * program or other contexts. This one matches the CLI's long-standing
+ * glibc behaviour: short options, clustering ("-dv"), attached or separate
+ * arguments ("-l6", "-l 6"), options after operands ("in -w pw" works; the
+ * operands are moved to the end of argv, in order), "--" ends options, and
+ * "-" is an operand. Diagnostics go through log_msg, worded like glibc's.
+ */
+struct pc_getopt {
+	int ind;	/* next argv index to scan */
+	int pos;	/* position inside a clustered argument */
+	int nopt, nops;	/* option words and operands seen, in order */
+	char **opts, **ops;	/* scratch, argc entries each */
+	char *arg;	/* argument of the last option */
+	const char *prog;
+};
+
+/*
+ * Returns the next option, '?' for an error, or -1 at the end. At the end
+ * argv[1..] is rewritten as all option words, then all operands, each in
+ * original order, and ind is the first operand (glibc's default order).
+ */
+static int
+pc_getopt(struct pc_getopt *g, int argc, char *argv[], const char *spec)
+{
+	const char *o;
+	char c, *a;
+
+	g->arg = NULL;
+	if (g->pos == 0) {
+		while (g->ind < argc && (argv[g->ind][0] != '-' || argv[g->ind][1] == '\0'))
+			g->ops[g->nops++] = argv[g->ind++];	/* operand */
+		if (g->ind < argc && strcmp(argv[g->ind], "--") == 0) {
+			g->opts[g->nopt++] = argv[g->ind++];
+			while (g->ind < argc)
+				g->ops[g->nops++] = argv[g->ind++];
+		}
+		if (g->ind >= argc) {
+			memcpy(&argv[1], g->opts, g->nopt * sizeof (char *));
+			memcpy(&argv[1 + g->nopt], g->ops, g->nops * sizeof (char *));
+			g->ind = 1 + g->nopt;
+			return (-1);
+		}
+		g->opts[g->nopt++] = argv[g->ind];
+		g->pos = 1;
+	}
+	a = argv[g->ind];
+	c = a[g->pos++];
+	if (c == ':' || (o = strchr(spec, c)) == NULL) {
+		log_msg(LOG_ERR, 0, "%s: invalid option -- '%c'", g->prog, c);
+		if (a[g->pos] == '\0') {
+			g->ind++;
+			g->pos = 0;
+		}
+		return ('?');
+	}
+	if (o[1] == ':') {
+		if (a[g->pos] != '\0') {
+			g->arg = a + g->pos;
+		} else if (g->ind + 1 < argc) {
+			g->arg = argv[++g->ind];
+			g->opts[g->nopt++] = g->arg;
+		} else {
+			log_msg(LOG_ERR, 0, "%s: option requires an argument -- '%c'",
+			    g->prog, c);
+			g->ind++;
+			g->pos = 0;
+			return ('?');
+		}
+		g->ind++;
+		g->pos = 0;
+	} else if (a[g->pos] == '\0') {
+		g->ind++;
+		g->pos = 0;
+	}
+	return (c);
+}
 
 static void * writer_thread(void *dat);
 static int init_algo(pc_ctx_t *pctx, const char *algo, int bail);
@@ -477,6 +554,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 			srclen = result;
 			*dstlen = result;
 		} else {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "LZP decompression failed.");
 			return ((int)result);
 		}
@@ -495,6 +573,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 			*dstlen = _dstlen;
 			_dstlen = _dstlen1;
 		} else {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "DICT decoding failed.");
 			return (result);
 		}
@@ -507,6 +586,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 		if (result != -1) {
 			*dstlen = _dstlen1;
 		} else {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "E8E9 decoding failed.");
 			return (result);
 		}
@@ -516,6 +596,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 		if (result != -1) {
 			*dstlen = _dstlen1;
 		} else {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Dispack decoding failed.");
 			return (result);
 		}
@@ -543,6 +624,8 @@ perform_decompress(void *dat)
 	uint64_t _chunksize;
 	uint64_t dedupe_index_sz, dedupe_data_sz, dedupe_index_sz_cmp, dedupe_data_sz_cmp;
 	int rv = 0, defer_index_wait;
+
+	log_bind(&tdat->pctx->log);
 	unsigned int blknum;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	uchar_t HDR;
@@ -559,8 +642,8 @@ redo:
 	 * Returning silently left it blocked on cmp_done_sem, and the main
 	 * thread on write_done_sem (~2% of decompressions of a corrupt file).
 	 */
-	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || pctx->main_cancel)) {
-		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
+	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || __atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))) {
+		tdat->len_cmp = 0;
 		Sem_Post(&tdat->cmp_done_sem);
 		return (NULL);
 	}
@@ -583,11 +666,12 @@ redo:
 		/* Corrupt length: the trailing original-size field must fit. */
 		if (tdat->len_cmp < ORIGINAL_CHUNKSZ ||
 		    tdat->rbytes < (int64_t)ORIGINAL_CHUNKSZ) {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Chunk %d, invalid length. File corrupt ?",
 			    tdat->id);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			goto cont;
 		}
 		tdat->rbytes -= ORIGINAL_CHUNKSZ;
@@ -595,11 +679,12 @@ redo:
 		rseg = tdat->compressed_chunk + tdat->rbytes;
 		_chunksize = ntohll(I64_P(rseg));
 		if (_chunksize > tdat->chunksize) {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Chunk %d, original size too large. "
 			    "File corrupt ?", tdat->id);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			goto cont;
 		}
 	}
@@ -630,10 +715,11 @@ redo:
 			/*
 			 * HMAC verification failure is fatal.
 			 */
+			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Chunk %d, HMAC verification failed", tdat->id);
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->cmp_done_sem);
 			return (NULL);
 		}
@@ -651,8 +737,9 @@ redo:
 			/*
 			 * Decryption failure is fatal.
 			 */
+			log_error_code(PC_ERR_CRYPTO);
 			log_msg(LOG_ERR, 0, "Chunk %d, Decryption failed", tdat->id);
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			Sem_Post(&tdat->cmp_done_sem);
 			return (NULL);
@@ -681,10 +768,11 @@ redo:
 			/*
 			 * Header CRC32 verification failure is fatal.
 			 */
+			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Chunk %d, Header CRC verification failed", tdat->id);
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->cmp_done_sem);
 			return (NULL);
 		}
@@ -712,11 +800,12 @@ redo:
 		    dedupe_data_sz_cmp > tdat->len_cmp - RABIN_HDR_SIZE - dedupe_index_sz_cmp ||
 		    dedupe_index_sz > tdat->chunksize || dedupe_data_sz > tdat->chunksize ||
 		    _chunksize > tdat->chunksize) {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe header. File corrupt ?",
 			    tdat->id);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			goto cont;
 		}
 		memcpy(tdat->uncompressed_chunk, cseg, RABIN_HDR_SIZE);
@@ -748,14 +837,15 @@ redo:
 			}
 			if (rv == -1) {
 				tdat->len_cmp = 0;
+				log_error_code(PC_ERR_CORRUPT);
 				log_msg(LOG_ERR, 0, "ERROR: Chunk %d, decompression failed.", tdat->id);
-				pctx->t_errored = 1;
+				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 				goto cont;
 			}
 		} else {
 			if (_chunksize > dedupe_data_sz_cmp) {	/* stored: sizes must agree */
 				tdat->len_cmp = 0;
-				pctx->t_errored = 1;
+				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 				goto cont;
 			}
 			memcpy(ubuf, cmpbuf, _chunksize);
@@ -767,9 +857,10 @@ redo:
 
 		if (dedupe_index_sz < 90 && dedupe_index_sz > dedupe_index_sz_cmp) {
 			/* Stored (uncompressed) index larger than its bytes in the file. */
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe index.", tdat->id);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			goto cont;
 		}
 		if (dedupe_index_sz >= 90 && dedupe_index_sz > dedupe_index_sz_cmp) {
@@ -811,8 +902,9 @@ redo:
 
 	if (rv == -1) {
 		tdat->len_cmp = 0;
+		log_error_code(PC_ERR_CORRUPT);
 		log_msg(LOG_ERR, 0, "ERROR: Chunk %d, decompression failed.", tdat->id);
-		pctx->t_errored = 1;
+		__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 		goto cont;
 	}
 	/* Rebuild chunk from dedup blocks. */
@@ -825,10 +917,11 @@ redo:
 		rctx->cbuf = tdat->compressed_chunk;
 		dedupe_decompress(rctx, tdat->uncompressed_chunk, &(tdat->len_cmp));
 		if (!rctx->valid) {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "ERROR: Chunk %d, dedup recovery failed.", tdat->id);
 			rv = -1;
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			goto cont;
 		}
 		_chunksize = tdat->len_cmp;
@@ -857,17 +950,18 @@ redo:
 		    _chunksize, tdat->cksum_mt, 1);
 		if (memcmp(checksum, tdat->checksum, pctx->cksum_bytes) != 0) {
 			tdat->len_cmp = 0;
+			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "ERROR: Chunk %d, checksums do not match.", tdat->id);
-			pctx->t_errored = 1;
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 		}
 	}
-	if (defer_index_wait && !pctx->t_errored)
+	if (defer_index_wait && !__atomic_load_n(&pctx->t_errored, __ATOMIC_RELAXED))
 		Sem_Wait(tdat->rctx->index_sem);
 
 cont:
 	Sem_Post(&tdat->cmp_done_sem);
-	if (!pctx->t_errored)
+	if (!__atomic_load_n(&pctx->t_errored, __ATOMIC_RELAXED))
 		goto redo;
 	return (NULL);
 }
@@ -909,8 +1003,8 @@ cont:
  */
 #define UNCOMP_BAIL err = 1; goto uncomp_done
 
-int DLL_EXPORT
-start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
+static int
+start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 {
 	char algorithm[ALGO_SZ];
 	struct stat sbuf;
@@ -972,6 +1066,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		UNCOMP_BAIL;
 	}
 	if (init_algo(pctx, algorithm, 0) != 0) {
+		log_error_code(PC_ERR_FORMAT);
 		if (pctx->pipe_mode || filename == NULL)
 			log_msg(LOG_ERR, 0, "Input stream is not pcompressed.");
 		else
@@ -997,6 +1092,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	 * Check for ridiculous values (malicious tampering or otherwise).
 	 */
 	if (version > VERSION) {
+		log_error_code(PC_ERR_FORMAT);
 		log_msg(LOG_ERR, 0, "Cannot handle newer archive version %d, capability %d",
 			version, VERSION);
 		err = 1;
@@ -1008,11 +1104,13 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		goto uncomp_done;
 	}
 	if (level > MAX_LEVEL || level < 0) {
+		log_error_code(PC_ERR_CORRUPT);
 		log_msg(LOG_ERR, 0, "Invalid compression level in header: %d", level);
 		err = 1;
 		goto uncomp_done;
 	}
 	if (version < VERSION-4) {
+		log_error_code(PC_ERR_FORMAT);
 		log_msg(LOG_ERR, 0, "Unsupported version: %d", version);
 		err = 1;
 		goto uncomp_done;
@@ -1163,6 +1261,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				pctx->enable_rabin_global = 1;
 				dedupe_flag = RABIN_DEDUPE_FILE_GLOBAL;
 			} else {
+				log_error_code(PC_ERR_CORRUPT);
 				log_msg(LOG_ERR, 0, "Invalid file deduplication flags.");
 				err = 1;
 				goto uncomp_done;
@@ -1245,6 +1344,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		saltlen = ntohl(saltlen);
 		/* Untrusted header field: bound before allocating. */
 		if (saltlen <= 0 || saltlen > MAX_SALTLEN) {
+			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Invalid salt length %d. File corrupt ?", saltlen);
 			UNCOMP_BAIL;
 		}
@@ -1311,6 +1411,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				free(salt2);
 				memset(salt1, 0, saltlen);
 				free(salt1);
+				log_error_code(PC_ERR_CRYPTO);
 				log_msg(LOG_ERR, 0, "Failed to get password.");
 				UNCOMP_BAIL;
 			}
@@ -1348,6 +1449,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				free(salt2);
 				memset(salt1, 0, saltlen);
 				free(salt1);
+				log_error_code(PC_ERR_CRYPTO);
 				log_msg(LOG_ERR, 0, "Failed to get password.");
 				UNCOMP_BAIL;
 			}
@@ -1416,6 +1518,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		free(salt1);
 		memset(n1, 0, noncelen);
 		if (memcmp(hdr_hash2, hdr_hash1, pctx->mac_bytes) != 0) {
+			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Header verification failed! File "
 			    "tampered or wrong password.");
 			UNCOMP_BAIL;
@@ -1446,6 +1549,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		d2 = htonl(level);
 		crc2 = lzma_crc32((uchar_t *)&d2, sizeof (level), crc2);
 		if (crc1 != crc2) {
+			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Header verification failed! File tampered "
 			    "or wrong password.");
 			UNCOMP_BAIL;
@@ -1516,6 +1620,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			pctx->temp_mmap_buf = (uchar_t *)slab_alloc(NULL, chunksize);
 			pctx->temp_mmap_len = chunksize;
 			if (pctx->temp_mmap_buf == NULL) {
+				log_error_code(PC_ERR_NOMEM);
 				log_msg(LOG_ERR, 0, "Out of memory");
 				UNCOMP_BAIL;
 			}
@@ -1587,6 +1692,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	for (i = 0; i < nprocs; i++) {
 		dary[i] = (struct cmp_data *)slab_alloc(NULL, sizeof (struct cmp_data));
 		if (!dary[i]) {
+			log_error_code(PC_ERR_NOMEM);
 			log_msg(LOG_ERR, 0, "1: Out of memory");
 			UNCOMP_BAIL;
 		}
@@ -1713,12 +1819,12 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		int64_t rb;
 		int is_meta;
 
-		if (pctx->main_cancel) break;
+		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 		for (p = 0; p < nprocs; p++) {
 			np = p;
 			tdat = dary[p];
 			Sem_Wait(&tdat->write_done_sem);
-			if (pctx->main_cancel) break;
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 			tdat->id = pctx->chunk_num;
 			if (tdat->rctx) tdat->rctx->id = tdat->id;
 
@@ -1728,10 +1834,13 @@ redo:
 			 */
 			rb = Read(compfd, &tdat->len_cmp, sizeof (tdat->len_cmp));
 			if (rb != sizeof (tdat->len_cmp)) {
-				if (rb < 0) log_msg(LOG_ERR, 1, "Read: ");
-				else
+				if (rb < 0) {
+					log_msg(LOG_ERR, 1, "Read: ");
+				} else {
+					log_error_code(PC_ERR_CORRUPT);
 					log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
 					    "file corrupt", pctx->chunk_num);
+				}
 				UNCOMP_BAIL;
 			}
 			tdat->len_cmp_be = tdat->len_cmp; // Needed for HMAC
@@ -1741,6 +1850,7 @@ redo:
 			 * Check for ridiculous length.
 			 */
 			if (tdat->len_cmp > chunksize + 256) {
+				log_error_code(PC_ERR_CORRUPT);
 				log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %d",
 				    pctx->chunk_num);
 				UNCOMP_BAIL;
@@ -1763,10 +1873,13 @@ redo:
 				 */
 				rb = Read(compfd, &tdat->len_cmp_be, sizeof (tdat->len_cmp_be));
 				if (rb != sizeof (tdat->len_cmp_be)) {
-					if (rb < 0) log_msg(LOG_ERR, 1, "Read: ");
-					else
+					if (rb < 0) {
+						log_msg(LOG_ERR, 1, "Read: ");
+					} else {
+						log_error_code(PC_ERR_CORRUPT);
 						log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
 							"file corrupt", pctx->chunk_num);
+					}
 					UNCOMP_BAIL;
 				}
 
@@ -1790,6 +1903,7 @@ redo:
 				    compressed_chunksize);
 				tdat->buf_size = compressed_chunksize;
 				if (!tdat->compressed_chunk || !tdat->uncompressed_chunk) {
+					log_error_code(PC_ERR_NOMEM);
 					log_msg(LOG_ERR, 0, "2: Out of memory");
 					UNCOMP_BAIL;
 				}
@@ -1820,12 +1934,13 @@ redo:
 				if (tdat->rbytes > 0)
 					tdat->rbytes = tdat->rbytes - cpos;
 			}
-			if (pctx->main_cancel) break;
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 			if (tdat->rbytes < rb) {
 				if (tdat->rbytes < 0) {
 					log_msg(LOG_ERR, 1, "Read: ");
 					UNCOMP_BAIL;
 				} else {
+					log_error_code(PC_ERR_CORRUPT);
 					log_msg(LOG_ERR, 0, "Incomplete chunk %d, file corrupt.",
 					    pctx->chunk_num);
 					UNCOMP_BAIL;
@@ -1843,13 +1958,13 @@ redo:
 		}
 	}
 
-	if (!pctx->main_cancel) {
+	if (!__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) {
 		for (p = 0; p < nprocs; p++) {
 			if (p == np) continue;
 			tdat = dary[p];
 			Sem_Wait(&tdat->write_done_sem);
 // VS begin
-			if (pctx->main_cancel) break;
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 // VS end
 		}
 	}
@@ -1858,7 +1973,6 @@ uncomp_done:
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
-			__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
 			/* Wake workers parked on the global dedupe index token. */
@@ -1874,7 +1988,7 @@ uncomp_done:
 	 * t_errored, and reading it earlier let a corrupt file exit 0 with
 	 * truncated output (~0.5% of runs).
 	 */
-	if (pctx->t_errored) err = pctx->t_errored;
+	if (pctx->t_errored) err = pctx->t_errored;	/* threads joined: plain read is fine */
 
 	/*
 	 * Ownership and mode of target should be same as original.
@@ -1954,6 +2068,8 @@ perform_compress(void *dat) {
 	struct cmp_data *tdat = (struct cmp_data *)dat;
 	typeof (tdat->chunksize) _chunksize, len_cmp, dedupe_index_sz, index_size_cmp;
 	int type, rv;
+
+	log_bind(&tdat->pctx->log);
 	uchar_t *compressed_chunk;
 	int64_t rbytes;
 	pc_ctx_t *pctx;
@@ -1962,7 +2078,7 @@ perform_compress(void *dat) {
 redo:
 	Sem_Wait(&tdat->start_sem);
 	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED))) {	/* may race the writer's cancel */
-		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
+		tdat->len_cmp = 0;
 		Sem_Post(&tdat->cmp_done_sem);
 		return (0);
 	}
@@ -2142,9 +2258,9 @@ plain_index:
 			/*
 			 * Encryption failure is fatal.
 			 */
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->cmp_done_sem);
 			return (0);
 		}
@@ -2245,11 +2361,17 @@ writer_thread(void *dat) {
 	pc_ctx_t *pctx;
 
 	pctx = w->pctx;
+	log_bind(&pctx->log);
 repeat:
 	for (p = 0; p < w->nprocs; p++) {
 		tdat = w->dary[p];
 		Sem_Wait(&tdat->cmp_done_sem);
-		if (__atomic_load_n(&tdat->len_cmp, __ATOMIC_RELAXED) == 0) {
+		/*
+		 * cancel first: at shutdown the main thread posts cmp_done_sem
+		 * itself, and len_cmp may then still be in a worker's hands.
+		 * Otherwise the post came from the worker and len_cmp is ready.
+		 */
+		if (__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || tdat->len_cmp == 0) {
 			goto do_cancel;
 		}
 
@@ -2274,9 +2396,9 @@ repeat:
 		if (unlikely(wbytes != tdat->len_cmp)) {
 			log_msg(LOG_ERR, 1, "Chunk Write (expected: %" PRIu64
 			    ", written: %" PRId64 ") : ", tdat->len_cmp, wbytes);
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 do_cancel:
-			pctx->main_cancel = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			if (tdat->rctx && pctx->enable_rabin_global)
@@ -2305,8 +2427,8 @@ do_cancel:
  */
 #define COMP_BAIL err = 1; goto comp_done
 
-int DLL_EXPORT
-start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level)
+static int
+start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level)
 {
 	struct wdata w;
 	char tmpfile1[MAXPATHLEN], tmpdir[MAXPATHLEN];
@@ -2348,6 +2470,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 			pw_len = get_pw_string(pw,
 				"Please enter encryption password", 1);
 			if (pw_len == -1) {
+				log_error_code(PC_ERR_CRYPTO);
 				log_msg(LOG_ERR, 0, "Failed to get password.");
 				return (1);
 			}
@@ -2378,6 +2501,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 				}
 			}
 			if (pw_len == -1) {
+				log_error_code(PC_ERR_CRYPTO);
 				log_msg(LOG_ERR, 1, "Failed to get password.");
 				return (1);
 			}
@@ -2650,6 +2774,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	dary = (struct cmp_data **)slab_calloc(NULL, nprocs, sizeof (struct cmp_data *));
 	cread_buf = (uchar_t *)slab_alloc(NULL, compressed_chunksize);
 	if (!cread_buf) {
+		log_error_code(PC_ERR_NOMEM);
 		log_msg(LOG_ERR, 0, "3: Out of memory");
 		COMP_BAIL;
 	}
@@ -2657,6 +2782,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	for (i = 0; i < nprocs; i++) {
 		dary[i] = (struct cmp_data *)slab_alloc(NULL, sizeof (struct cmp_data));
 		if (!dary[i]) {
+			log_error_code(PC_ERR_NOMEM);
 			log_msg(LOG_ERR, 0, "4: Out of memory");
 			COMP_BAIL;
 		}
@@ -2687,6 +2813,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 		tdat->compressed_chunk = tdat->cmp_seg + COMPRESSED_CHUNKSZ +
 		    pctx->cksum_bytes + pctx->mac_bytes;
 		if (!tdat->cmp_seg || !tdat->uncompressed_chunk) {
+			log_error_code(PC_ERR_NOMEM);
 			log_msg(LOG_ERR, 0, "5: Out of memory");
 			COMP_BAIL;
 		}
@@ -2922,14 +3049,14 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	while (!bail) {
 		uchar_t *tmp;
 
-		if (pctx->main_cancel) break;
+		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 		for (p = 0; p < nprocs; p++) {
 			np = p;
 			tdat = dary[p];
-			if (pctx->main_cancel) break;
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 			/* Wait for previous chunk compression to complete. */
 			Sem_Wait(&tdat->write_done_sem);
-			if (pctx->main_cancel) break;
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 
 			if (rbytes == 0) { /* EOF */
 				bail = 1;
@@ -3013,7 +3140,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 		}
 	}
 
-	if (!pctx->main_cancel) {
+	if (!__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) {
 		/* Wait for all remaining chunks to finish. */
 		for (p = 0; p < nprocs; p++) {
 			if (p == np) continue;
@@ -3042,7 +3169,6 @@ comp_done:
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
-			__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
 			/* Wake workers parked on the global dedupe index token. */
@@ -3056,7 +3182,7 @@ comp_done:
 			pthread_join(writer_thr, NULL);
 	}
 	/* After the joins, as in start_decompress(): workers set t_errored. */
-	if (pctx->t_errored) err = pctx->t_errored;
+	if (pctx->t_errored) err = pctx->t_errored;	/* threads joined: plain read is fine */
 
 	if (err) {
 		if (compfd != -1 && !pctx->pipe_mode && !pctx->pipe_out) {
@@ -3342,6 +3468,7 @@ create_pc_context(void)
 	ctx->pagesize = sysconf(_SC_PAGE_SIZE);
 	ctx->btype = TYPE_UNKNOWN;
 	ctx->delta2_nstrides = NSTRIDES_STANDARD;
+	ctx->log.level = -1;	/* process default until pc_set_log() */
 	pthread_mutex_init(&ctx->write_mutex, NULL);
 
 	return (ctx);
@@ -3379,10 +3506,11 @@ init_pc_context_argstr(pc_ctx_t *pctx, char *args)
 	return (0);
 }
 
-int DLL_EXPORT
-init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
+static int
+init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 {
 	int opt, num_rem, err, my_optind;
+	struct pc_getopt g;
 	char *pos;
 	struct filter_flags ff;
 
@@ -3399,20 +3527,19 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	ff.enable_wavpack = 0;
 	ff.exe_preprocess = 0;
 
-	pthread_mutex_lock(&opt_parse);
-	/*
-	 * Reset getopt() so the library can parse more than once. optind = 1
-	 * is POSIX; glibc additionally needs 0 for a full reset, BSDs optreset.
-	 */
-#if defined(__GLIBC__)
-	optind = 0;
-#else
-	optind = 1;
-#endif
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-	optreset = 1;
-#endif
-	while ((opt = getopt(argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhV")) != -1) {
+	memset(&g, 0, sizeof (g));
+	g.ind = 1;
+	g.prog = argv[0];
+	g.opts = malloc(argc * sizeof (char *));
+	g.ops = malloc(argc * sizeof (char *));
+	if (g.opts == NULL || g.ops == NULL) {
+		free(g.opts);
+		free(g.ops);
+		log_msg(LOG_ERR, 0, "Out of memory");
+		return (1);
+	}
+	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhV")) != -1) {
+		char *oarg = g.arg;
 		int ovr;
 		int64_t chunksize;
 
@@ -3425,21 +3552,21 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 
 		    case 'c':
 			pctx->do_compress = 1;
-			pctx->algo = optarg;
+			pctx->algo = oarg;
 			if (init_algo(pctx, pctx->algo, 1) != 0) {
-				log_msg(LOG_ERR, 0, "Invalid algorithm %s", optarg);
+				log_msg(LOG_ERR, 0, "Invalid algorithm %s", oarg);
 				{ err = 1; goto opt_done; }
 			}
 			break;
 
 		    case 's':
-			ovr = parse_numeric(&chunksize, optarg);
+			ovr = parse_numeric(&chunksize, oarg);
 			if (ovr == 1) {
-				log_msg(LOG_ERR, 0, "Chunk size too large %s", optarg);
+				log_msg(LOG_ERR, 0, "Chunk size too large %s", oarg);
 				{ err = 1; goto opt_done; }
 
 			} else if (ovr == 2) {
-				log_msg(LOG_ERR, 0, "Invalid number %s", optarg);
+				log_msg(LOG_ERR, 0, "Invalid number %s", oarg);
 				{ err = 1; goto opt_done; }
 			}
 			pctx->chunksize = chunksize;
@@ -3455,7 +3582,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'l':
-			pctx->level = atoi(optarg);
+			pctx->level = atoi(oarg);
 			if (pctx->level < 0 || pctx->level > MAX_LEVEL) {
 				log_msg(LOG_ERR, 0, "Compression level should be in range 0 - 14");
 				{ err = 1; goto opt_done; }
@@ -3463,7 +3590,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'B':
-			pctx->rab_blk_size = atoi(optarg);
+			pctx->rab_blk_size = atoi(oarg);
 			if (pctx->rab_blk_size < 0 || pctx->rab_blk_size > 5) {
 				log_msg(LOG_ERR, 0, "Average Dedupe block size must be in range 0 (2k), 1 (4k) .. 5 (64k)");
 				{ err = 1; goto opt_done; }
@@ -3475,7 +3602,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 't':
-			pctx->nthreads = atoi(optarg);
+			pctx->nthreads = atoi(oarg);
 			if (pctx->nthreads < 1 || pctx->nthreads > 256) {
 				log_msg(LOG_ERR, 0, "Thread count should be in range 1 - 256");
 				{ err = 1; goto opt_done; }
@@ -3512,16 +3639,16 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'e':
-			pctx->encrypt_type = get_crypto_alg(optarg);
+			pctx->encrypt_type = get_crypto_alg(oarg);
 			if (pctx->encrypt_type == 0) {
 				log_msg(LOG_ERR, 0, "Invalid encryption algorithm. "
-				    "Should be AES or SALSA20.", optarg);
+				    "Should be AES or SALSA20.", oarg);
 				{ err = 1; goto opt_done; }
 			}
 			break;
 
 		    case 'w':
-			pctx->pwd_file = strdup(optarg);
+			pctx->pwd_file = strdup(oarg);
 			break;
 
 		    case 'F':
@@ -3543,17 +3670,17 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'k':
-			pctx->keylen = atoi(optarg);
+			pctx->keylen = atoi(oarg);
 			if ((pctx->keylen != 16 && pctx->keylen != 32) || pctx->keylen > MAX_KEYLEN) {
-				log_msg(LOG_ERR, 0, "Encryption KEY length should be 16 or 32.", optarg);
+				log_msg(LOG_ERR, 0, "Encryption KEY length should be 16 or 32.", oarg);
 				{ err = 1; goto opt_done; }
 			}
 			break;
 
 		    case 'S':
-			if (get_checksum_props(optarg, &(pctx->cksum), &(pctx->cksum_bytes),
+			if (get_checksum_props(oarg, &(pctx->cksum), &(pctx->cksum_bytes),
 			    &(pctx->mac_bytes), 0) == -1) {
-				log_msg(LOG_ERR, 0, "Invalid checksum type %s", optarg);
+				log_msg(LOG_ERR, 0, "Invalid checksum type %s", oarg);
 				{ err = 1; goto opt_done; }
 			}
 			break;
@@ -3564,7 +3691,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'v':
-			set_log_level(LOG_VERBOSE);
+			pctx->log.level = LOG_VERBOSE;	/* this context only */
 			break;
 
 		    case 'm':
@@ -3609,8 +3736,10 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 		}
 	}
 opt_done:
-	my_optind = optind;
-	pthread_mutex_unlock(&opt_parse);
+	/* On success the loop ended at -1: argv is permuted, g.ind = first operand. */
+	my_optind = g.ind;
+	free(g.opts);
+	free(g.ops);
 	if (err)
 		return (err);
 
@@ -3840,7 +3969,7 @@ opt_done:
 		log_msg(LOG_ERR, 0, "Too many filenames.");
 		return (1);
 	}
-	pctx->main_cancel = 0;
+	__atomic_store_n(&pctx->main_cancel, 0, __ATOMIC_RELAXED);
 
 	if (pctx->cksum == 0)
 		get_checksum_props(DEFAULT_CKSUM, &(pctx->cksum), &(pctx->cksum_bytes),
@@ -3987,7 +4116,6 @@ start_pcompress(pc_ctx_t *pctx)
 	if (!pctx->inited)
 		return (1);
 
-	handle_signals();
 	err = 0;
 	if (pctx->do_compress)
 		err = start_compress(pctx, pctx->filename, pctx->chunksize, pctx->level);
@@ -3999,9 +4127,93 @@ start_pcompress(pc_ctx_t *pctx)
 /*
  * Setter functions for various parameters in the context.
  */
+
+/*
+ * Send this context's messages at or below level to fn(arg, level, msg)
+ * instead of stderr. fn == NULL restores the process default sink.
+ * level < 0 uses the process default level.
+ */
+void DLL_EXPORT
+pc_set_log(pc_ctx_t *pctx, pc_log_fn fn, void *arg, int level)
+{
+	pctx->log.fn = fn;
+	pctx->log.arg = arg;
+	pctx->log.level = level;
+}
+
+/* The first line of the last error logged for this context, or "". */
+const char DLL_EXPORT *
+pc_last_error(pc_ctx_t *pctx)
+{
+	return (pctx->log.last_error);
+}
+
+/* The class of the first error in the last call on this context. */
+pc_error_t DLL_EXPORT
+pc_last_error_code(pc_ctx_t *pctx)
+{
+	return (pctx->log.code);
+}
 void DLL_EXPORT
 pc_set_userpw(pc_ctx_t *pctx, unsigned char *pwdata, int pwlen)
 {
 	pctx->user_pw = pwdata;
 	pctx->user_pw_len = pwlen;
+}
+
+/*
+ * Public entry points bind the context's log state to the calling thread
+ * for the duration of the call, so messages and the last error go to the
+ * context (see log_bind()), and restore what was bound before.
+ */
+/* A failure no site classified more precisely. */
+static void
+finish_error(pc_ctx_t *pctx, int rv, pc_error_t fallback)
+{
+	if (rv != 0 && pctx->log.code == PC_OK)
+		pctx->log.code = fallback;
+}
+
+int DLL_EXPORT
+start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
+{
+	log_state_t *prev = log_bound();
+	int rv;
+
+	log_reset(&pctx->log);
+	log_bind(&pctx->log);
+	rv = start_decompress_impl(pctx, filename, to_filename);
+	log_bind(prev);
+	finish_error(pctx, rv, PC_ERR_INTERNAL);
+	return (rv);
+}
+
+int DLL_EXPORT
+start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level)
+{
+	log_state_t *prev = log_bound();
+	int rv;
+
+	log_reset(&pctx->log);
+	log_bind(&pctx->log);
+	rv = start_compress_impl(pctx, filename, chunksize, level);
+	log_bind(prev);
+	finish_error(pctx, rv, PC_ERR_INTERNAL);
+	return (rv);
+}
+
+int DLL_EXPORT
+init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
+{
+	log_state_t *prev = log_bound();
+	int rv;
+
+	log_reset(&pctx->log);
+	log_bind(&pctx->log);
+	rv = init_pc_context_impl(pctx, argc, argv);
+	log_bind(prev);
+	/* 3 (-h) and 4 (-V) are not errors. */
+	if (rv == 1 || rv == 2)
+		finish_error(pctx, rv, PC_ERR_ARGS);
+	return (rv);
 }

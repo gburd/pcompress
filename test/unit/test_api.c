@@ -152,11 +152,145 @@ MU_TEST(test_api_return_codes)
 	}
 }
 
+struct logcap {
+	int n, errs;
+	char last[256];
+};
+
+static void
+capture(void *arg, int level, const char *msg)
+{
+	struct logcap *c = (struct logcap *)arg;
+
+	c->n++;
+	if (level == LOG_ERR)
+		c->errs++;
+	snprintf(c->last, sizeof (c->last), "%s", msg);
+}
+
+MU_TEST(test_api_log_callback)
+{
+	struct logcap cap;
+	char args[1024];
+	pc_ctx_t *p;
+
+	/* A decompress of a non-pcompress file: error goes to the callback. */
+	memset(&cap, 0, sizeof (cap));
+	snprintf(args, sizeof (args), "pcompress -d %s %s", src, out);
+	p = create_pc_context();
+	pc_set_log(p, capture, &cap, LOG_INFO);
+	mu_assert_int_eq(0, init_pc_context_argstr(p, args));
+	mu_assert(start_pcompress(p) != 0, "decompressing plain text succeeded");
+	mu_assert(cap.errs >= 1, "error not delivered to the callback");
+	mu_assert(strstr(pc_last_error(p), "not a pcompressed file") != NULL,
+	    pc_last_error(p));
+	mu_assert_int_eq(PC_ERR_FORMAT, pc_last_error_code(p));
+	mu_assert(strcmp(pc_strerror(PC_ERR_FORMAT), "no error") != 0, "strerror");
+	destroy_pc_context(p);
+
+	/* Level filter: LOG_ERR only drops "Scaling to ..." (LOG_INFO). */
+	memset(&cap, 0, sizeof (cap));
+	reset_files();
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l 1 %s %s", src, cmp_);
+	p = create_pc_context();
+	pc_set_log(p, capture, &cap, LOG_ERR);
+	mu_assert_int_eq(0, init_pc_context_argstr(p, args));
+	mu_assert_int_eq(0, start_pcompress(p));
+	mu_assert_int_eq(0, cap.n);
+	mu_assert(pc_last_error(p)[0] == '\0', "error recorded on success");
+	mu_assert_int_eq(PC_OK, pc_last_error_code(p));
+	destroy_pc_context(p);
+
+	/* Messages from the context's worker threads reach its callback. */
+	memset(&cap, 0, sizeof (cap));
+	snprintf(args, sizeof (args), "pcompress -d %s %s", cmp_, out);
+	p = create_pc_context();
+	pc_set_log(p, capture, &cap, LOG_INFO);
+	mu_assert_int_eq(0, init_pc_context_argstr(p, args));
+	mu_assert_int_eq(0, start_pcompress(p));
+	mu_assert(cap.n >= 1 && strstr(cap.last, "Scaling") != NULL, cap.last);
+	destroy_pc_context(p);
+}
+
+/* Error classes: a corrupted chunk is reported by a worker thread. */
+MU_TEST(test_api_error_codes)
+{
+	char args[1024], pz[400];
+	pc_ctx_t *p;
+	FILE *f;
+	long n;
+
+	p = create_pc_context();
+	pc_set_log(p, capture, &(struct logcap){0}, LOG_ERR);
+	mu_assert_int_eq(1, init_pc_context_argstr(p, (char[]){ "pcompress -c nosuchalgo a b" }));
+	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(p));
+	destroy_pc_context(p);
+
+	reset_files();
+	snprintf(args, sizeof (args), "pcompress -c zstd -l 3 -s 64k %s %s", src, cmp_);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	/* Flip a byte in the middle of the data: a checksum must catch it. */
+	snprintf(pz, sizeof (pz), "%s", cmp_);
+	f = fopen(pz, "r+b");
+	mu_assert(f != NULL, "open .pz");
+	fseek(f, 0, SEEK_END);
+	n = ftell(f);
+	fseek(f, n / 2, SEEK_SET);
+	{
+		int c = fgetc(f);
+
+		fseek(f, n / 2, SEEK_SET);
+		fputc(c ^ 0xff, f);
+	}
+	fclose(f);
+	snprintf(args, sizeof (args), "pcompress -d %s %s", cmp_, out);
+	p = create_pc_context();
+	pc_set_log(p, capture, &(struct logcap){0}, LOG_ERR);
+	mu_assert_int_eq(0, init_pc_context_argstr(p, args));
+	mu_assert(start_pcompress(p) != 0, "corrupt file decompressed");
+	mu_assert(pc_last_error_code(p) == PC_ERR_VERIFY ||
+	    pc_last_error_code(p) == PC_ERR_CORRUPT, pc_last_error(p));
+	destroy_pc_context(p);
+}
+
+/* Option parsing: clustering, attached/separate arguments, "--". */
+MU_TEST(test_api_option_forms)
+{
+	char args[1024];
+
+	reset_files();
+	/* -l6 attached, "-s 1m" separate, cluster "-Cc" with an argument. */
+	snprintf(args, sizeof (args), "pcompress -l6 -s 1m -Cc zstd %s %s", src, cmp_);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	snprintf(args, sizeof (args), "pcompress -d -- %s %s", cmp_, out);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	mu_assert(same_files(src, out), "option forms round trip");
+	/* Unknown option and a missing argument are usage errors (2). */
+	mu_assert_int_eq(2, run_args("pcompress -c zstd -Q x y", NULL, 0));
+	mu_assert_int_eq(2, run_args("pcompress -c", NULL, 0));
+	/* Options after operands, as glibc getopt allowed: "in -l1 out -c lz4". */
+	reset_files();
+	snprintf(args, sizeof (args), "pcompress %s -l1 %s -c lz4", src, cmp_);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	snprintf(args, sizeof (args), "pcompress %s %s -d", cmp_, out);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	mu_assert(same_files(src, out), "permuted options round trip");
+	/* Parsing twice in one process gives the same result. */
+	reset_files();
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l1 %s %s", src, cmp_);
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+	reset_files();
+	mu_assert_int_eq(0, run_args(args, NULL, 0));
+}
+
 MU_TEST_SUITE(suite_api)
 {
+	MU_RUN_TEST(test_api_option_forms);
 	MU_RUN_TEST(test_api_roundtrip_algos);
 	MU_RUN_TEST(test_api_userpw);
 	MU_RUN_TEST(test_api_return_codes);
+	MU_RUN_TEST(test_api_log_callback);
+	MU_RUN_TEST(test_api_error_codes);
 }
 
 int

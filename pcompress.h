@@ -403,6 +403,7 @@ typedef struct pc_ctx {
 	int user_pw_len;
 	char *pwd_file, *f_name;
 	meta_ctx_t *meta_ctx;
+	log_state_t log;	/* per-context sink, level, last error */
 } pc_ctx_t;
 
 /**
@@ -486,6 +487,30 @@ void destroy_pc_context(pc_ctx_t *pctx);
  * @param pwlen   Length of password.
  */
 void pc_set_userpw(pc_ctx_t *pctx, unsigned char *pwdata, int pwlen);
+
+/**
+ * Send this context's log messages to a callback instead of stderr.
+ * Messages from every thread working for the context go to fn.
+ * @param fn     Called as fn(arg, level, msg); NULL restores stderr.
+ * @param arg    Passed through to fn.
+ * @param level  Highest level to deliver (LOG_ERR..LOG_VERBOSE); -1 for
+ *               the process default. Errors are always recorded for
+ *               pc_last_error().
+ */
+void pc_set_log(pc_ctx_t *pctx, pc_log_fn fn, void *arg, int level);
+
+/**
+ * The first line of the last error this context logged, or "".
+ * Valid until the next call on the context.
+ */
+const char *pc_last_error(pc_ctx_t *pctx);
+
+/**
+ * The class of the first error in the last init_pc_context*(),
+ * start_pcompress(), start_compress() or start_decompress() on this
+ * context; PC_OK if it succeeded. See pc_error_t; pc_strerror() names it.
+ */
+pc_error_t pc_last_error_code(pc_ctx_t *pctx);
 
 /**
  * Run the main compression or decompression operation as configured.

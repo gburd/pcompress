@@ -138,8 +138,8 @@ compress_and_write(meta_ctx_t *mctx)
 	if (pctx->encrypt_type) {
 		rv = crypto_buf(&(pctx->crypto_ctx), comp_chunk, comp_chunk, dstlen, mctx->id);
 		if (rv == -1) {
-			pctx->main_cancel = 1;
-			pctx->t_errored = 1;
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			log_msg(LOG_ERR, 0, "Metadata Encrypion failed");
 			return (0);
 		}
@@ -186,8 +186,8 @@ compress_and_write(meta_ctx_t *mctx)
 	if (wbytes != dstlen) {
 		log_msg(LOG_ERR, 1, "Metadata Write (expected: %" PRIu64 ", written: %" PRId64 ") : ",
 			dstlen, wbytes);
-		pctx->main_cancel = 1;
-		pctx->t_errored = 1;
+		__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 		return (0);
 	}
 
@@ -222,6 +222,8 @@ metadata_compress(void *dat)
 	meta_ctx_t *mctx = (meta_ctx_t *)dat;
 	meta_msg_t *msgp;
 	int ack;
+
+	log_bind(&mctx->pctx->log);
 
 	mctx->running = 1;
 	mctx->id = -1;
@@ -389,6 +391,8 @@ metadata_decompress(void *dat)
 	pc_ctx_t *pctx;
 	meta_msg_t *msgp;
 	int ack;
+
+	log_bind(&mctx->pctx->log);
 
 	pctx = mctx->pctx;
 	mctx->running = 1;

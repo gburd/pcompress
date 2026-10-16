@@ -440,10 +440,46 @@ void set_log_level(int level);
 void log_msg(log_level_t log_level, int show_errno, const char *format, ...);
 
 /*
- * Tempfile cleanup handlers and tempfile registration routines.
+ * Per-context logging. Every library thread working for a context calls
+ * log_bind() with that context's log state at its start; log_msg() then
+ * uses the context's sink and level, and records the last error. A thread
+ * with nothing bound uses the process default (set_log_dest/level).
  */
-void Int_Handler(int signo);
-void handle_signals(void);
+typedef void (*pc_log_fn)(void *arg, int level, const char *msg);
+
+/** Error classes reported by pc_last_error_code(). Values are stable. */
+typedef enum {
+	PC_OK = 0,
+	PC_ERR_ARGS = 1,	/**< invalid option or argument */
+	PC_ERR_IO = 2,		/**< open/read/write/stat failed */
+	PC_ERR_NOMEM = 3,	/**< allocation failed */
+	PC_ERR_FORMAT = 4,	/**< not a pcompress file, or unsupported version */
+	PC_ERR_CORRUPT = 5,	/**< damaged data: bad length, header, dedupe index */
+	PC_ERR_VERIFY = 6,	/**< checksum, CRC or HMAC mismatch; wrong password */
+	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
+	PC_ERR_INTERNAL = 8	/**< anything else */
+} pc_error_t;
+
+typedef struct log_state {
+	pc_log_fn fn;		/* NULL: process default sink */
+	void *arg;
+	int level;		/* -1: process default level */
+	pc_error_t code;	/* first error class since the last log_reset() */
+	char last_error[256];
+} log_state_t;
+
+void log_bind(log_state_t *ls);
+log_state_t *log_bound(void);
+/* Record an error class for the bound context; the first one wins. */
+void log_error_code(pc_error_t code);
+void log_reset(log_state_t *ls);
+const char *pc_strerror(pc_error_t code);
+
+/*
+ * Tempfile registration. pc_cleanup_tempfiles() is async-signal-safe and
+ * meant for a program's own SIGINT/SIGTERM handler.
+ */
+void pc_cleanup_tempfiles(void);
 void add_fname(char *fn);
 void rm_fname(char *fn);
 

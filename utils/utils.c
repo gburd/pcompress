@@ -59,8 +59,6 @@ processor_cap_t proc_info;
 pthread_mutex_t f_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int cur_log_level = LOG_INFO;
 static log_dest_t ldest = {LOG_OUTPUT, LOG_INFO, NULL};
-static char *f_name_list[512];
-static int f_count = 512, f_inited = 0;
 
 struct RiffHdr {
     char ckID [4];
@@ -491,14 +489,58 @@ set_log_level(int level)
 		cur_log_level = level;
 }
 
+static __thread log_state_t *bound_log;
+
+void
+log_bind(log_state_t *ls)
+{
+	bound_log = ls;
+}
+
+log_state_t *
+log_bound(void)
+{
+	return (bound_log);
+}
+
+void
+log_error_code(pc_error_t code)
+{
+	log_state_t *ls = bound_log;
+
+	if (ls != NULL && ls->code == PC_OK)
+		ls->code = code;
+}
+
+void
+log_reset(log_state_t *ls)
+{
+	ls->code = PC_OK;
+	ls->last_error[0] = '\0';
+}
+
+const char DLL_EXPORT *
+pc_strerror(pc_error_t code)
+{
+	static const char *s[] = { "no error", "invalid argument", "I/O error",
+	    "out of memory", "not a pcompress file or unsupported version",
+	    "corrupt data", "verification failed (checksum, HMAC or password)",
+	    "encryption setup failed", "internal error" };
+
+	return ((unsigned)code < sizeof (s) / sizeof (s[0]) ? s[code] : "unknown error");
+}
+
 void DLL_EXPORT
 log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 {
 	int err = errno, written;
 	va_list args;
 	char msg[1024];
+	log_state_t *ls = bound_log;
+	int level = (ls != NULL && ls->level >= 0) ? ls->level : cur_log_level;
 
-	if (log_level > cur_log_level) return;
+	if (log_level > level && !(ls != NULL && log_level == LOG_ERR))
+		return;
 
 	va_start(args, format);
 	written = vsnprintf(msg, 1024, format, args);
@@ -507,6 +549,30 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 	written += snprintf(msg + written, 1024 - written, "\n");
 	if (written < 1024 && show_errno) {
 		snprintf(msg + written, 1024 - written, "\nError: %s\n", strerror(err));
+	}
+
+	if (ls != NULL) {
+		if (log_level == LOG_ERR && show_errno && ls->code == PC_OK)
+			ls->code = (err == ENOMEM) ? PC_ERR_NOMEM : PC_ERR_IO;
+		if (log_level == LOG_ERR) {
+			size_t n;
+
+			/* First line only, without the trailing newline. */
+			n = strcspn(msg, "\n");
+			if (n >= sizeof (ls->last_error))
+				n = sizeof (ls->last_error) - 1;
+			memcpy(ls->last_error, msg, n);
+			ls->last_error[n] = '\0';
+			if (show_errno && n + 3 < sizeof (ls->last_error))
+				snprintf(ls->last_error + n, sizeof (ls->last_error) - n,
+				    ": %s", strerror(err));
+		}
+		if (log_level > level)
+			return;
+		if (ls->fn != NULL) {
+			ls->fn(ls->arg, log_level, msg);
+			return;
+		}
 	}
 
 	if (ldest.type == LOG_OUTPUT) {
@@ -544,63 +610,71 @@ get_temp_dir(void)
 }
 
 /*
- * Temporary file cleanup routines for SIGINT. Maintain a list of
- * filenames to be removed in the signal handler.
+ * Temporary files to remove if the process is interrupted. The library
+ * only registers them; the program decides what a signal does (main.c
+ * installs handlers that call pc_cleanup_tempfiles() and exit).
+ * Each entry is a copy, so callers' buffers can go away.
+ * shortcut: 512 slots, enough for any one process's concurrent jobs.
  */
-void
-Int_Handler(int signo)
+#define	F_SLOTS	512
+static char *f_name_list[F_SLOTS];
+
+/*
+ * Async-signal-safe: unlink() only, no locks or allocation.
+ * shortcut: a slot changed by add_fname/rm_fname at the same moment may be
+ * missed (one stray temp file) or name a just-freed string; fine for an
+ * exiting process, not for anything that keeps running.
+ */
+void DLL_EXPORT
+pc_cleanup_tempfiles(void)
 {
 	int i;
 
-	for (i = 0; i < f_count; i++) {
-		if (f_name_list[i] != NULL) {
-			unlink(f_name_list[i]);
-			f_name_list[i] = NULL;
-		}
-	}
-	exit(1);
-}
+	for (i = 0; i < F_SLOTS; i++) {
+		char *p = f_name_list[i];
 
-void
-handle_signals(void)
-{
-	pthread_mutex_lock(&f_mutex);
-	if (!f_inited) {
-		memset(f_name_list, 0, sizeof (f_name_list));
+		if (p != NULL)
+			(void) unlink(p);
 	}
-	pthread_mutex_unlock(&f_mutex);
-	signal(SIGINT, Int_Handler);
-	signal(SIGTERM, Int_Handler);
 }
 
 void
 add_fname(char *fn)
 {
+	char *c = strdup(fn);
 	int i;
 
+	if (c == NULL)
+		return;
 	pthread_mutex_lock(&f_mutex);
-	for (i = 0; i < f_count; i++) {
+	for (i = 0; i < F_SLOTS; i++) {
 		if (f_name_list[i] == NULL) {
-			f_name_list[i] = fn;
+			f_name_list[i] = c;
+			c = NULL;
 			break;
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
+	free(c);	/* list full: not registered */
 }
 
+/* Was: overwrote the first used slot with fn instead of clearing fn's. */
 void
 rm_fname(char *fn)
 {
+	char *c = NULL;
 	int i;
 
 	pthread_mutex_lock(&f_mutex);
-	for (i = 0; i < f_count; i++) {
-		if (f_name_list[i] != NULL) {
-			f_name_list[i] = fn;
+	for (i = 0; i < F_SLOTS; i++) {
+		if (f_name_list[i] != NULL && strcmp(f_name_list[i], fn) == 0) {
+			c = f_name_list[i];
+			f_name_list[i] = NULL;
 			break;
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
+	free(c);
 }
 
 int

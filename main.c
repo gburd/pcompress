@@ -38,6 +38,16 @@
 #include "pcompress.h"
 #include <ctype.h>
 #include <utils.h>
+#include <signal.h>
+
+/* The library never installs signal handlers; the CLI does. */
+static void
+on_signal(int signo)
+{
+	(void) signo;
+	pc_cleanup_tempfiles();
+	_exit(1);
+}
 
 int
 main(int argc, char *argv[])
@@ -72,6 +82,8 @@ main(int argc, char *argv[])
 	/*
 	 * Start the main routines.
 	 */
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
 	err = start_pcompress(pctx);
 	destroy_pc_context(pctx);
 	return (err);
