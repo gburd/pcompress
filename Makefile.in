@@ -472,8 +472,13 @@ $(MAINOBJS): $(MAINSRCS) $(MAINHDRS)
 $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 	$(COMPILE) $(GEN_OPT) $(LOOP_OPTFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
-Libarchive:
-	(cd @LIBARCHIVE_DIR@; make)
+# A stamp, not a phony target: a phony prerequisite made $(LIB) relink on
+# every make invocation, e.g. under 'make -j check' while tests ran it.
+LIBARCHIVE_A = @LIBARCHIVE_DIR@/.libs/libarchive.a
+Libarchive: $(LIBARCHIVE_A)
+
+$(LIBARCHIVE_A):
+	(cd @LIBARCHIVE_DIR@; $(MAKE))
 
 LIBBSC_CPP_SRCS = $(LIBBSCDIR)/libbsc/adler32/adler32.cpp \
 	$(LIBBSCDIR)/libbsc/bwt/bwt.cpp \
@@ -501,7 +506,7 @@ $(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
 $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 	@AR@ rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
-$(LIB): Libarchive $(OBJS)  $(LIBBSCLIB)
+$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB)
 	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS)
 	ln -sf $(LIB).$(LIBVER) $(LIB)
 
@@ -536,8 +541,11 @@ test-unit: test-unit-build
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)
 
-# What packagers run: fast, no network, no root.
-check: test-unit test-integration
+# What packagers run: fast, no network, no root. Sequential: under make -j
+# the two would relink/rebuild the library while the other is running it.
+check:
+	$(MAKE) test-unit
+	$(MAKE) test-integration
 
 test-all: all test-unit-build
 	(cd test; sh run_all_tests.sh all)
