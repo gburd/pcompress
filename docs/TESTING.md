@@ -51,7 +51,7 @@ use a minimal test framework (`test/unit/minunit.h`).
 | `test_compress` | `test/unit/test_compress.c` | Algorithm round-trip correctness   |
 | `test_xxhash`   | `test/unit/test_xxhash.c`   | xxHash KATs and dispatch           |
 | `test_crc`      | `test/unit/test_crc.c`      | CRC32/CRC64 correctness            |
-| `test_slab`     | `test/unit/test_slab.c`     | Slab allocator alloc/free cycles   |
+| `test_slab`     | `test/unit/test_slab.c`     | Allocation wrappers                |
 | `test_blake2`   | `test/unit/test_blake2.c`   | BLAKE2b/BLAKE2bp RFC 7693 KATs     |
 | `test_sha2`     | `test/unit/test_sha2.c`     | SHA-512, SHA-512/256 KATs          |
 | `test_api`      | `test/unit/test_api.c`      | libpcompress public API contract   |
@@ -135,13 +135,12 @@ illumos/SPARC. `quick` is ~170 cases; without it ~300.
 
 ```sh
 CC=clang CXX=clang++ CFLAGS="-fsanitize=address,undefined -g" \
-  LDFLAGS="-fsanitize=address,undefined" ./config --disable-allocator
+  LDFLAGS="-fsanitize=address,undefined" ./config
 make && make test-unit
 cd test && sh run_all_tests.sh integration
 ```
 
-`--disable-allocator` makes every buffer a real heap allocation so ASan
-sees overruns. Suppress libomp's internal leak with
+Suppress libomp's internal leak with
 `LSAN_OPTIONS=suppressions=<file>` containing `leak:libomp.so`. The LZMA
 SDK's function-pointer casts are reported by `-fsanitize=function`. They
 are harmless on every supported ABI.

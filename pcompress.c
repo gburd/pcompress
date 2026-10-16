@@ -3335,7 +3335,6 @@ create_pc_context(void)
 
 	memset(ctx, 0, sizeof (pc_ctx_t));
 	ctx->exec_name = (char *)malloc(NAME_MAX);
-	ctx->hide_mem_stats = 1;
 	ctx->hide_cmp_stats = 1;
 	ctx->enable_rabin_split = 1;
 	ctx->rab_blk_size = -1;
@@ -3357,7 +3356,6 @@ destroy_pc_context(pc_ctx_t *pctx)
 	if (pctx->pwd_file)
 		free(pctx->pwd_file);
 	free((void *)(pctx->exec_name));
-	slab_cleanup(pctx->hide_mem_stats);
 	free_filters(pctx);
 	free(pctx);
 }
@@ -3484,8 +3482,7 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 			}
 			break;
 
-		    case 'M':
-			pctx->hide_mem_stats = 0;
+		    case 'M':	/* allocator stats: removed in 4.1, still accepted */
 			break;
 
 		    case 'C':

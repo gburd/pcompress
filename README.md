@@ -22,8 +22,7 @@ compressed to reduce overheads. In addition to all these it can internally
 split chunks at file and rabin boundaries to help Dedupe and compression.
 
 It has low metadata overhead and overlaps I/O and compression to achieve
-maximum parallelism. It also bundles a simple slab allocator to speed
-repeated allocation of similar chunks. It can work in pipe mode, reading
+maximum parallelism. It can work in pipe mode, reading
 from stdin and writing to stdout. SIMD vector optimizations using the x86
 SSE instruction set are used to speed up various operations. Finally it
 supports 14 compression levels to allow for ultra compression parameters
@@ -84,8 +83,7 @@ libbsc, libarchive, optionally WavPack) are git submodules:
 
 Useful `./config` options: `--portable` (no host-CPU tuning; for
 packages), `--enable-lto`, `--enable-debug`, `--enable-coverage` (then
-`make coverage`), `--disable-zstd`, `--disable-allocator`,
-`--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and `LDFLAGS` from the
+`make coverage`), `--disable-zstd`, `--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and `LDFLAGS` from the
 environment are honoured; Clang is used with `CC=clang CXX=clang++`.
 
 With Nix: `nix build` (runs the test suite in the sandbox) or
@@ -526,7 +524,7 @@ Advanced usage
 
        -j       Enable PackJPG processing for Jpeg files. This works only when archiving.
 
-       -M       Display memory allocator statistics.
+       -M       Ignored (allocator statistics were removed in 4.1).
        -C       Display compression statistics.
        -CC      Display compression statistics and print the offset and length of each
                 variable length dedupe block if variable block deduplication is being
@@ -534,11 +532,6 @@ Advanced usage
 
 Environment Variables
 =====================
-
-    Set ALLOCATOR_BYPASS=1 in the environment to avoid using the the built-in
-    allocator. Due to the the way it rounds up an allocation request to the nearest
-    slab the built-in allocator can allocate extra unused memory. In addition you
-    may want to use a different allocator in your environment.
 
     The variable PCOMPRESS_INDEX_MEM can be set to limit memory used by the Global
     Deduplication Index. The number specified is in multiples of a megabyte.

@@ -31,7 +31,6 @@ ${prog} [<options>]
 
 --prefix=<val>		The installation prefix (default: /usr).
 --enable-debug		Enable debug mode compilation (default: disabled).
---disable-allocator	Disable use of internal memory allocator mechanism (default: enabled).
 --enable-debug-stats	Enable printing of some verbose debug info (default: disabled).
 --with-openssl=<path to OpenSSL installation tree> (Default: System)
 			This defaults to the system's OpenSSL library. You can use this option
@@ -174,7 +173,6 @@ inc_search_paths() {
 
 arg1=$1
 debug=0
-allocator=1
 debug_stats=0
 prefix=/usr
 
@@ -378,7 +376,7 @@ while [ "${arg1}" != "" ]
 do
 	case "$arg1" in
 	--enable-debug) debug=1;;
-	--disable-allocator) allocator=0;;
+	--disable-allocator) ;;	# the slab allocator was removed in 4.1
 	--enable-debug-stats) debug_stats=1;;
 	--prefix=*)
 		pval=$(echo "${arg1}" | cut -f2 -d"=")
@@ -1245,7 +1243,6 @@ vecflagsvar="VEC_FLAGS"
 loopoptflagsvar="LOOP_OPTFLAGS"
 cppflagsvar="CPPFLAGS"
 genoptvar="GEN_OPT"
-noslabcppflagsvar="NO_SLAB_CPPFLAGS"
 debugstatscppflagsvar="DEBUG_STATS_CPPFLAGS"
 prefixvar="PREFIX"
 skeinblockvar="SKEIN_BLOCK"
@@ -1281,10 +1278,8 @@ salsa20_stream_c_var="XSALSA20_STREAM_C"
 salsa20_stream_asm_var="XSALSA20_STREAM_ASM"
 salsa20_debug_var="XSALSA20_DEBUG"
 
-noslabcppflagsval=
 debugstatscppflagsval=
 
-[ $allocator -eq 0 ] && noslabcppflagsval='\$\(NO_SLAB_CPPFLAGS\)'
 [ $debug_stats -eq 1 ] && debugstatscppflagsval='\$\(DEBUG_STATS_CPPFLAGS\)'
 
 echo "*************** Running configure in libarchive ****************"
@@ -1412,7 +1407,6 @@ s#@${loopoptflagsvar}@#\\\$\\(${typ}_${loopoptflagsvar}\\)#g
 s#@${cppflagsvar}@#\\\$\\(${typ}_${cppflagsvar}\\)#g
 s#@${genoptvar}@#\\\$\\(${typ}_${genoptvar}\\)#g
 s#@${fptr_flag_var}@#\\\$\\(${typ}_${fptr_flag_var}\\)#g
-s#@${noslabcppflagsvar}@#${noslabcppflagsval}#g
 s#@${debugstatscppflagsvar}@#${debugstatscppflagsval}#g
 s#@${prefixvar}@#${prefix}#g
 s#@${libbscdirvar}@#${libbsc_dir}#g
@@ -1513,7 +1507,6 @@ fi
 if [ $is_arm -eq 1 ]; then
 	echo "  NEON flags:        ${neon_opt_flag}"
 fi
-echo "  Memory allocator:  $([ $allocator -eq 1 ] && echo 'internal' || echo 'system')"
 echo "================================="
 echo ""
 echo "Build with: make"

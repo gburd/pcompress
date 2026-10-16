@@ -333,7 +333,6 @@ typedef struct pc_ctx {
 	int adapt_mode;
 	int pipe_mode, pipe_out;
 	int nthreads;
-	int hide_mem_stats;
 	int hide_cmp_stats;
 	int show_chunks;
 	int enable_rabin_scan;

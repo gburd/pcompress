@@ -25,12 +25,11 @@
 
 /**
  * @file allocator.h
- * @brief Slab allocator for efficient repeated buffer allocation.
+ * @brief Allocation wrappers (malloc/calloc/free).
  *
- * Provides a size-class cached allocator optimized for the allocation
- * pattern in Pcompress where same-sized buffers are repeatedly allocated
- * and freed. Can be bypassed by setting ALLOCATOR_BYPASS=1 in the
- * environment.
+ * The slab_* names are kept from the old slab allocator, removed in 4.1;
+ * they now call the system allocator. The zlib-style first argument is
+ * ignored.
  */
 
 #ifndef __ALLOCATOR_H__
@@ -39,20 +38,14 @@
 #include <sys/types.h>
 #include <inttypes.h>
 
-/** Initialize the slab allocator. Must be called before any slab_alloc. */
+/** No-op, kept for source compatibility. */
 void slab_init(void);
 
-/**
- * Clean up and release all slab allocator memory.
- * @param quiet  If non-zero, suppress statistics output.
- */
+/** No-op, kept for source compatibility. */
 void slab_cleanup(int quiet);
 
-/** Free the whole slab cache. Only when no context is running (process exit). */
-void slab_shutdown(int quiet);
-
 /**
- * Allocate memory from the slab allocator.
+ * malloc().
  * @param p     Unused (for API compatibility with zlib-style allocators).
  * @param size  Number of bytes to allocate.
  * @return Pointer to allocated memory, or NULL on failure.
@@ -60,7 +53,7 @@ void slab_shutdown(int quiet);
 void *slab_alloc(void *p, size_t size);
 
 /**
- * Allocate zeroed memory from the slab allocator.
+ * calloc().
  * @param p      Unused.
  * @param items  Number of elements.
  * @param size   Size of each element.
@@ -69,24 +62,20 @@ void *slab_alloc(void *p, size_t size);
 void *slab_calloc(void *p, size_t items, size_t size);
 
 /**
- * Return memory to the slab cache for reuse.
+ * free().
  * @param p        Unused.
  * @param address  Pointer previously returned by slab_alloc/slab_calloc.
  */
 void slab_free(void *p, void *address);
 
 /**
- * Release memory back to the OS (rather than caching in the slab).
+ * free().
  * @param p        Unused.
  * @param address  Pointer previously returned by slab_alloc/slab_calloc.
  */
 void slab_release(void *p, void *address);
 
-/**
- * Pre-create a slab cache for a given allocation size.
- * @param size  Allocation size to cache.
- * @return 0 on success, -1 on failure.
- */
+/** No-op, kept for source compatibility. Returns 0. */
 int slab_cache_add(uint64_t size);
 
 #endif

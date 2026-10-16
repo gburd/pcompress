@@ -38,8 +38,6 @@ if [ "${PCOMPRESS_SANITIZE:-0}" = 1 ]; then
 	CFLAGS="${CFLAGS:-} -fsanitize=address,undefined -fno-omit-frame-pointer -g"
 	LDFLAGS="${LDFLAGS:-} -fsanitize=address,undefined"
 	export CFLAGS LDFLAGS
-	# Real heap allocations so ASan sees every overrun.
-	set -- "$@" --disable-allocator
 	# Configure-time probes (libarchive's autoconf) also link ASan and
 	# must not trip leak checks: options are exported after the build.
 	export ASAN_OPTIONS=detect_leaks=0

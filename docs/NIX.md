@@ -155,7 +155,6 @@ To customize the build, modify `flake.nix` in the `preConfigure` section:
 ```nix
 ./config \
   --prefix=$out \
-  --disable-allocator \
   --enable-zstd \
   --disable-wavpack    # Optional: disable WavPack audio filter
 ```

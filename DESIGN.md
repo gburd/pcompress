@@ -143,9 +143,11 @@ if the output would not fit it returns -1 and the chunk is stored raw.
 Two heap overflows (lz4, libbsc) came from compressors that sized their
 output from the input length instead of `*dstlen`.
 
-The slab allocator (`allocator.c`) caches these large, same-sized
-buffers. `ALLOCATOR_BYPASS=1` uses `malloc` directly; on a 192-core
-Graviton4 the two were within 2.5% of each other.
+Buffers come from the system allocator. Pcompress used to ship a
+process-wide slab allocator; it was removed in 4.1 because it was not
+safe with several contexts in one process and measured no faster than
+`malloc` (within 2.5% on a 192-core Graviton4, within noise on a
+16-vCPU c7i for every algorithm at 1 MB to 256 MB chunks).
 
 ## Archive mode
 

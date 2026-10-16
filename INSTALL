@@ -92,8 +92,6 @@ is not the usual GNU Autoconf script.
 
 --enable-debug          Enable debug mode compilation (default: disabled).
 
---disable-allocator     Disable use of internal memory allocator mechanism (default: enabled).
-
 --enable-debug-stats    Enable printing of some verbose debug info (default: disabled).
 
 --with-openssl=<path to OpenSSL installation tree> (Default: System)

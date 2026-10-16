@@ -341,11 +341,9 @@ The build produces both a shared library (`libpcompress.so`) and the
 
 ## Memory Management
 
-The slab allocator (`allocator.c/h`) provides an arena-based allocation scheme
-optimized for the repeated alloc/free pattern of compression buffers. It
-maintains size-class caches to avoid repeated calls to `malloc`/`free`.
-
-Can be bypassed by setting `ALLOCATOR_BYPASS=1` in the environment.
+`allocator.c/h` keeps the old `slab_alloc()`/`slab_free()` names as thin
+wrappers over `malloc`/`free`. The slab allocator they once named was
+removed in 4.1 (process-global, and no faster in benchmarks).
 
 ## Dependencies
 

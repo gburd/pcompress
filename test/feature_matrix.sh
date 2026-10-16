@@ -97,7 +97,6 @@ for h in SHA256 SHA512 KECCAK256 KECCAK512 BLAKE256 BLAKE512 SKEIN256 SKEIN512; 
 done
 PCOMPRESS_INDEX_MEM=1 PCOMPRESS_CACHE_DIR=$W/cache ck "gdedup-segmented" -c zstd -l6 -s 2m -G
 PCOMPRESS_INDEX_MEM=1 ck "gdedup-segmented-fixed" -c zstd -l6 -s 2m -G -F -B1
-ALLOCATOR_BYPASS=1 ck "allocator-bypass" -c zstd -l9 -s 2m
 ck "stats" -c zstd -l6 -s 2m -D -C -C -M
 for l in 4 5 10; do ck "level-$l-autofeatures" -c adapt2 -l$l -s 2m; done
 # Pipe mode

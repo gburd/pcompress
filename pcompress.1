@@ -216,7 +216,7 @@ Print compression statistics.
 .Fl CC
 also prints the offset and length of every deduplication block.
 .It Fl M
-Print memory allocator statistics.
+Accepted and ignored (memory allocator statistics were removed in 4.1).
 .El
 .Sh ALGORITHMS
 .Bl -tag -width "adapt2" -compact
@@ -268,10 +268,6 @@ Global deduplication is not enabled automatically when the output or
 input is a pipe.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
-.It Ev ALLOCATOR_BYPASS
-If set, use
-.Xr malloc 3
-directly instead of the built-in slab allocator.
 .It Ev PCOMPRESS_INDEX_MEM
 Memory limit for the global deduplication index, in megabytes.
 .It Ev PCOMPRESS_CACHE_DIR

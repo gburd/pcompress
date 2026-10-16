@@ -212,7 +212,8 @@ For RISC-V with the V (Vector) extension:
    buffers due to setup overhead. Benchmark at realistic chunk sizes.
 
 5. **Align buffers**: Use 16-byte (SSE) or 32-byte (AVX) aligned buffers
-   where possible. The slab allocator returns naturally aligned allocations.
+   where possible. `malloc` guarantees only `alignof(max_align_t)` (16 on
+   x86-64), so use `posix_memalign` when you need more.
 
 6. **Document ISA requirements**: Each SIMD source file should document the
    minimum ISA requirement in a comment at the top.

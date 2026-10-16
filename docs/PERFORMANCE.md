@@ -133,7 +133,6 @@ Algorithm-specific memory overhead:
 
 | Variable                   | Purpose                                       |
 |----------------------------|-----------------------------------------------|
-| `ALLOCATOR_BYPASS=1`       | Use system malloc instead of slab allocator    |
 | `PCOMPRESS_INDEX_MEM=N`    | Limit dedup index to N megabytes               |
 | `PCOMPRESS_CACHE_DIR=path` | Directory for dedup temp files (use SSD)       |
 | `PCOMPRESS_CHUNK_HASH_GLOBAL` | Override dedup block hash (default: SHA256) |
@@ -214,5 +213,3 @@ tar cf - /data | pcompress -c lz4 -l1 -p - | ssh remote "pcompress -d - /data"
 Use the `-C` flag to display compression statistics after completion. Use
 `-CC` for additional detail including per-block dedup offset and length
 information.
-
-Use `-M` to display memory allocator statistics (slab allocator usage).
