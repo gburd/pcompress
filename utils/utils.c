@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <errno.h>
 #include <signal.h>
 #include <rabin_dedup.h>
@@ -67,10 +68,18 @@ struct RiffHdr {
     char formType [4];
 };
 
-void
-init_pcompress(void) {
+static pthread_once_t init_once = PTHREAD_ONCE_INIT;
+
+static void
+init_pcompress_once(void) {
 	cpuid_basic_identify(&proc_info);
 	XXH32_module_init();
+}
+
+/* CPU feature probe and hash dispatch: process-wide, done once. */
+void
+init_pcompress(void) {
+	pthread_once(&init_once, init_pcompress_once);
 }
 
 /*

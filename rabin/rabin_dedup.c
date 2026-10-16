@@ -120,10 +120,33 @@ extern bsize_t get_bsdiff_sz(u_char *pbuf);
 extern int bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf,
 	bsize_t *_newsize);
 
-static pthread_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
 uint64_t ir[256], out[256];
-static int inited = 0;
-archive_config_t *arc = NULL;
+static pthread_once_t tables_once = PTHREAD_ONCE_INIT;
+
+/* Irreducible-polynomial tables: pure functions of constants, built once. */
+static void
+init_rabin_tables(void)
+{
+	unsigned int term, pow, i, j;
+	uint64_t val, poly_pow;
+
+	poly_pow = 1;
+	for (j = 0; j < RAB_POLYNOMIAL_WIN_SIZE; j++)
+		poly_pow = (poly_pow * RAB_POLYNOMIAL_CONST) & POLY_MASK;
+	for (j = 0; j < 256; j++) {
+		term = 1;
+		pow = 1;
+		val = 1;
+		out[j] = (j * poly_pow) & POLY_MASK;
+		for (i = 0; i < RAB_POLYNOMIAL_WIN_SIZE; i++) {
+			if (term & FP_POLY)
+				val += ((pow * j) & POLY_MASK);
+			pow = (pow * RAB_POLYNOMIAL_CONST) & POLY_MASK;
+			term <<= 1;
+		}
+		ir[j] = val;
+	}
+}
 
 static uint32_t
 dedupe_min_blksz(int rab_blk_sz)
@@ -174,54 +197,27 @@ dedupe_context_t *
 create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_sz,
     const char *algo, const algo_props_t *props, int delta_flag, int dedupe_flag,
     int file_version, compress_op_t op, uint64_t file_size, char *tmppath,
-    int pipe_mode, int nthreads, size_t freeram) {
+    int pipe_mode, int nthreads, size_t freeram, archive_config_t **shared_arc) {
 	dedupe_context_t *ctx;
+	archive_config_t *arc;
 	uint32_t i;
 
 	if (rab_blk_sz < 0 || rab_blk_sz > 5)
 		rab_blk_sz = RAB_BLK_DEFAULT;
 
-	if (dedupe_flag == RABIN_DEDUPE_FIXED || dedupe_flag == RABIN_DEDUPE_FILE_GLOBAL) {
+	if (dedupe_flag == RABIN_DEDUPE_FIXED || dedupe_flag == RABIN_DEDUPE_FILE_GLOBAL)
 		delta_flag = 0;
-		if (dedupe_flag != RABIN_DEDUPE_FILE_GLOBAL)
-			inited = 1;
-	}
+
+	pthread_once(&tables_once, init_rabin_tables);
 
 	/*
-	 * Pre-compute a table of irreducible polynomial evaluations for each
-	 * possible byte value.
+	 * Global Deduplication: one in-memory index per job, shared by that
+	 * job's worker contexts through *shared_arc (created by the first
+	 * worker, freed by the job via destroy_dedupe_index()).
 	 */
-	pthread_mutex_lock(&init_lock);
-	if (!inited) {
-		unsigned int term, pow, j;
-		uint64_t val, poly_pow;
-
-		poly_pow = 1;
-		for (j = 0; j < RAB_POLYNOMIAL_WIN_SIZE; j++) {
-			poly_pow = (poly_pow * RAB_POLYNOMIAL_CONST) & POLY_MASK;
-		}
-
-		for (j = 0; j < 256; j++) {
-			term = 1;
-			pow = 1;
-			val = 1;
-			out[j] = (j * poly_pow) & POLY_MASK;
-			for (i=0; i<RAB_POLYNOMIAL_WIN_SIZE; i++) {
-				if (term & FP_POLY) {
-					val += ((pow * j) & POLY_MASK);
-				}
-				pow = (pow * RAB_POLYNOMIAL_CONST) & POLY_MASK;
-				term <<= 1;
-			}
-			ir[j] = val;
-		}
-
-		/*
-		 * If Global Deduplication is enabled initialize the in-memory index.
-		 * It is essentially a hashtable that is used for crypto-hash based
-		 * chunk matching.
-		 */
-		if (dedupe_flag == RABIN_DEDUPE_FILE_GLOBAL && op == COMPRESS && rab_blk_sz >= 0) {
+	arc = NULL;
+	if (dedupe_flag == RABIN_DEDUPE_FILE_GLOBAL && op == COMPRESS && shared_arc != NULL) {
+		if (*shared_arc == NULL) {
 			int pct_interval, chunk_cksum, cksum_bytes, mac_bytes;
 			char *ck;
 
@@ -234,8 +230,6 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
 				if (get_checksum_props(ck, &chunk_cksum, &cksum_bytes, &mac_bytes, 1) != 0 ||
 				    strcmp(ck, "CRC64") == 0) {
 					log_msg(LOG_ERR, 0, "Invalid PCOMPRESS_CHUNK_HASH_GLOBAL.\n");
-					chunk_cksum = DEFAULT_CHUNK_CKSUM;
-					pthread_mutex_unlock(&init_lock);
 					return (NULL);
 				}
 			}
@@ -243,21 +237,16 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
 				chunk_cksum = DEFAULT_CHUNK_CKSUM;
 				if (get_checksum_props(NULL, &chunk_cksum, &cksum_bytes, &mac_bytes, 0) != 0) {
 					log_msg(LOG_ERR, 0, "Invalid default chunk checksum: %d\n", DEFAULT_CHUNK_CKSUM);
-					pthread_mutex_unlock(&init_lock);
 					return (NULL);
 				}
 			}
-			arc = init_global_db_s(NULL, tmppath, rab_blk_sz, chunksize, pct_interval,
-					      algo, chunk_cksum, GLOBAL_SIM_CKSUM, file_size,
-					      freeram, nthreads);
-			if (arc == NULL) {
-				pthread_mutex_unlock(&init_lock);
+			*shared_arc = init_global_db_s(NULL, tmppath, rab_blk_sz, chunksize, pct_interval,
+			    algo, chunk_cksum, GLOBAL_SIM_CKSUM, file_size, freeram, nthreads);
+			if (*shared_arc == NULL)
 				return (NULL);
-			}
 		}
-		inited = 1;
+		arc = *shared_arc;
 	}
-	pthread_mutex_unlock(&init_lock);
 
 	/*
 	 * Rabin window size must be power of 2 for optimization.
@@ -395,6 +384,16 @@ reset_dedupe_context(dedupe_context_t *ctx)
 	ctx->valid = 0;
 }
 
+/* Free a job's global-dedupe index (see create_dedupe_context()). */
+void
+destroy_dedupe_index(archive_config_t **shared_arc)
+{
+	if (shared_arc != NULL && *shared_arc != NULL) {
+		destroy_global_db_s(*shared_arc);
+		*shared_arc = NULL;
+	}
+}
+
 void
 destroy_dedupe_context(dedupe_context_t *ctx)
 {
@@ -403,13 +402,6 @@ destroy_dedupe_context(dedupe_context_t *ctx)
 #ifndef SSE_MODE
 		if (ctx->current_window_data) slab_free(NULL, ctx->current_window_data);
 #endif
-
-		pthread_mutex_lock(&init_lock);
-		if (arc) {
-			destroy_global_db_s(arc);
-		}
-		arc = NULL;
-		pthread_mutex_unlock(&init_lock);
 
 		if (ctx->blocks) {
 			for (i=0; i<ctx->blknum && ctx->blocks[i] != NULL; i++) {

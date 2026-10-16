@@ -48,6 +48,9 @@ void slab_init(void);
  */
 void slab_cleanup(int quiet);
 
+/** Free the whole slab cache. Only when no context is running (process exit). */
+void slab_shutdown(int quiet);
+
 /**
  * Allocate memory from the slab allocator.
  * @param p     Unused (for API compatibility with zlib-style allocators).

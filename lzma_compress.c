@@ -35,8 +35,6 @@
 #define	SZ_ERROR_DESTLEN	100
 #define	LZMA_DEFAULT_DICT	(1 << 24)
 
-CLzmaEncProps *p = NULL;
-
 static ISzAlloc g_Alloc = {
 	slab_alloc,
 	slab_release,
@@ -74,14 +72,21 @@ lzma_props(algo_props_t *data, int level, uint64_t chunksize) {
 }
 
 /*
- * The two functions below are not thread-safe, by design.
+ * Each caller (worker thread, dedupe context) gets its own encoder
+ * properties: lzma_compress() writes props->level, and a shared copy was
+ * freed by whichever context finished first (use-after-free with two jobs
+ * in one process).
  */
 int
 lzma_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	  int file_version, compress_op_t op)
 {
-	if (!p && op == COMPRESS) {
+	CLzmaEncProps *p = NULL;
+
+	if (op == COMPRESS) {
 		p = (CLzmaEncProps *)slab_alloc(NULL, sizeof (CLzmaEncProps));
+		if (p == NULL)
+			return (-1);
 		LzmaEncProps_Init(p);
 		/*
 		 * Set the dictionary size and fast bytes based on level.
@@ -139,11 +144,10 @@ lzma_init(void **data, int *level, int nthreads, uint64_t chunksize,
 int
 lzma_deinit(void **data)
 {
-	if (p) {
-		slab_release(NULL, p);
-		p = NULL;
+	if (*data) {
+		slab_release(NULL, *data);
+		*data = NULL;
 	}
-	*data = NULL;
 	return (0);
 }
 

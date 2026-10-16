@@ -338,6 +338,7 @@ typedef struct pc_ctx {
 	int show_chunks;
 	int enable_rabin_scan;
 	int enable_rabin_global;
+	archive_config_t *dedupe_index;	/* this job's global-dedupe index */
 	int enable_delta_encode;
 	int enable_delta2_encode;
 	int delta2_nstrides;

@@ -117,8 +117,23 @@ hash6432shift(uint64_t key)
 	return (uint32_t) key;
 }
 
+static pthread_once_t slab_once = PTHREAD_ONCE_INIT;
+static void slab_init_once(void);
+
+/*
+ * The slab cache is process-wide and shared by every pcompress context in
+ * the process, so it is set up once and never torn down while the process
+ * runs: destroying it per context freed buffers other contexts were using
+ * (concurrent contexts aborted in slab_free). slab_cleanup() only reports.
+ */
 void
 slab_init(void)
+{
+	pthread_once(&slab_once, slab_init_once);
+}
+
+static void
+slab_init_once(void)
 {
 	int i;
 	uint64_t slab_sz;
@@ -177,6 +192,20 @@ slab_init(void)
 
 void
 slab_cleanup(int quiet)
+{
+	/*
+	 * Other contexts may still hold slab memory: only report. The cache
+	 * is reclaimed by the OS at exit (or slab_shutdown() if a single-
+	 * threaded program wants it freed explicitly, e.g. for leak checkers).
+	 */
+	if (!inited || bypass || quiet)
+		return;
+	log_msg(LOG_INFO, 0, "Slab allocator: %" PRIu64 " requests, %" PRIu64
+	    " oversize, %" PRIu64 " live\n", total_allocs, oversize_allocs, hash_entries);
+}
+
+void
+slab_shutdown(int quiet)
 {
 	int i;
 	struct bufentry *buf, *buf1;
@@ -513,6 +542,9 @@ slab_init(void) {}
 
 void
 slab_cleanup(int quiet) {}
+
+void
+slab_shutdown(int quiet) {}
 
 void
 *slab_alloc(void *p, size_t size)

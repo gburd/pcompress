@@ -32,6 +32,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <errno.h>
 
 /*
@@ -290,17 +291,32 @@ compute_checksum(uchar_t *cksum_buf, int cksum, uchar_t *buf, uint64_t bytes, in
  * x86-64, portable C elsewhere). Was: OpenSSL's SHA-256 on non-x86 and
  * big-endian hosts, which made files unreadable across architectures.
  */
+/* Dispatch tables are process-wide: fill them once (concurrent contexts). */
+static pthread_once_t sha512_once = PTHREAD_ONCE_INIT, blake2_once = PTHREAD_ONCE_INIT;
+
 static void
-init_sha512(void)
+init_sha512_once(void)
 {
 	(void) opt_Init_SHA512(&proc_info);
 	cksum_provider = PROVIDER_X64_OPT;
 }
 
 static void
-init_blake2(void)
+init_blake2_once(void)
 {
 	blake2_module_init(&bdsp, &proc_info);
+}
+
+static void
+init_sha512(void)
+{
+	pthread_once(&sha512_once, init_sha512_once);
+}
+
+static void
+init_blake2(void)
+{
+	pthread_once(&blake2_once, init_blake2_once);
 }
 
 /*

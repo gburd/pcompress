@@ -559,8 +559,8 @@ redo:
 	 * Returning silently left it blocked on cmp_done_sem, and the main
 	 * thread on write_done_sem (~2% of decompressions of a corrupt file).
 	 */
-	if (unlikely(tdat->cancel || pctx->main_cancel)) {
-		tdat->len_cmp = 0;
+	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || pctx->main_cancel)) {
+		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 		Sem_Post(&tdat->cmp_done_sem);
 		return (NULL);
 	}
@@ -1503,8 +1503,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			 */
 			pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2);
 			if (pctx->meta_ctx == NULL) {
-				close(compfd2);
-				UNCOMP_BAIL;
+				UNCOMP_BAIL;	/* compfd2 is closed at uncomp_done */
 			}
 		}
 
@@ -1631,7 +1630,7 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		if (pctx->enable_rabin_scan || pctx->enable_fixed_scan || pctx->enable_rabin_global) {
 			tdat->rctx = create_dedupe_context(chunksize, compressed_chunksize,
 			    pctx->rab_blk_size, pctx->algo, &props, pctx->enable_delta_encode,
-			    dedupe_flag, version, DECOMPRESS, 0, NULL, pctx->pipe_mode, nprocs, 0);
+			    dedupe_flag, version, DECOMPRESS, 0, NULL, pctx->pipe_mode, nprocs, 0, &pctx->dedupe_index);
 			if (tdat->rctx == NULL) {
 				UNCOMP_BAIL;
 			}
@@ -1859,8 +1858,8 @@ uncomp_done:
 	if (thread) {
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
-			tdat->cancel = 1;
-			tdat->len_cmp = 0;
+			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
 			/* Wake workers parked on the global dedupe index token. */
@@ -1907,6 +1906,7 @@ uncomp_done:
 		if (filename && compfd != -1) close(compfd);
 		if (uncompfd != -1) close(uncompfd);
 	}
+	if (compfd2 != -1) close(compfd2);
 	if (pctx->archive_mode) {
 		if (pctx->archive_thread_started) {
 			/*
@@ -1955,8 +1955,8 @@ perform_compress(void *dat) {
 	pctx = tdat->pctx;
 redo:
 	Sem_Wait(&tdat->start_sem);
-	if (unlikely(tdat->cancel)) {
-		tdat->len_cmp = 0;
+	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED))) {	/* may race the writer's cancel */
+		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 		Sem_Post(&tdat->cmp_done_sem);
 		return (0);
 	}
@@ -2243,7 +2243,7 @@ repeat:
 	for (p = 0; p < w->nprocs; p++) {
 		tdat = w->dary[p];
 		Sem_Wait(&tdat->cmp_done_sem);
-		if (tdat->len_cmp == 0) {
+		if (__atomic_load_n(&tdat->len_cmp, __ATOMIC_RELAXED) == 0) {
 			goto do_cancel;
 		}
 
@@ -2271,7 +2271,7 @@ repeat:
 			pctx->t_errored = 1;
 do_cancel:
 			pctx->main_cancel = 1;
-			tdat->cancel = 1;
+			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			if (tdat->rctx && pctx->enable_rabin_global)
 				Sem_Post(tdat->rctx->index_sem_next);
@@ -2755,7 +2755,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 			tdat->rctx = create_dedupe_context(chunksize, compressed_chunksize,
 			    pctx->rab_blk_size, pctx->algo, &props, pctx->enable_delta_encode,
 			    dedupe_flag, VERSION, COMPRESS, sbuf.st_size, tmpdir,
-			    pctx->pipe_mode, nprocs, msys_info.freeram);
+			    pctx->pipe_mode, nprocs, msys_info.freeram, &pctx->dedupe_index);
 			if (tdat->rctx == NULL) {
 				COMP_BAIL;
 			}
@@ -2901,7 +2901,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	if (pctx->enable_rabin_split) {
 		rctx = create_dedupe_context(chunksize, 0, pctx->rab_blk_size, pctx->algo, &props,
 		    pctx->enable_delta_encode, pctx->enable_fixed_scan, VERSION, COMPRESS, 0, NULL,
-		    pctx->pipe_mode, nprocs, msys_info.freeram);
+		    pctx->pipe_mode, nprocs, msys_info.freeram, &pctx->dedupe_index);
 		if (pctx->archive_mode)
 			rbytes = Read_Adjusted(uncompfd, cread_buf, chunksize, &rabin_count, rctx, pctx);
 		else
@@ -3036,8 +3036,8 @@ comp_done:
 	if (thread) {
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
-			tdat->cancel = 1;
-			tdat->len_cmp = 0;
+			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
 			/* Wake workers parked on the global dedupe index token. */
@@ -3083,6 +3083,7 @@ comp_done:
 			if (fchown(compfd, sbuf.st_uid, sbuf.st_gid) == -1)
 				log_msg(LOG_ERR, 1, "chown ");
 			close(compfd);
+			compfd = -1;	/* closed again below otherwise: may be another thread's fd by then */
 
 			if (pctx->to_filename == NULL) {
 				if (rename(tmpfile1, to_filename) == -1) {
@@ -3117,6 +3118,7 @@ comp_done:
 		slab_release(NULL, dary);
 	}
 	if (pctx->enable_rabin_split) destroy_dedupe_context(rctx);
+	destroy_dedupe_index(&pctx->dedupe_index);	/* after all worker contexts */
 	if (cread_buf != (uchar_t *)1)
 		slab_release(NULL, cread_buf);
 	if (!pctx->pipe_mode) {

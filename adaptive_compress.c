@@ -280,13 +280,17 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		*data = adat;
 		if (*level > 9) *level = 9;
 	}
-	lzma_count = 0;
-	bzip2_count = 0;
-	ppmd_count = 0;
-	bsc_count = 0;
-	lz4_count = 0;
+	/*
+	 * shortcut: -C stats are process-wide, so concurrent adapt jobs mix
+	 * their counts; move them into the context with the Phase 2 API.
+	 */
+	__atomic_store_n(&lzma_count, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&bzip2_count, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&ppmd_count, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&bsc_count, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&lz4_count, 0, __ATOMIC_RELAXED);
 #ifdef ENABLE_PC_ZSTD
-	zstd_count = 0;
+	__atomic_store_n(&zstd_count, 0, __ATOMIC_RELAXED);
 #endif
 	return (rv);
 }
@@ -374,7 +378,7 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_LZ4;
-		lz4_count++;
+		__atomic_fetch_add(&lz4_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 
 	} else if (adat->adapt_mode == 2 && PC_TYPE(btype) & TYPE_BINARY && !bsc_type) {
 #ifdef ENABLE_PC_ZSTD
@@ -386,13 +390,13 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_ZSTD;
-		zstd_count++;
+		__atomic_fetch_add(&zstd_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 #else
 		rv = lzma_compress(src, srclen, dst, dstlen, level, chdr, btype, adat->lzma_data);
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_LZMA;
-		lzma_count++;
+		__atomic_fetch_add(&lzma_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 #endif
 
 	} else if (adat->adapt_mode == 1 && PC_TYPE(btype) & TYPE_BINARY && !bsc_type) {
@@ -405,13 +409,13 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_ZSTD;
-		zstd_count++;
+		__atomic_fetch_add(&zstd_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 #else
 		rv = bzip2_compress(src, srclen, dst, dstlen, level, chdr, btype, NULL);
 		if (rv < 0)
 			return (rv);
 		rv = ADAPT_COMPRESS_BZIP2;
-		bzip2_count++;
+		__atomic_fetch_add(&bzip2_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 #endif
 
 	} else {
@@ -421,7 +425,7 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 			if (rv < 0)
 				return (rv);
 			rv = ADAPT_COMPRESS_BSC;
-			bsc_count++;
+			__atomic_fetch_add(&bsc_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 		} else {
 #endif
 			rv = ppmd_alloc(adat->ppmd_data);
@@ -432,7 +436,7 @@ adapt_compress(void *src, uint64_t srclen, void *dst,
 			if (rv < 0)
 				return (rv);
 			rv = ADAPT_COMPRESS_PPMD;
-			ppmd_count++;
+			__atomic_fetch_add(&ppmd_count, 1, __ATOMIC_RELAXED);	/* shared by all contexts */
 #ifdef ENABLE_PC_LIBBSC
 		}
 #endif
