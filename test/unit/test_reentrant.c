@@ -11,7 +11,10 @@
  * Usage: test_reentrant [threads] [rounds]
  */
 
+/* nftw(); on macOS _XOPEN_SOURCE hides BYTE_ORDER, and nftw is visible anyway. */
+#if !defined(_XOPEN_SOURCE) && !defined(__APPLE__)
 #define	_XOPEN_SOURCE	700
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
