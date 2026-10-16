@@ -50,6 +50,14 @@ and does not change the `.pz` format unless the phase says so.
 - **Done when:** N threads × M sequential jobs, mixing compress,
   decompress, encrypt and global dedupe, pass under TSan and ASan.
 
+**Status (9ff4ebc):** P1 is fixed. `test/unit/test_reentrant.c` (in
+`make check`) runs sequential reuse and 4 threads × 6 rounds over zstd,
+lz4, lzma, adapt2, `-D` and `-G`; it is clean under ASan and TSan. The
+dedupe index is per job, init runs once, and the slab cache lives for the
+process instead of being torn down per job. Still to do: encryption
+(`-e`) and archive mode in the test, per-context log sink and stats,
+the reentrant parser, signal handling, and error codes.
+
 ### Phase 2: Public API and packaging (fixes P3, P4)
 
 - Installed header `<pcompress/pcompress.h>` with an opaque
