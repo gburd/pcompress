@@ -50,13 +50,33 @@ and does not change the `.pz` format unless the phase says so.
 - **Done when:** N threads × M sequential jobs, mixing compress,
   decompress, encrypt and global dedupe, pass under TSan and ASan.
 
-**Status (9ff4ebc):** P1 is fixed. `test/unit/test_reentrant.c` (in
-`make check`) runs sequential reuse and 4 threads × 6 rounds over zstd,
-lz4, lzma, adapt2, `-D` and `-G`; it is clean under ASan and TSan. The
-dedupe index is per job, init runs once, and the slab cache lives for the
-process instead of being torn down per job. Still to do: encryption
-(`-e`) and archive mode in the test, per-context log sink and stats,
-the reentrant parser, signal handling, and error codes.
+**Status: done (03cee65).** Several contexts run safely in one process.
+`test/unit/test_reentrant.c` (in `make check`) runs sequential reuse and
+then 4 threads × 8 rounds over zstd, lz4, lzma, adapt2, `-D`, `-G`, AES
+and SALSA20, plus an archive-and-extract per round. It is clean under ASan
+and under TSan with libarcher, as are `test_api`, `test_errors.sh` and
+`test_archive.sh`.
+
+- Process-wide state is either set up once (`pthread_once`: CPU probe,
+  hash and AES dispatch, Rabin tables) or per context: dedupe index,
+  archive filter table, log sink and level, last error, option parsing.
+- The slab allocator is gone (it was process-global and no faster).
+- Logging: `pc_set_log()`. Errors: `pc_last_error()`,
+  `pc_last_error_code()` → `pc_error_t`, `pc_strerror()`.
+- The library installs no signal handlers; `main.c` does, calling
+  `pc_cleanup_tempfiles()`.
+- Extraction no longer `chdir()`s.
+
+Bugs found on the way (each with a test):
+- A corrupt file could exit 0 with truncated output (about 1 in 200 runs).
+- `-j` and `-x` were ignored.
+- `-i` printed nothing for archives with a metadata stream.
+- A crafted archive could write outside the target directory.
+
+Left for later, recorded as `shortcut:` in the code:
+- Adaptive `-C` counters are process-wide.
+- `PCOMPRESS_*` environment variables are still read.
+- packJPG and packPNM calls are serialised.
 
 ### Phase 2: Public API and packaging (fixes P3, P4)
 
