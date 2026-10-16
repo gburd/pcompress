@@ -84,6 +84,38 @@ jobs:
         env: { CC: clang, CXX: clang++, PCOMPRESS_SANITIZE: "1" }
         run: sh ci/build-test.sh quick
 
+  abi:
+    name: "Public API: ABI check and install"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential libomp-dev libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config abigail-tools
+      - name: Build with debug info
+        run: CFLAGS=-g ./config --disable-wavpack --prefix=/usr && make -j"$(nproc)"
+      - name: ABI unchanged against abi/libpcompress.abi
+        run: make abi-check
+      - name: Only the public API is exported
+        run: |
+          nm -D --defined-only libpcompress.so.1 | awk '{print $3}' | grep -v '^PCOMPRESS_1$' \
+            | sed 's/@.*//' | sort > exported.txt
+          sed -n '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:\|/\*' \
+            | tr ';' '\n' | tr -d ' \t' | sed '/^$/d' | sort > listed.txt
+          diff -u listed.txt exported.txt
+      - name: Install, then build and run examples/pzcat.c via pkg-config
+        run: |
+          make install DESTDIR="$PWD/inst"
+          export PKG_CONFIG_SYSROOT_DIR="$PWD/inst" PKG_CONFIG_LIBDIR="$PWD/inst/usr/lib/pkgconfig"
+          cc $(pkg-config --cflags libpcompress) examples/pzcat.c -o pzcat \
+            $(pkg-config --libs libpcompress) -Wl,-rpath,"$PWD/inst/usr/lib"
+          ./pzcat -c < README.md > r.pz && ./pzcat < r.pz | cmp - README.md
+          inst/usr/bin/pcompress -d r.pz r.out && cmp r.out README.md
+
   nix:
     name: "Nix package (${{ matrix.runner }})"
     runs-on: ${{ matrix.runner }}

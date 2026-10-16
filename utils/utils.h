@@ -28,6 +28,8 @@
 
 #include <arpa/nameser_compat.h>
 #include <arpa/inet.h>
+/* Public types (pc_ctx_t, pc_error_t, pc_log_fn, PC_LOG_*): one definition. */
+#include "../include/pcompress/pcompress.h"
 #include <sys/types.h>
 
 #ifndef __STDC_FORMAT_MACROS
@@ -421,10 +423,10 @@ typedef enum {
 } log_dest_type_t;
 
 typedef enum {
-	LOG_ERR,
-	LOG_WARN,
-	LOG_INFO,
-	LOG_VERBOSE
+	LOG_ERR = PC_LOG_ERR,
+	LOG_WARN = PC_LOG_WARN,
+	LOG_INFO = PC_LOG_INFO,
+	LOG_VERBOSE = PC_LOG_VERBOSE
 } log_level_t;
 
 typedef void (*log_callback_ptr)(char *msg);
@@ -445,20 +447,6 @@ void log_msg(log_level_t log_level, int show_errno, const char *format, ...);
  * uses the context's sink and level, and records the last error. A thread
  * with nothing bound uses the process default (set_log_dest/level).
  */
-typedef void (*pc_log_fn)(void *arg, int level, const char *msg);
-
-/** Error classes reported by pc_last_error_code(). Values are stable. */
-typedef enum {
-	PC_OK = 0,
-	PC_ERR_ARGS = 1,	/**< invalid option or argument */
-	PC_ERR_IO = 2,		/**< open/read/write/stat failed */
-	PC_ERR_NOMEM = 3,	/**< allocation failed */
-	PC_ERR_FORMAT = 4,	/**< not a pcompress file, or unsupported version */
-	PC_ERR_CORRUPT = 5,	/**< damaged data: bad length, header, dedupe index */
-	PC_ERR_VERIFY = 6,	/**< checksum, CRC or HMAC mismatch; wrong password */
-	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
-	PC_ERR_INTERNAL = 8	/**< anything else */
-} pc_error_t;
 
 typedef struct log_state {
 	pc_log_fn fn;		/* NULL: process default sink */

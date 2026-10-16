@@ -537,9 +537,9 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 	va_list args;
 	char msg[1024];
 	log_state_t *ls = bound_log;
-	int level = (ls != NULL && ls->level >= 0) ? ls->level : cur_log_level;
+	int level = (ls != NULL && ls->level != -1) ? ls->level : cur_log_level;
 
-	if (log_level > level && !(ls != NULL && log_level == LOG_ERR))
+	if ((int)log_level > level && !(ls != NULL && log_level == LOG_ERR))
 		return;
 
 	va_start(args, format);
@@ -554,7 +554,8 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 	if (ls != NULL) {
 		if (log_level == LOG_ERR && show_errno && ls->code == PC_OK)
 			ls->code = (err == ENOMEM) ? PC_ERR_NOMEM : PC_ERR_IO;
-		if (log_level == LOG_ERR) {
+		/* Keep the first error: later ones ("Error compressing") are its echo. */
+		if (log_level == LOG_ERR && ls->last_error[0] == '\0') {
 			size_t n;
 
 			/* First line only, without the trailing newline. */
@@ -567,7 +568,7 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 				snprintf(ls->last_error + n, sizeof (ls->last_error) - n,
 				    ": %s", strerror(err));
 		}
-		if (log_level > level)
+		if ((int)log_level > level)	/* PC_LOG_NONE (-2) drops even errors */
 			return;
 		if (ls->fn != NULL) {
 			ls->fn(ls->arg, log_level, msg);

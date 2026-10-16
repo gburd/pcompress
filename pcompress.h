@@ -318,9 +318,10 @@ extern void libbsc_stats(int show);
  *
  * Holds all configuration, state, and function pointers for a compression
  * or decompression session. Created with create_pc_context(), configured
- * with init_pc_context(), and freed with destroy_pc_context().
+ * with init_pc_context(), and freed with destroy_pc_context(). Opaque to
+ * users of the public header.
  */
-typedef struct pc_ctx {
+struct pc_ctx {
 	compress_func_ptr _compress_func;
 	compress_func_ptr _decompress_func;
 	init_func_ptr _init_func;
@@ -404,7 +405,10 @@ typedef struct pc_ctx {
 	char *pwd_file, *f_name;
 	meta_ctx_t *meta_ctx;
 	log_state_t log;	/* per-context sink, level, last error */
-} pc_ctx_t;
+	int in_fd, out_fd;	/* pc_compress_fd/pc_decompress_fd; -1: use names */
+	unsigned char *pw_copy;	/* pc_set_password() copy, wiped and freed */
+	size_t pw_copy_len;
+};
 
 /**
  * @brief Per-thread data structure for compression and decompression.
@@ -443,102 +447,21 @@ struct cmp_data {
 	pc_ctx_t *pctx;
 };
 
-/** @name Library Public API */
-/**@{*/
+/*
+ * The public API (create_pc_context() .. start_pcompress(), pc_*) is
+ * declared in include/pcompress/pcompress.h, included via utils.h.
+ * Below: library-internal entry points.
+ */
 
-/** Print usage/help text to stderr. */
+/** Print usage/help text (the CLI's -h). */
 void usage(pc_ctx_t *pctx);
 
-/**
- * Allocate and zero-initialize a new Pcompress context.
- * @return Pointer to allocated context, or NULL on failure.
- */
-pc_ctx_t *create_pc_context(void);
-
-/**
- * Initialize a context from a single argument string (space-delimited).
- * @param pctx  Context created by create_pc_context().
- * @param args  Space-separated argument string (as if from command line).
- * @return 0 on success, 1 on invalid arguments (reported via log_msg),
- *         2 on a usage error, 3 if -h was given, 4 if -V was given.
- */
-int init_pc_context_argstr(pc_ctx_t *pctx, char *args);
-
-/**
- * Initialize a context from argc/argv (as from main()).
- * @param pctx  Context created by create_pc_context().
- * @param argc  Argument count.
- * @param argv  Argument vector.
- * @return 0 on success, 1 on invalid arguments (reported via log_msg),
- *         2 on a usage error, 3 if -h was given, 4 if -V was given.
- */
-int init_pc_context(pc_ctx_t *pctx, int argc, char *argv[]);
-
-/**
- * Free all resources associated with a Pcompress context.
- * @param pctx  Context to destroy. Safe to call with NULL.
- */
-void destroy_pc_context(pc_ctx_t *pctx);
-
-/**
- * Set the encryption password for a context.
- * @param pctx    Context to set password on.
- * @param pwdata  Password bytes (copied internally).
- * @param pwlen   Length of password.
- */
-void pc_set_userpw(pc_ctx_t *pctx, unsigned char *pwdata, int pwlen);
-
-/**
- * Send this context's log messages to a callback instead of stderr.
- * Messages from every thread working for the context go to fn.
- * @param fn     Called as fn(arg, level, msg); NULL restores stderr.
- * @param arg    Passed through to fn.
- * @param level  Highest level to deliver (LOG_ERR..LOG_VERBOSE); -1 for
- *               the process default. Errors are always recorded for
- *               pc_last_error().
- */
-void pc_set_log(pc_ctx_t *pctx, pc_log_fn fn, void *arg, int level);
-
-/**
- * The first line of the last error this context logged, or "".
- * Valid until the next call on the context.
- */
-const char *pc_last_error(pc_ctx_t *pctx);
-
-/**
- * The class of the first error in the last init_pc_context*(),
- * start_pcompress(), start_compress() or start_decompress() on this
- * context; PC_OK if it succeeded. See pc_error_t; pc_strerror() names it.
- */
-pc_error_t pc_last_error_code(pc_ctx_t *pctx);
-
-/**
- * Run the main compression or decompression operation as configured.
- * @param pctx  Fully initialized context.
- * @return 0 on success, non-zero on failure.
- */
-int start_pcompress(pc_ctx_t *pctx);
-
-/**
- * Directly start compression of a single file (library API).
- * @param pctx       Initialized context.
- * @param filename   Path to input file.
- * @param chunksize  Chunk size in bytes.
- * @param level      Compression level (1-14).
- * @return 0 on success, non-zero on failure.
- */
+/** Compress filename (NULL: the job's input stream). */
 int start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level);
 
-/**
- * Directly start decompression of a .pz file (library API).
- * @param pctx         Initialized context.
- * @param filename     Path to compressed .pz file.
- * @param to_filename  Output file or directory path.
- * @return 0 on success, non-zero on failure.
- */
+/** Decompress filename to to_filename (NULL: the job's streams). */
 int start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename);
 
-/**@}*/
 
 #ifdef	__cplusplus
 }

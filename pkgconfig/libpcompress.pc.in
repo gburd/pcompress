@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libpcompress
+Description: Parallel chunked compression, deduplication and encryption (.pz format)
+URL: https://codeberg.org/gregburd/pcompress
+Version: @VERSION@
+Libs: -L${libdir} -lpcompress
+Cflags: -I${includedir}

@@ -28,17 +28,9 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <strings.h>
-#include <limits.h>
-#include <unistd.h>
-#include <libgen.h>
-#include "pcompress.h"
-#include <ctype.h>
-#include <utils.h>
 #include <signal.h>
+#include <unistd.h>
+#include <pcompress/pcompress.h>
 
 /* The library never installs signal handlers; the CLI does. */
 static void
@@ -65,16 +57,16 @@ main(int argc, char *argv[])
 	err = init_pc_context(pctx, argc, argv);
 	if (err == 3 || err == 4 || (err == 2 && argc == 1)) {
 		if (err != 4)
-			usage(pctx);
+			pc_usage(pctx);
 		destroy_pc_context(pctx);
 		return (0);
 	} else if (err == 2) {
-		usage(pctx);
+		pc_usage(pctx);
 		destroy_pc_context(pctx);
 		return (2);
 	} else if (err != 0) {
-		log_msg(LOG_ERR, 0, "Invalid arguments to pcompress. "
-		    "Run 'pcompress -h' for usage.\n");
+		fprintf(stderr, "Invalid arguments to pcompress. "
+		    "Run 'pcompress -h' for usage.\n\n");
 		destroy_pc_context(pctx);
 		return (err);
 	}

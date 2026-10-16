@@ -1,0 +1,288 @@
+.Dd October 16, 2026
+.Dt LIBPCOMPRESS 3
+.Os
+.Sh NAME
+.Nm pc_new ,
+.Nm pc_free ,
+.Nm pc_set_algorithm ,
+.Nm pc_set_level ,
+.Nm pc_set_chunk_size ,
+.Nm pc_set_threads ,
+.Nm pc_set_checksum ,
+.Nm pc_set_dedupe ,
+.Nm pc_set_encryption ,
+.Nm pc_set_password ,
+.Nm pc_compress_fd ,
+.Nm pc_decompress_fd ,
+.Nm pc_set_log ,
+.Nm pc_last_error ,
+.Nm pc_last_error_code ,
+.Nm pc_strerror ,
+.Nm pc_cleanup_tempfiles ,
+.Nm pc_version
+.Nd parallel compression, deduplication and encryption library
+.Sh LIBRARY
+libpcompress
+.Pq Fl lpcompress ; Ql pkg-config libpcompress
+.Sh SYNOPSIS
+.In pcompress/pcompress.h
+.Ft pc_ctx_t *
+.Fn pc_new "void"
+.Ft void
+.Fn pc_free "pc_ctx_t *ctx"
+.Ft int
+.Fn pc_set_algorithm "pc_ctx_t *ctx" "const char *name"
+.Ft int
+.Fn pc_set_level "pc_ctx_t *ctx" "int level"
+.Ft int
+.Fn pc_set_chunk_size "pc_ctx_t *ctx" "uint64_t bytes"
+.Ft int
+.Fn pc_set_threads "pc_ctx_t *ctx" "int n"
+.Ft int
+.Fn pc_set_checksum "pc_ctx_t *ctx" "const char *name"
+.Ft int
+.Fn pc_set_dedupe "pc_ctx_t *ctx" "int mode"
+.Ft int
+.Fn pc_set_encryption "pc_ctx_t *ctx" "const char *alg" "int keylen"
+.Ft int
+.Fn pc_set_password "pc_ctx_t *ctx" "const void *pw" "size_t len"
+.Ft int
+.Fn pc_compress_fd "pc_ctx_t *ctx" "int in_fd" "int out_fd"
+.Ft int
+.Fn pc_decompress_fd "pc_ctx_t *ctx" "int in_fd" "int out_fd"
+.Ft void
+.Fn pc_set_log "pc_ctx_t *ctx" "pc_log_fn fn" "void *arg" "int level"
+.Ft const char *
+.Fn pc_last_error "pc_ctx_t *ctx"
+.Ft pc_error_t
+.Fn pc_last_error_code "pc_ctx_t *ctx"
+.Ft const char *
+.Fn pc_strerror "pc_error_t code"
+.Ft void
+.Fn pc_cleanup_tempfiles "void"
+.Ft const char *
+.Fn pc_version "void"
+.Sh DESCRIPTION
+The library behind
+.Xr pcompress 1 .
+A
+.Vt pc_ctx_t
+holds the settings for one job; the job turns a stream into the
+.Pa .pz
+format or back.
+Several contexts may run at the same time in different threads of one
+process.
+One context must be used by one thread at a time.
+The library installs no signal handlers and never exits the process.
+.Pp
+.Fn pc_new
+returns a context with default settings: zstd, level 6 (lz4: level 1),
+a chunk size chosen from the level, one thread per core, the BLAKE256
+chunk checksum, and no deduplication or encryption.
+.Fn pc_free
+releases it and wipes any stored password.
+A context can run any number of jobs; each job starts from its settings,
+not from what the previous job left behind.
+.Ss Settings
+Each setter returns 0, or \-1 with
+.Dv PC_ERR_ARGS
+recorded for
+.Fn pc_last_error .
+.Bl -tag -width Ds
+.It Fn pc_set_algorithm
+One of
+.Qq zstd ,
+.Qq lz4 ,
+.Qq lzma ,
+.Qq lzmaMt ,
+.Qq bzip2 ,
+.Qq zlib ,
+.Qq ppmd ,
+.Qq lzfx ,
+.Qq libbsc ,
+.Qq adapt ,
+.Qq adapt2
+or
+.Qq none .
+The name is not copied; pass a string that outlives the context.
+.It Fn pc_set_level
+1 (fastest) to 14 (smallest output).
+.It Fn pc_set_chunk_size
+The unit of parallelism, in bytes; 0 picks one from the level.
+Deduplication needs at least 1 MB.
+.It Fn pc_set_threads
+0 means one per core.
+.It Fn pc_set_checksum
+.Qq BLAKE256 ,
+.Qq BLAKE512 ,
+.Qq SHA256 ,
+.Qq SHA512 ,
+.Qq KECCAK256 ,
+.Qq KECCAK512 ,
+.Qq SKEIN256 ,
+.Qq SKEIN512
+or
+.Qq CRC64 .
+.It Fn pc_set_dedupe
+.Dv PC_DEDUPE_NONE ,
+.Dv PC_DEDUPE_RABIN
+(content-defined blocks within a chunk),
+.Dv PC_DEDUPE_FIXED
+(fixed blocks) or
+.Dv PC_DEDUPE_GLOBAL .
+Global deduplication needs a seekable output and is refused by
+.Fn pc_compress_fd .
+.It Fn pc_set_encryption
+.Qq AES
+or
+.Qq SALSA20
+in CTR mode with an HMAC per chunk;
+.Dv NULL
+turns encryption off.
+.Fa keylen
+is 16 or 32 bytes, 0 for 32.
+.It Fn pc_set_password
+The password, used by the next job; all of it feeds the key derivation
+(scrypt).
+It is copied; the caller's buffer is not changed.
+(The
+.Xr pcompress 1
+prompt and
+.Fl w
+file read at most 16 bytes, so a longer password set here must also be
+given here to decrypt.)
+.El
+.Ss Jobs
+.Fn pc_compress_fd
+reads
+.Fa in_fd
+to end of file and writes a
+.Pa .pz
+stream to
+.Fa out_fd .
+.Fn pc_decompress_fd
+does the reverse and checks every chunk's checksum, or its HMAC if the
+stream is encrypted.
+Neither function closes its descriptors.
+Both return 0 on success and \-1 on failure.
+The output of a failed job is incomplete and must not be used.
+.Pp
+Streams written by these functions are the same as
+.Ql pcompress -p
+output, and either side can read the other's.
+Archives
+.Pq Fl a
+and files written with global deduplication need
+.Xr pcompress 1
+or the command-line style API.
+.Ss Diagnostics
+Messages from all threads working for a context go to stderr, or to
+.Fa fn
+after
+.Fn pc_set_log .
+.Fa fn
+is called as
+.Fn fn arg level msg ,
+never at the same time for one context.
+.Fa level
+is the highest level delivered:
+.Dv PC_LOG_ERR ,
+.Dv PC_LOG_WARN ,
+.Dv PC_LOG_INFO
+or
+.Dv PC_LOG_VERBOSE ;
+.Dv PC_LOG_NONE
+delivers nothing, and \-1 uses the process default.
+.Pp
+.Fn pc_last_error
+returns the first line of the first error in the last call on
+.Fa ctx ,
+or the empty string.
+.Fn pc_last_error_code
+returns its class:
+.Bl -tag -width PC_ERR_INTERNAL -compact
+.It Dv PC_OK
+no error
+.It Dv PC_ERR_ARGS
+invalid setting or argument
+.It Dv PC_ERR_IO
+a read, write, open or stat failed
+.It Dv PC_ERR_NOMEM
+out of memory
+.It Dv PC_ERR_FORMAT
+not a
+.Pa .pz
+stream, or a newer format version
+.It Dv PC_ERR_CORRUPT
+damaged data
+.It Dv PC_ERR_VERIFY
+a checksum, CRC or HMAC did not match, or the password is wrong
+.It Dv PC_ERR_CRYPTO
+key setup failed or no password was given
+.It Dv PC_ERR_INTERNAL
+anything else
+.El
+.Fn pc_strerror
+names a class.
+.Pp
+.Fn pc_cleanup_tempfiles
+removes the temporary files of all running jobs.
+It is async-signal-safe, for use in a program's own signal handler
+before it exits.
+.Ss Command-line style API
+.Fn create_pc_context ,
+.Fn init_pc_context "ctx" "argc" "argv" ,
+.Fn start_pcompress
+and
+.Fn destroy_pc_context
+run a job described by
+.Xr pcompress 1
+arguments, with file names, archives and every option.
+.Fn init_pc_context
+returns 0, 1 for an invalid argument, 2 for a usage error, 3 for
+.Fl h
+and 4 for
+.Fl V .
+.Sh EXAMPLES
+Compress standard input to standard output:
+.Bd -literal -offset indent
+#include <stdio.h>
+#include <pcompress/pcompress.h>
+
+int
+main(void)
+{
+	pc_ctx_t *c = pc_new();
+	int rv;
+
+	pc_set_algorithm(c, "zstd");
+	pc_set_level(c, 9);
+	pc_set_log(c, NULL, NULL, PC_LOG_NONE);
+	if ((rv = pc_compress_fd(c, 0, 1)) != 0)
+		fprintf(stderr, "%s\en", pc_last_error(c));
+	pc_free(c);
+	return (rv != 0);
+}
+.Ed
+.Pp
+Build with
+.Dl cc $(pkg-config --cflags libpcompress) x.c $(pkg-config --libs libpcompress)
+.Pp
+.Pa examples/pzcat.c
+in the source tree is a complete filter.
+.Sh SEE ALSO
+.Xr pcompress 1
+.Sh HISTORY
+The descriptor API, per-context logging and error classes appeared in
+pcompress 4.1.
+The command-line style API dates from 2.x.
+.Sh CAVEATS
+Only the symbols declared in
+.In pcompress/pcompress.h
+are exported.
+The bundled zstd, lz4, libbsc and libarchive are internal, so a program
+may link its own copies.
+.Pp
+The adaptive-mode counters printed by
+.Fl C
+are shared by all contexts in a process.

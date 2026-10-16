@@ -1003,6 +1003,10 @@ cont:
  */
 #define UNCOMP_BAIL err = 1; goto uncomp_done
 
+/* The job's stream ends: pc_*_fd() descriptors, else stdin/stdout. */
+#define	PC_IN_FD(p)	((p)->in_fd >= 0 ? (p)->in_fd : fileno(stdin))
+#define	PC_OUT_FD(p)	((p)->out_fd >= 0 ? (p)->out_fd : fileno(stdout))
+
 static int
 start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 {
@@ -1010,7 +1014,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	struct stat sbuf;
 	struct wdata w;
 	int compfd = -1, compfd2 = -1, p, dedupe_flag;
-	int uncompfd = -1, err, np, bail;
+	int uncompfd = -1, err, np, bail, own_uncompfd = 0;
 	int thread = 0, level;
 	uint32_t nprocs = 1, i;
 	unsigned short version, flags;
@@ -1031,7 +1035,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	if (!pctx->pipe_mode) {
 		if (filename == NULL) {
 			pctx->pipe_mode = 1;
-			compfd = fileno(stdin);
+			compfd = PC_IN_FD(pctx);
 			if (compfd == -1) {
 				log_msg(LOG_ERR, 1, "fileno ");
 				UNCOMP_BAIL;
@@ -1051,7 +1055,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				return (1);
 		}
 	} else {
-		compfd = fileno(stdin);
+		compfd = PC_IN_FD(pctx);
 		if (compfd == -1) {
 			log_msg(LOG_ERR, 1, "fileno ");
 			UNCOMP_BAIL;
@@ -1644,8 +1648,9 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				log_msg(LOG_ERR, 1, "Cannot open: %s", to_filename);
 				UNCOMP_BAIL;
 			}
+			own_uncompfd = 1;
 		} else {
-			uncompfd = fileno(stdout);
+			uncompfd = PC_OUT_FD(pctx);
 			if (uncompfd == -1) {
 				log_msg(LOG_ERR, 1, "fileno ");
 				UNCOMP_BAIL;
@@ -2023,7 +2028,8 @@ uncomp_done:
 	}
 	if (!pctx->pipe_mode) {
 		if (filename && compfd != -1) close(compfd);
-		if (uncompfd != -1) close(uncompfd);
+		/* stdout or the caller's out_fd (decompress to a stream): not ours. */
+		if (uncompfd != -1 && own_uncompfd) close(uncompfd);
 	}
 	if (pctx->archive_mode) {
 		if (pctx->archive_thread_started) {
@@ -2652,7 +2658,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		}
 
 		if (pctx->pipe_out) {
-			compfd = fileno(stdout);
+			compfd = PC_OUT_FD(pctx);
 			if (compfd == -1) {
 				log_msg(LOG_ERR, 1, "fileno ");
 				COMP_BAIL;
@@ -2686,12 +2692,12 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		/*
 		 * Use stdin/stdout for pipe mode.
 		 */
-		compfd = fileno(stdout);
+		compfd = PC_OUT_FD(pctx);
 		if (compfd == -1) {
 			log_msg(LOG_ERR, 1, "fileno ");
 			COMP_BAIL;
 		}
-		uncompfd = fileno(stdin);
+		uncompfd = PC_IN_FD(pctx);
 		if (uncompfd == -1) {
 			log_msg(LOG_ERR, 1, "fileno ");
 			COMP_BAIL;
@@ -3469,6 +3475,7 @@ create_pc_context(void)
 	ctx->btype = TYPE_UNKNOWN;
 	ctx->delta2_nstrides = NSTRIDES_STANDARD;
 	ctx->log.level = -1;	/* process default until pc_set_log() */
+	ctx->in_fd = ctx->out_fd = -1;
 	pthread_mutex_init(&ctx->write_mutex, NULL);
 
 	return (ctx);
@@ -3484,6 +3491,10 @@ destroy_pc_context(pc_ctx_t *pctx)
 		free(pctx->pwd_file);
 	free((void *)(pctx->exec_name));
 	free_filters(pctx);
+	if (pctx->pw_copy != NULL) {
+		memset(pctx->pw_copy, 0, pctx->pw_copy_len);
+		free(pctx->pw_copy);
+	}
 	free(pctx);
 }
 
@@ -3503,6 +3514,153 @@ init_pc_context_argstr(pc_ctx_t *pctx, char *args)
 	}
 	if (ac > 0)
 		return (init_pc_context(pctx, ac, av));
+	return (0);
+}
+
+/*
+ * Settings that follow from the options: defaults by level, filter and
+ * preprocessor choice, and the checks that need the whole set. Used by
+ * init_pc_context() after parsing and by pc_compress_fd()/pc_decompress_fd().
+ */
+static int
+finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
+{
+	struct filter_flags ff = *ff_in;
+
+	if (pctx->cksum == 0)
+		get_checksum_props(DEFAULT_CKSUM, &(pctx->cksum), &(pctx->cksum_bytes),
+				   &(pctx->mac_bytes), 0);
+
+	if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan) && pctx->cksum == CKSUM_CRC64) {
+		log_msg(LOG_ERR, 0, "CRC64 checksum is not suitable for Deduplication.");
+		return (1);
+	}
+
+	if (!pctx->encrypt_type) {
+		/*
+		 * If not encrypting we compute a header CRC32.
+		 */
+		pctx->mac_bytes = sizeof (uint32_t); // CRC32 in non-crypto mode
+	} else {
+		/*
+		 * When encrypting we do not compute a normal digest. The HMAC
+		 * is computed over header and encrypted data.
+		 */
+		pctx->cksum_bytes = 0;
+	}
+
+	if (pctx->do_compress) {
+		struct stat sbuf;
+
+		/*
+		 * Global deduplication produces a stream that cannot be decoded
+		 * from a pipe, so reject an explicit request for it when the
+		 * compressed output goes to stdout (pipe_out) or the input is a
+		 * pipe (pipe_mode), rather than emitting an undecodable archive.
+		 */
+		if ((pctx->pipe_mode || pctx->pipe_out) && pctx->enable_rabin_global) {
+			log_msg(LOG_ERR, 0,
+			    "Global Deduplication is not supported with pipe mode.");
+			return (1);
+		}
+
+		if (pctx->filename && stat(pctx->filename, &sbuf) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot stat: %s", pctx->filename);
+			return (1);
+		}
+
+		if (pctx->chunksize == 0) {
+			if (pctx->level < 9) {
+				pctx->chunksize = DEFAULT_CHUNKSIZE;
+			} else {
+				pctx->chunksize = DEFAULT_CHUNKSIZE + (pctx->level - 8) *
+				    DEFAULT_CHUNKSIZE/4;
+			}
+		}
+
+		if (pctx->archive_mode) {
+			if (pctx->meta_stream != -1)
+				pctx->meta_stream = 1;
+			else
+				pctx->meta_stream = 0;
+		}
+
+		if (pctx->pipe_mode)
+			pctx->meta_stream = 0;
+
+		/*
+		 * Auto-select filters and preprocessing modes based on compresion level.
+		 * This is not done if user explicitly specified advanced options.
+		 */
+		if (!pctx->advanced_opts) {
+			/*
+			 * Selectively enable filters while archiving, depending on compression level.
+			 */
+			if (pctx->archive_mode) {
+				if (pctx->level > 10) {
+					ff.enable_packjpg = 1;
+					ff.enable_wavpack = 1;
+				}
+				if (pctx->level > 8) {
+					pctx->exe_preprocess = 1;
+					ff.exe_preprocess = 1;
+				}
+			}
+
+			/*
+			 * Enable other preprocessors based on compresion level.
+			 */
+			if (pctx->level > 4) pctx->enable_delta2_encode = 1;
+			if (pctx->level > 9) pctx->lzp_preprocess = 1;
+			if (pctx->level > 3) {
+				/*
+				 * Global deduplication cannot be decoded from a pipe,
+				 * so never auto-enable it when the compressed output
+				 * goes to stdout (pipe_out) or the input is a pipe
+				 * (pipe_mode); otherwise a plain
+				 * "pcompress -c <algo> -l<n> file -" or
+				 * "pcompress -p -c <algo> -l<n>" stream would be
+				 * undecodable via "pcompress -d -".
+				 */
+				if (!pctx->pipe_mode && !pctx->pipe_out &&
+				    pctx->chunksize >= RAB_MIN_CHUNK_SIZE_GLOBAL)
+					pctx->enable_rabin_global = 1;
+				if (pctx->chunksize >= RAB_MIN_CHUNK_SIZE) {
+					pctx->enable_rabin_scan = 1;
+					pctx->enable_rabin_split = 1;
+				}
+				pctx->rab_blk_size = 2;
+			}
+			if (pctx->level > 9) pctx->delta2_nstrides = NSTRIDES_EXTRA;
+		}
+		/*
+		 * Archive filters come from -j/-x or the level. This used to run
+		 * only for the level-based choice, so -j and -x were ignored.
+		 */
+		if (pctx->archive_mode) {
+			init_filters(pctx, &ff);
+			pctx->enable_packjpg = ff.enable_packjpg;
+			pctx->enable_wavpack = ff.enable_wavpack;
+		}
+		if (pctx->lzp_preprocess || pctx->enable_delta2_encode || pctx->exe_preprocess) {
+			pctx->preprocess_mode = 1;
+			pctx->enable_analyzer = 1;
+		}
+	} else if (pctx->do_uncompress) {
+		struct filter_flags ff;
+		/*
+		 * Enable all filters while decompressing. Obviously!
+		 */
+		ff.enable_packjpg = 1;
+		ff.enable_wavpack = 1;
+		ff.exe_preprocess = 1;
+		pctx->enable_packjpg = 1;
+		pctx->enable_wavpack = 1;
+		pctx->exe_preprocess = 1;
+		init_filters(pctx, &ff);
+	}
+	pctx->inited = 1;
+
 	return (0);
 }
 
@@ -3971,141 +4129,7 @@ opt_done:
 	}
 	__atomic_store_n(&pctx->main_cancel, 0, __ATOMIC_RELAXED);
 
-	if (pctx->cksum == 0)
-		get_checksum_props(DEFAULT_CKSUM, &(pctx->cksum), &(pctx->cksum_bytes),
-				   &(pctx->mac_bytes), 0);
-
-	if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan) && pctx->cksum == CKSUM_CRC64) {
-		log_msg(LOG_ERR, 0, "CRC64 checksum is not suitable for Deduplication.");
-		return (1);
-	}
-
-	if (!pctx->encrypt_type) {
-		/*
-		 * If not encrypting we compute a header CRC32.
-		 */
-		pctx->mac_bytes = sizeof (uint32_t); // CRC32 in non-crypto mode
-	} else {
-		/*
-		 * When encrypting we do not compute a normal digest. The HMAC
-		 * is computed over header and encrypted data.
-		 */
-		pctx->cksum_bytes = 0;
-	}
-
-	if (pctx->do_compress) {
-		struct stat sbuf;
-
-		/*
-		 * Global deduplication produces a stream that cannot be decoded
-		 * from a pipe, so reject an explicit request for it when the
-		 * compressed output goes to stdout (pipe_out) or the input is a
-		 * pipe (pipe_mode), rather than emitting an undecodable archive.
-		 */
-		if ((pctx->pipe_mode || pctx->pipe_out) && pctx->enable_rabin_global) {
-			log_msg(LOG_ERR, 0,
-			    "Global Deduplication is not supported with pipe mode.");
-			return (1);
-		}
-
-		if (pctx->filename && stat(pctx->filename, &sbuf) == -1) {
-			log_msg(LOG_ERR, 1, "Cannot stat: %s", pctx->filename);
-			return (1);
-		}
-
-		if (pctx->chunksize == 0) {
-			if (pctx->level < 9) {
-				pctx->chunksize = DEFAULT_CHUNKSIZE;
-			} else {
-				pctx->chunksize = DEFAULT_CHUNKSIZE + (pctx->level - 8) *
-				    DEFAULT_CHUNKSIZE/4;
-			}
-		}
-
-		if (pctx->archive_mode) {
-			if (pctx->meta_stream != -1)
-				pctx->meta_stream = 1;
-			else
-				pctx->meta_stream = 0;
-		}
-
-		if (pctx->pipe_mode)
-			pctx->meta_stream = 0;
-
-		/*
-		 * Auto-select filters and preprocessing modes based on compresion level.
-		 * This is not done if user explicitly specified advanced options.
-		 */
-		if (!pctx->advanced_opts) {
-			/*
-			 * Selectively enable filters while archiving, depending on compression level.
-			 */
-			if (pctx->archive_mode) {
-				if (pctx->level > 10) {
-					ff.enable_packjpg = 1;
-					ff.enable_wavpack = 1;
-				}
-				if (pctx->level > 8) {
-					pctx->exe_preprocess = 1;
-					ff.exe_preprocess = 1;
-				}
-			}
-
-			/*
-			 * Enable other preprocessors based on compresion level.
-			 */
-			if (pctx->level > 4) pctx->enable_delta2_encode = 1;
-			if (pctx->level > 9) pctx->lzp_preprocess = 1;
-			if (pctx->level > 3) {
-				/*
-				 * Global deduplication cannot be decoded from a pipe,
-				 * so never auto-enable it when the compressed output
-				 * goes to stdout (pipe_out) or the input is a pipe
-				 * (pipe_mode); otherwise a plain
-				 * "pcompress -c <algo> -l<n> file -" or
-				 * "pcompress -p -c <algo> -l<n>" stream would be
-				 * undecodable via "pcompress -d -".
-				 */
-				if (!pctx->pipe_mode && !pctx->pipe_out &&
-				    pctx->chunksize >= RAB_MIN_CHUNK_SIZE_GLOBAL)
-					pctx->enable_rabin_global = 1;
-				if (pctx->chunksize >= RAB_MIN_CHUNK_SIZE) {
-					pctx->enable_rabin_scan = 1;
-					pctx->enable_rabin_split = 1;
-				}
-				pctx->rab_blk_size = 2;
-			}
-			if (pctx->level > 9) pctx->delta2_nstrides = NSTRIDES_EXTRA;
-		}
-		/*
-		 * Archive filters come from -j/-x or the level. This used to run
-		 * only for the level-based choice, so -j and -x were ignored.
-		 */
-		if (pctx->archive_mode) {
-			init_filters(pctx, &ff);
-			pctx->enable_packjpg = ff.enable_packjpg;
-			pctx->enable_wavpack = ff.enable_wavpack;
-		}
-		if (pctx->lzp_preprocess || pctx->enable_delta2_encode || pctx->exe_preprocess) {
-			pctx->preprocess_mode = 1;
-			pctx->enable_analyzer = 1;
-		}
-	} else if (pctx->do_uncompress) {
-		struct filter_flags ff;
-		/*
-		 * Enable all filters while decompressing. Obviously!
-		 */
-		ff.enable_packjpg = 1;
-		ff.enable_wavpack = 1;
-		ff.exe_preprocess = 1;
-		pctx->enable_packjpg = 1;
-		pctx->enable_wavpack = 1;
-		pctx->exe_preprocess = 1;
-		init_filters(pctx, &ff);
-	}
-	pctx->inited = 1;
-
-	return (0);
+	return (finish_settings(pctx, &ff));
 }
 
 int DLL_EXPORT
@@ -4141,7 +4165,7 @@ pc_set_log(pc_ctx_t *pctx, pc_log_fn fn, void *arg, int level)
 	pctx->log.level = level;
 }
 
-/* The first line of the last error logged for this context, or "". */
+/* The first line of the first error in the last call on this context, or "". */
 const char DLL_EXPORT *
 pc_last_error(pc_ctx_t *pctx)
 {
@@ -4216,4 +4240,288 @@ init_pc_context(pc_ctx_t *pctx, int argc, char *argv[])
 	if (rv == 1 || rv == 2)
 		finish_error(pctx, rv, PC_ERR_ARGS);
 	return (rv);
+}
+
+/* --- Typed settings and descriptor I/O (include/pcompress/pcompress.h) --- */
+
+const char DLL_EXPORT *
+pc_version(void)
+{
+	return (UTILITY_VERSION);
+}
+
+int DLL_EXPORT
+pc_api_version(void)
+{
+	return (PC_API_VERSION);
+}
+
+pc_ctx_t DLL_EXPORT *
+pc_new(void)
+{
+	pc_ctx_t *c = create_pc_context();
+
+	if (c != NULL)
+		c->level = -1;	/* pick from the algorithm, as the CLI does */
+	return (c);
+}
+
+void DLL_EXPORT
+pc_free(pc_ctx_t *ctx)
+{
+	if (ctx != NULL)
+		destroy_pc_context(ctx);
+}
+
+/* Setter failures are argument errors: record one for pc_last_error*(). */
+static int
+bad_arg(pc_ctx_t *ctx, const char *what, const char *val)
+{
+	log_state_t *prev = log_bound();
+
+	log_reset(&ctx->log);
+	log_bind(&ctx->log);
+	log_error_code(PC_ERR_ARGS);
+	log_msg(LOG_ERR, 0, "Invalid %s: %s", what, val ? val : "(null)");
+	log_bind(prev);
+	return (-1);
+}
+
+int DLL_EXPORT
+pc_set_algorithm(pc_ctx_t *ctx, const char *name)
+{
+	if (name == NULL || init_algo(ctx, name, 1) != 0)
+		return (bad_arg(ctx, "algorithm", name));
+	ctx->algo = name;	/* shortcut: kept by reference; callers pass literals */
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_level(pc_ctx_t *ctx, int level)
+{
+	char v[16];
+
+	if (level < 1 || level > MAX_LEVEL) {
+		snprintf(v, sizeof (v), "%d", level);
+		return (bad_arg(ctx, "level (1-14)", v));
+	}
+	ctx->level = level;
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_chunk_size(pc_ctx_t *ctx, uint64_t bytes)
+{
+	char v[32];
+
+	/* Same limits as -s. */
+	if (bytes != 0 && (bytes < MIN_CHUNK || bytes > EIGHTY_PCT(get_total_ram()))) {
+		snprintf(v, sizeof (v), "%" PRIu64, bytes);
+		return (bad_arg(ctx, "chunk size", v));
+	}
+	ctx->chunksize = bytes;
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_threads(pc_ctx_t *ctx, int n)
+{
+	char v[16];
+
+	if (n < 0 || n > 256) {
+		snprintf(v, sizeof (v), "%d", n);
+		return (bad_arg(ctx, "thread count (0-256)", v));
+	}
+	ctx->nthreads = n;
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_checksum(pc_ctx_t *ctx, const char *name)
+{
+	if (name == NULL || get_checksum_props(name, &ctx->cksum, &ctx->cksum_bytes,
+	    &ctx->mac_bytes, 0) == -1)
+		return (bad_arg(ctx, "checksum", name));
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_dedupe(pc_ctx_t *ctx, int mode)
+{
+	char v[16];
+
+	ctx->advanced_opts = 1;	/* explicit choice: no level-based defaults */
+	ctx->enable_rabin_scan = ctx->enable_fixed_scan = ctx->enable_rabin_global = 0;
+	ctx->enable_rabin_split = 1;
+	switch (mode) {
+	case PC_DEDUPE_NONE:
+		break;
+	case PC_DEDUPE_RABIN:
+		ctx->enable_rabin_scan = 1;
+		break;
+	case PC_DEDUPE_FIXED:
+		ctx->enable_fixed_scan = 1;
+		ctx->enable_rabin_split = 0;
+		break;
+	case PC_DEDUPE_GLOBAL:
+		ctx->enable_rabin_global = 1;
+		break;
+	default:
+		snprintf(v, sizeof (v), "%d", mode);
+		return (bad_arg(ctx, "dedupe mode", v));
+	}
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_encryption(pc_ctx_t *ctx, const char *alg, int keylen)
+{
+	char v[16];
+
+	if (alg == NULL) {
+		ctx->encrypt_type = 0;
+		return (0);
+	}
+	if ((ctx->encrypt_type = get_crypto_alg((char *)alg)) == 0)
+		return (bad_arg(ctx, "encryption algorithm", alg));
+	if (keylen == 0)
+		keylen = DEFAULT_KEYLEN;
+	if (keylen != 16 && keylen != 32) {
+		ctx->encrypt_type = 0;
+		snprintf(v, sizeof (v), "%d", keylen);
+		return (bad_arg(ctx, "key length (16 or 32)", v));
+	}
+	ctx->keylen = keylen;
+	return (0);
+}
+
+int DLL_EXPORT
+pc_set_password(pc_ctx_t *ctx, const void *pw, size_t len)
+{
+	if (ctx->pw_copy != NULL) {
+		memset(ctx->pw_copy, 0, ctx->pw_copy_len);
+		free(ctx->pw_copy);
+		ctx->pw_copy = NULL;
+	}
+	if (pw == NULL || len == 0 || len > INT32_MAX)
+		return (bad_arg(ctx, "password", "empty"));
+	if ((ctx->pw_copy = malloc(len)) == NULL)
+		return (bad_arg(ctx, "password", "out of memory"));
+	memcpy(ctx->pw_copy, pw, len);
+	ctx->pw_copy_len = len;
+	return (0);
+}
+
+/*
+ * The descriptor jobs reuse the CLI's stream ("pipe") mode: the same code
+ * path, the same format, with in_fd/out_fd in place of stdin/stdout.
+ * Stream mode cannot do global dedupe or archives, as with -p.
+ *
+ * A job leaves state behind in its context (algorithm handlers, chunk
+ * counters, crypto keys, filter tables), so each job runs in a fresh
+ * internal context that copies only the caller's settings; results
+ * (the log, last error) are copied back.
+ */
+static int
+run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
+{
+	struct filter_flags ff = { 0, 0, 0 };
+	log_state_t *prev;
+	pc_ctx_t *j;
+	int rv;
+
+	if (in_fd < 0 || out_fd < 0)
+		return (bad_arg(ctx, "descriptor", "negative"));
+	if (compress && ctx->enable_rabin_global)
+		return (bad_arg(ctx, "dedupe mode", "global dedupe needs a file, not a stream"));
+	if ((j = create_pc_context()) == NULL)
+		return (bad_arg(ctx, "context", "out of memory"));
+
+	/* The settings pc_set_*() can change; everything else is fresh. */
+	j->log.fn = ctx->log.fn;
+	j->log.arg = ctx->log.arg;
+	j->log.level = ctx->log.level;
+	j->nthreads = ctx->nthreads;
+	j->do_compress = compress;
+	j->do_uncompress = !compress;
+	j->pipe_mode = 1;
+	if (compress) {
+		const char *algo = ctx->algo ? ctx->algo : "zstd";
+
+		if (init_algo(j, algo, 1) != 0) {
+			destroy_pc_context(j);
+			return (bad_arg(ctx, "algorithm", algo));
+		}
+		j->algo = algo;
+		j->level = ctx->level >= 1 ? ctx->level :
+		    (memcmp(algo, "lz4", 3) == 0 ? 1 : 6);
+		j->chunksize = ctx->chunksize;
+		j->cksum = ctx->cksum;
+		j->cksum_bytes = ctx->cksum_bytes;
+		j->mac_bytes = ctx->mac_bytes;
+		j->advanced_opts = ctx->advanced_opts;
+		j->enable_rabin_scan = ctx->enable_rabin_scan;
+		j->enable_fixed_scan = ctx->enable_fixed_scan;
+		j->enable_rabin_split = ctx->enable_rabin_split;
+		j->encrypt_type = ctx->encrypt_type;
+		j->keylen = ctx->keylen ? ctx->keylen : DEFAULT_KEYLEN;
+	}
+	if (j->rab_blk_size == -1)
+		j->rab_blk_size = 0;
+	if (!j->enable_rabin_scan && !j->enable_fixed_scan)
+		j->enable_rabin_split = 0;
+	j->min_chunk = j->enable_rabin_scan ? RAB_MIN_CHUNK_SIZE : MIN_CHUNK;
+
+	prev = log_bound();
+	log_reset(&j->log);
+	log_bind(&j->log);
+	rv = finish_settings(j, &ff);
+	if (rv == 0) {
+		unsigned char *pw = NULL;
+
+		j->in_fd = in_fd;
+		j->out_fd = out_fd;
+		if (ctx->pw_copy != NULL) {
+			/* The job wipes what it is given: give it its own copy. */
+			if ((pw = malloc(ctx->pw_copy_len)) == NULL) {
+				log_error_code(PC_ERR_NOMEM);
+				log_msg(LOG_ERR, 0, "Out of memory");
+				rv = 1;
+			} else {
+				memcpy(pw, ctx->pw_copy, ctx->pw_copy_len);
+				pc_set_userpw(j, pw, (int)ctx->pw_copy_len);
+			}
+		}
+		if (rv == 0)
+			rv = compress ? start_compress_impl(j, NULL, j->chunksize, j->level) :
+			    start_decompress_impl(j, NULL, NULL);
+		if (pw != NULL) {
+			memset(pw, 0, ctx->pw_copy_len);
+			free(pw);
+		}
+	}
+	log_bind(prev);
+	finish_error(j, rv, PC_ERR_INTERNAL);
+	ctx->log.code = j->log.code;
+	memcpy(ctx->log.last_error, j->log.last_error, sizeof (ctx->log.last_error));
+	destroy_pc_context(j);
+	return (rv == 0 ? 0 : -1);
+}
+
+int DLL_EXPORT
+pc_compress_fd(pc_ctx_t *ctx, int in_fd, int out_fd)
+{
+	return (run_fd_job(ctx, in_fd, out_fd, 1));
+}
+
+int DLL_EXPORT
+pc_decompress_fd(pc_ctx_t *ctx, int in_fd, int out_fd)
+{
+	return (run_fd_job(ctx, in_fd, out_fd, 0));
+}
+
+void DLL_EXPORT
+pc_usage(pc_ctx_t *ctx)
+{
+	usage(ctx);
 }

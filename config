@@ -872,6 +872,8 @@ if [ "$OS" = "Darwin" ]; then
 	prog_rpath="-Wl,-rpath,$(pwd) -Wl,-rpath,${prefix}/lib -Wl,-rpath,@loader_path/../lib"
 else
 	prog_rpath="-Wl,${rpath}${prefix}/lib${dtag_val} '-Wl,${rpath}\$\$ORIGIN/../lib${dtag_val}'"
+	# Tests in buildtmp/ load the library from the build tree.
+	test_rpath="'-Wl,${rpath}\$\$ORIGIN/..${dtag_val}'"
 fi
 
 # ----------------------------------------------------------------
@@ -1384,7 +1386,38 @@ if [ $is_x86 -eq 1 ]; then
 	fi
 fi
 
+# Export only the public API from the shared library (libpcompress.map);
+# the bundled zstd/lz4/libbsc/libarchive symbols stay local.
+echo "Checking how to restrict exported symbols ..."
+export_flags=""
+printf 'int pc_probe(void){return 0;}\n' > .exp_probe.c
+if [ "$OS" = "Darwin" ]; then
+	# The map lists several names per line; Mach-O names carry a leading _.
+	sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:\|/\*' | \
+	    tr ';' '\n' | tr -d ' \t' | sed -e '/^$/d' -e 's/^/_/' > libpcompress.exports
+	# The probe defines none of the listed names; ld64 only warns for that
+	# with -w. Its exit status says whether the option itself works.
+	if ${GCC} -shared -o .exp_probe.so .exp_probe.c -Wl,-w \
+	    -Wl,-exported_symbols_list,libpcompress.exports >/dev/null 2>&1; then
+		export_flags="-Wl,-exported_symbols_list,\$(CURDIR)/libpcompress.exports"
+	fi
+elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
+    -Wl,--version-script,libpcompress.map >/dev/null 2>&1; then
+	export_flags="-Wl,--version-script,\$(CURDIR)/libpcompress.map"
+elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
+    -Wl,-M,libpcompress.map >/dev/null 2>&1; then
+	export_flags="-Wl,-M,\$(CURDIR)/libpcompress.map"	# illumos ld
+fi
+rm -f .exp_probe.c .exp_probe.so
+echo "  exports: ${export_flags:-all (linker has no version-script support)}"
+
+pc_version=$(sed -n 's/.*UTILITY_VERSION[^"]*"\([^"]*\)".*/\1/p' pcompress.h)
+sed -e "s#@PREFIX@#${prefix}#" -e "s#@VERSION@#${pc_version}#" \
+    pkgconfig/libpcompress.pc.in > libpcompress.pc
+
 sed "
+s#@EXPORT_FLAGS@#${export_flags}#g
+s#@TEST_RPATH@#${test_rpath}#g
 s#@GCC@#${GCC}#g
 s#@GPP@#${GPP}#g
 s#@CRYPTO_ASM_COMPILE@#${crypto_asm_compile}#g

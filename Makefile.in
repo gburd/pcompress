@@ -267,7 +267,7 @@ BAKFILES = *~ lzma/*~ lzfx/*~ lz4/lib/*~ rabin/*~ bsdiff/*~ filters/lzp/*~ utils
 
 RM = rm -f
 RM_RF = rm -rf
-BASE_CPPFLAGS = -I. -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I./rabin -I./bsdiff -DNODEFAULT_PROPS \
+BASE_CPPFLAGS = -I. -I./include -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I./rabin -I./bsdiff -DNODEFAULT_PROPS \
 	-DFILE_OFFSET_BITS=64 -D_REENTRANT @SSE_INTRIN_FLAG@ -D_LZMA_PROB32 @ZSTD_CPPFLAGS@ \
 	-I./filters/lzp @LIBBSCCPPFLAGS@ -I./crypto/skein -I./utils -I./crypto/sha2 \
 	-I./crypto/scrypt -I./crypto/aes -I./crypto @KEYLEN@ -I./rabin/global \
@@ -505,8 +505,8 @@ $(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
 $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 	@AR@ rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
-$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB)
-	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS)
+$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
+	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
 	ln -sf $(LIB).$(LIBVER) $(LIB)
 
 ./buildtmp/$(PROG): $(LIB) $(PROGOBJS)
@@ -534,11 +534,31 @@ test-unit-build: $(LIB)
 		$(LINK.PROG) -o buildtmp/$$t buildtmp/$$t.o $(OBJS) $(LDLIBS) || exit 1; \
 	done
 
-test-unit: test-unit-build
-	@for t in $(UNIT_TESTS); do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
+# Public-API test: only include/ on the include path, linked against the
+# shared library like any other program.
+buildtmp/test_public: test/unit/test_public.c include/pcompress/pcompress.h $(LIB)
+	mkdir -p buildtmp
+	$(COMPILE) $(GEN_OPT) -Iinclude -I./test/unit test/unit/test_public.c -o buildtmp/test_public.o
+	$(LINK.PROG) -o $@ buildtmp/test_public.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
+
+test-unit: test-unit-build buildtmp/test_public
+	@for t in $(UNIT_TESTS) test_public; do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
 
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)
+
+# ABI check (libabigail): compare the shared library's public ABI with
+# abi/libpcompress.abi. Needs a build with debug info (CFLAGS=-g). Fails on
+# an incompatible change (removed or changed function, changed type); adding
+# functions is allowed. After an intended change: make abi-update.
+abi-check: $(LIB)
+	abidw --headers-dir include/pcompress --drop-private-types --drop-undefined-syms --exported-interfaces-only \
+	    --out-file buildtmp/libpcompress.abi $(LIB).$(LIBVER)
+	abidiff --no-added-syms --drop-private-types abi/libpcompress.abi buildtmp/libpcompress.abi
+
+abi-update: $(LIB)
+	abidw --headers-dir include/pcompress --drop-private-types --drop-undefined-syms --exported-interfaces-only \
+	    --out-file abi/libpcompress.abi $(LIB).$(LIBVER)
 
 # What packagers run: fast, no network, no root. Sequential: under make -j
 # the two would relink/rebuild the library while the other is running it.
@@ -611,7 +631,7 @@ clean: topclean
 	exit 0
 
 distclean: clean
-	$(RM) Makefile
+	$(RM) Makefile libpcompress.exports libpcompress.pc
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM_RF) buildtmp
 	(cd @LIBARCHIVE_DIR@; make distclean; rm -rf Makefile.orig tar test test_utils cpio libarchive/test)
@@ -630,13 +650,21 @@ install: $(PROG)
 	@chmod 0555 $(DESTDIR)$(PREFIX)/lib/$(LIB).$(LIBVER)
 	@ln -sf $(LIB).$(LIBVER) $(DESTDIR)$(PREFIX)/lib/$(LIB)
 
+	@mkdir -p $(DESTDIR)$(PREFIX)/include/pcompress $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	@cp include/pcompress/pcompress.h $(DESTDIR)$(PREFIX)/include/pcompress/
+	@chmod 0444 $(DESTDIR)$(PREFIX)/include/pcompress/pcompress.h
+	@cp libpcompress.pc $(DESTDIR)$(PREFIX)/lib/pkgconfig/
+	@chmod 0444 $(DESTDIR)$(PREFIX)/lib/pkgconfig/libpcompress.pc
+
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/doc/$(PROG)
 	@chmod 0755 $(DESTDIR)$(PREFIX)/share $(DESTDIR)$(PREFIX)/share/doc $(DESTDIR)$(PREFIX)/share/doc/$(PROG)
 	@cp README.md $(DESTDIR)$(PREFIX)/share/doc/$(PROG)/README
 	@chmod 0444 $(DESTDIR)$(PREFIX)/share/doc/$(PROG)/README
 
-	@mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man3
 	@cp pcompress.1 $(DESTDIR)$(PREFIX)/share/man/man1/pcompress.1
 	@chmod 0444 $(DESTDIR)$(PREFIX)/share/man/man1/pcompress.1
+	@cp libpcompress.3 $(DESTDIR)$(PREFIX)/share/man/man3/libpcompress.3
+	@chmod 0444 $(DESTDIR)$(PREFIX)/share/man/man3/libpcompress.3
 
 

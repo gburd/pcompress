@@ -3,7 +3,7 @@ files.lst
 .seg*
 *.o
 *.so
-pcompress
+/pcompress
 libpcompress*
 Makefile
 test.log
@@ -50,3 +50,8 @@ warnings_report.txt
 .vscode
 .ripgreprc
 .mcp.json
+# Sources the patterns above would hide.
+!/libpcompress.map
+!/libpcompress.3
+!/pkgconfig/libpcompress.pc.in
+!/abi/libpcompress.abi
