@@ -140,7 +140,7 @@ parse_numeric(int64_t *val, const char *str)
 char *
 bytes_to_size(uint64_t bytes)
 {
-	static char num[20];
+	static __thread char num[24];	/* per thread: concurrent contexts log stats */
 	uint64_t kilobyte = 1024;
 	uint64_t megabyte = kilobyte * 1024;
 	uint64_t gigabyte = megabyte * 1024;

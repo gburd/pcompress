@@ -57,6 +57,7 @@
 #endif
 
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -85,9 +86,24 @@ extern void aesni_encrypt(const unsigned char *in, unsigned char *out, const AES
 setkey_func_ptr enc_setkey;
 encrypt_func_ptr enc_encrypt;
 
+static processor_cap_t *aes_pc;
+static pthread_once_t aes_once = PTHREAD_ONCE_INIT;
+static void aes_module_init_once(void);
+
+/* Called per init_crypto(); the dispatch pointers are process-wide, set once. */
 void
 aes_module_init(processor_cap_t *pc)
 {
+	aes_pc = pc;
+	pthread_once(&aes_once, aes_module_init_once);
+}
+
+static void
+aes_module_init_once(void)
+{
+	processor_cap_t *pc = aes_pc;
+
+	(void) pc;	/* unused without the x86 assembly */
 	enc_setkey = AES_set_encrypt_key;
 	enc_encrypt = AES_encrypt;
 

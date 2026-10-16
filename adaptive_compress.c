@@ -126,36 +126,36 @@ adapt_set_analyzer_ctx(void *data, analyzer_ctx_t *actx)
 	adat->actx = actx;
 }
 
+/*
+ * shortcut: the counters are process-wide (stats_func_ptr has no context),
+ * so with several jobs in one process -C shows their sum. They are never
+ * reset: a reset raced with other jobs' counting. Per-context stats come
+ * with the Phase 2 API.
+ */
+#define	CNT(x)	__atomic_load_n(&(x), __ATOMIC_RELAXED)
 void
 adapt_stats(int show)
 {
-	if (show) {
-		if (bzip2_count > 0 || bsc_count > 0 || ppmd_count > 0 || lzma_count > 0
+	if (!show)
+		return;
+	if (CNT(bzip2_count) > 0 || CNT(bsc_count) > 0 || CNT(ppmd_count) > 0 ||
+	    CNT(lzma_count) > 0
 #ifdef ENABLE_PC_ZSTD
-		    || zstd_count > 0
+	    || CNT(zstd_count) > 0
 #endif
-		    ) {
-			log_msg(LOG_INFO, 0, "Adaptive mode stats:");
-			log_msg(LOG_INFO, 0, "	BZIP2 chunk count: %u", bzip2_count);
-			log_msg(LOG_INFO, 0, "	LIBBSC chunk count: %u", bsc_count);
-			log_msg(LOG_INFO, 0, "	PPMd chunk count: %u", ppmd_count);
-			log_msg(LOG_INFO, 0, "	LZMA chunk count: %u", lzma_count);
-			log_msg(LOG_INFO, 0, "	LZ4 chunk count: %u", lz4_count);
+	    ) {
+		log_msg(LOG_INFO, 0, "Adaptive mode stats:");
+		log_msg(LOG_INFO, 0, "	BZIP2 chunk count: %u", CNT(bzip2_count));
+		log_msg(LOG_INFO, 0, "	LIBBSC chunk count: %u", CNT(bsc_count));
+		log_msg(LOG_INFO, 0, "	PPMd chunk count: %u", CNT(ppmd_count));
+		log_msg(LOG_INFO, 0, "	LZMA chunk count: %u", CNT(lzma_count));
+		log_msg(LOG_INFO, 0, "	LZ4 chunk count: %u", CNT(lz4_count));
 #ifdef ENABLE_PC_ZSTD
-			log_msg(LOG_INFO, 0, "	ZSTD chunk count: %u", zstd_count);
+		log_msg(LOG_INFO, 0, "	ZSTD chunk count: %u", CNT(zstd_count));
 #endif
-		} else {
-			log_msg(LOG_INFO, 0, "\n");
-		}
+	} else {
+		log_msg(LOG_INFO, 0, "\n");
 	}
-	lzma_count = 0;
-	bzip2_count = 0;
-	bsc_count = 0;
-	ppmd_count = 0;
-	lz4_count = 0;
-#ifdef ENABLE_PC_ZSTD
-	zstd_count = 0;
-#endif
 }
 
 void
@@ -219,14 +219,6 @@ adapt_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		*data = adat;
 		if (*level > 9) *level = 9;
 	}
-	lzma_count = 0;
-	bzip2_count = 0;
-	ppmd_count = 0;
-	bsc_count = 0;
-	lz4_count = 0;
-#ifdef ENABLE_PC_ZSTD
-	zstd_count = 0;
-#endif
 	return (rv);
 }
 
@@ -280,18 +272,6 @@ adapt2_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		*data = adat;
 		if (*level > 9) *level = 9;
 	}
-	/*
-	 * shortcut: -C stats are process-wide, so concurrent adapt jobs mix
-	 * their counts; move them into the context with the Phase 2 API.
-	 */
-	__atomic_store_n(&lzma_count, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&bzip2_count, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&ppmd_count, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&bsc_count, 0, __ATOMIC_RELAXED);
-	__atomic_store_n(&lz4_count, 0, __ATOMIC_RELAXED);
-#ifdef ENABLE_PC_ZSTD
-	__atomic_store_n(&zstd_count, 0, __ATOMIC_RELAXED);
-#endif
 	return (rv);
 }
 

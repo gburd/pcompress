@@ -200,7 +200,6 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
     int pipe_mode, int nthreads, size_t freeram, archive_config_t **shared_arc) {
 	dedupe_context_t *ctx;
 	archive_config_t *arc;
-	uint32_t i;
 
 	if (rab_blk_sz < 0 || rab_blk_sz > 5)
 		rab_blk_sz = RAB_BLK_DEFAULT;
