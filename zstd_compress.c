@@ -32,6 +32,7 @@
 #include <pcompress.h>
 #include <allocator.h>
 #include <zstd.h>
+#include <zstd_errors.h>
 
 /*
  * Maximum chunk size for Zstandard.  ZSTD itself can handle very large
@@ -206,8 +207,13 @@ zstd_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	    src, (size_t)srclen);
 
 	if (ZSTD_isError(rv)) {
-		log_msg(LOG_ERR, 0, "ZSTD compress error: %s\n",
-		    ZSTD_getErrorName(rv));
+		/*
+		 * dst is sized to the input: "does not fit" just means the
+		 * chunk is incompressible and is stored raw. Not an error.
+		 */
+		if (ZSTD_getErrorCode(rv) != ZSTD_error_dstSize_tooSmall)
+			log_msg(LOG_ERR, 0, "ZSTD compress error: %s\n",
+			    ZSTD_getErrorName(rv));
 		return (-1);
 	}
 
