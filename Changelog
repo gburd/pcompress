@@ -1,6 +1,8 @@
 == 4.0.2 Release ==
 'make -j check' no longer relinks libpcompress while the tests run it
   (archive tests failed under parallel make, e.g. in nixpkgs' ofborg).
+zstd no longer prints "Destination buffer is too small" for every
+  incompressible chunk (output was always correct).
 
 == 4.0.1 Release ==
 Binary tarballs run from wherever they are unpacked: the binary finds
