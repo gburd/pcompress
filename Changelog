@@ -1,3 +1,27 @@
+== 4.1.0 (unreleased) ==
+Library:
+libpcompress is now a library other programs can use: an installed header
+  <pcompress/pcompress.h>, pkg-config file and libpcompress(3) man page.
+  New API: pc_new/pc_free, typed setters (pc_set_algorithm, _level,
+  _chunk_size, _threads, _checksum, _dedupe, _encryption, _password),
+  pc_compress_fd/pc_decompress_fd, pc_set_log, pc_last_error,
+  pc_last_error_code (stable pc_error_t classes), pc_strerror,
+  pc_cleanup_tempfiles, pc_version. The command-line style API is kept.
+Several contexts can run at once in one process (they used to crash).
+Only the public API is exported; the bundled zstd, lz4, libbsc and
+  libarchive symbols are hidden, so programs can link their own copies.
+The library no longer installs signal handlers, calls exit() or chdir().
+The slab allocator was removed (process-global, and no faster than
+  malloc); -M, ALLOCATOR_BYPASS and --disable-allocator are ignored.
+
+Fixes:
+A corrupt file could, about 1 time in 200, decompress with exit status 0
+  and truncated output.
+-j and -x (packJPG/packPNM, Dispack) were ignored; packJPG also did
+  nothing on arm64, where char is unsigned.
+A crafted archive with absolute member paths could write outside the
+  extraction directory.
+
 == 4.0.2 Release ==
 'make -j check' no longer relinks libpcompress while the tests run it
   (archive tests failed under parallel make, e.g. in nixpkgs' ofborg).

@@ -95,6 +95,24 @@ Left for later, recorded as `shortcut:` in the code:
 - **Done when:** the CLI links only against the public header;
   `abi-compliance-checker` runs in CI.
 
+**Status: done (c8f8bb2).**
+- `include/pcompress/pcompress.h`: an opaque `pc_ctx_t`, `pc_version()`
+  and `PC_API_VERSION`.
+- Typed setters, plus `pc_compress_fd()`/`pc_decompress_fd()`.
+- Exports are limited to `libpcompress.map` (32 symbols, down from 733).
+- `make install` adds the header, `libpcompress.pc` and `libpcompress(3)`.
+- `main.c` includes only the public header.
+- CI runs `make abi-check` (libabigail rather than
+  abi-compliance-checker: it is packaged everywhere, including nixpkgs).
+  The same job builds `examples/pzcat.c` against the installed copy.
+
+Not done, deliberately:
+- Callback I/O (`pc_reader_fn`/`pc_writer_fn`). Descriptors cover pipes,
+  sockets and files, and a callback wrapper is a pipe plus a thread in
+  the caller.
+- Global dedupe and archives through the fd API. Both need a seekable
+  file; they remain available through the command-line style API.
+
 ### Phase 3: Chunk-level primitives (fixes P7)
 
 - Content-defined chunker as a streaming API:

@@ -71,7 +71,12 @@ Each worker owns three semaphores:
 | `write_done_sem` | writer    | buffers may be reused             |
 
 `len_cmp == 0` in a worker's output tells the writer to stop. Workers and
-the writer check `main_cancel` after every wait.
+the writer check `main_cancel` after every wait. At shutdown the main
+thread sets each worker's `cancel` and posts its semaphores; it does not
+touch `len_cmp`, which belongs to the worker, so the writer tests
+`cancel` first. Flags read by one thread and set by another
+(`main_cancel`, `t_errored`, `cancel`, `arc_closed`) use atomic loads and
+stores.
 
 ### Global dedupe token ring
 
@@ -96,10 +101,42 @@ Rules that keep the ring live:
 
 A worker that fails sets `pctx->t_errored = 1` and `pctx->main_cancel =
 1`, sets `len_cmp = 0` and posts `cmp_done_sem`. The writer does the same
-for a failed write. `start_compress`/`start_decompress` return
-`t_errored`, which becomes the exit status. Any new failure path must do
-all of this; setting only `main_cancel` makes pcompress stop *and exit
-0*.
+for a failed write. `start_compress`/`start_decompress` read `t_errored`
+*after* joining the threads and return it, which becomes the exit status.
+Any new failure path must do all of this; setting only `main_cancel`
+makes pcompress stop *and exit 0*. (Reading `t_errored` before the joins
+let about 1 in 200 corrupt files exit 0 with truncated output.)
+
+Before logging an error, a failure site may call
+`log_error_code(PC_ERR_...)`; the first class recorded in a call is what
+`pc_last_error_code()` returns. An error logged with `errno` counts as
+`PC_ERR_IO` unless a site said otherwise.
+
+## Library and contexts
+
+One `pc_ctx_t` is one job; the struct is private (`pcompress.h`) and
+programs see only `include/pcompress/pcompress.h`. Contexts are
+independent so several can run in one process:
+
+- Set once per process with `pthread_once`: the CPU probe, the hash and
+  AES dispatch tables and the Rabin polynomial tables. They depend only
+  on the CPU.
+- Per context: settings, the global-dedupe index (`pctx->dedupe_index`,
+  shared only by that job's workers), the archive filter table, the log
+  sink and level, the last error, and option parsing (`pc_getopt`, a
+  reentrant replacement for `getopt`).
+- Every library thread (worker, writer, archiver, extractor, metadata)
+  starts with `log_bind(&pctx->log)`, so `log_msg()` anywhere reaches the
+  right context; the public entry points bind it for the caller's thread.
+- The library does not install signal handlers, `exit()` or `chdir()`.
+  Extraction prefixes entry paths with the target directory instead.
+- packJPG and packPNM keep their state in file statics, so calls into
+  them are serialised by a mutex. The adaptive `-C` counters are shared.
+
+`pc_compress_fd()`/`pc_decompress_fd()` run the CLI's stream (`-p`) path
+with the caller's descriptors in place of stdin/stdout, in a fresh
+internal context built from the caller's settings, so one `pc_ctx_t` can
+run many jobs. Only the symbols in `libpcompress.map` are exported.
 
 ## Deduplication
 

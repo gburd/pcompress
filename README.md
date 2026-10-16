@@ -79,7 +79,7 @@ libbsc, libarchive, optionally WavPack) are git submodules:
     make -j
     make test-unit                  # unit tests
     (cd test && sh run_all_tests.sh integration)
-    make install PREFIX=/usr/local  # binary, libpcompress.so.1, pcompress(1)
+    make install PREFIX=/usr/local  # binary, library, header, pkg-config, man pages
 
 Useful `./config` options: `--portable` (no host-CPU tuning; for
 packages), `--enable-lto`, `--enable-debug`, `--enable-coverage` (then
@@ -102,6 +102,27 @@ compressors also build with MSVC on Windows ARM64, but a full Windows port
 
 Documentation: `pcompress(1)` (`man ./pcompress.1`) for usage, and
 `DESIGN.md` for the stream format, threading model and invariants.
+
+Using the library
+-----------------
+
+`make install` puts `<pcompress/pcompress.h>`, `libpcompress.so.1` and
+`libpcompress.pc` in place. Several jobs can run at once in one process,
+each with its own `pc_ctx_t`:
+
+    pc_ctx_t *c = pc_new();
+    pc_set_algorithm(c, "zstd");
+    pc_set_level(c, 9);
+    if (pc_compress_fd(c, in_fd, out_fd) != 0)
+        fprintf(stderr, "%s\n", pc_last_error(c));
+    pc_free(c);
+
+    cc $(pkg-config --cflags libpcompress) x.c $(pkg-config --libs libpcompress)
+
+Only that API is exported; the bundled zstd, lz4, libbsc and libarchive
+stay internal, so a program can use its own copies. See `libpcompress(3)`
+and `examples/pzcat.c`. `make abi-check` compares the library's ABI with
+`abi/libpcompress.abi`.
 
 LICENSING
 =========
