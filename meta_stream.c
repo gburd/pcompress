@@ -197,18 +197,18 @@ compress_and_write(meta_ctx_t *mctx)
 void
 meta_ctx_close_sink_channel(meta_ctx_t *mctx)
 {
-	if (mctx->meta_pipes[SINK_CHANNEL]) {
+	if (mctx->meta_pipes[SINK_CHANNEL] != -1) {
 		close(mctx->meta_pipes[SINK_CHANNEL]);
-		mctx->meta_pipes[SINK_CHANNEL] = 0;
+		mctx->meta_pipes[SINK_CHANNEL] = -1;
 	}
 }
 
 void
 meta_ctx_close_src_channel(meta_ctx_t *mctx)
 {
-	if (mctx->meta_pipes[SRC_CHANNEL]) {
+	if (mctx->meta_pipes[SRC_CHANNEL] != -1) {
 		close(mctx->meta_pipes[SRC_CHANNEL]);
-		mctx->meta_pipes[SRC_CHANNEL] = 0;
+		mctx->meta_pipes[SRC_CHANNEL] = -1;
 	}
 }
 
@@ -638,11 +638,16 @@ meta_ctx_done(meta_ctx_t *mctx)
 {
 	if (mctx == NULL)	/* setup failed before the context was created */
 		return (0);
+	/*
+	 * Closing our end gives the thread EOF on its end. Its end and
+	 * comp_fd are closed only after the join: closing them while it
+	 * still reads lets the fd number be reused by another context in the
+	 * process, and the thread then reads someone else's file. comp_fd
+	 * belongs to the caller (start_decompress closes it).
+	 */
 	meta_ctx_close_src_channel(mctx);
-	meta_ctx_close_sink_channel(mctx);
-	if (!mctx->do_compress)
-		close(mctx->comp_fd);
 	pthread_join(mctx->meta_thread, NULL);
+	meta_ctx_close_sink_channel(mctx);
 	meta_ctx_free(mctx);
 	return (0);
 }

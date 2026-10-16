@@ -94,6 +94,23 @@ for algo in lz4 zlib lzma zstd; do
 done
 
 echo ""
+echo "--- Listing (-i) ---"
+# With a metadata stream (the default) -i reads only metadata, on a second
+# fd; closing that fd too early once made the listing empty.
+for t in "" "-T"; do
+	label="list${t:+/$t}"
+	rm -f "${ARCDIR}.pz"
+	if $PCOMPRESS -a -c lz4 -l1 $t "$ARCDIR" 2>/dev/null &&
+	    $PCOMPRESS -i "${ARCDIR}.pz" 2>/dev/null | grep -q 'subdir/nested.txt'; then
+		log_pass "$label"
+	else
+		log_fail "$label: member missing from -i output"
+	fi
+done
+rm -f "${ARCDIR}.pz"
+
+
+echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
 echo "========================================="

@@ -1911,7 +1911,6 @@ uncomp_done:
 		if (filename && compfd != -1) close(compfd);
 		if (uncompfd != -1) close(uncompfd);
 	}
-	if (compfd2 != -1) close(compfd2);
 	if (pctx->archive_mode) {
 		if (pctx->archive_thread_started) {
 			/*
@@ -1942,6 +1941,8 @@ uncomp_done:
 		Sem_Destroy(&(pctx->read_sem));
 		Sem_Destroy(&(pctx->write_sem));
 	}
+	/* The metadata thread reads compfd2 until meta_ctx_done() above. */
+	if (compfd2 != -1) close(compfd2);
 
 	if (!pctx->hide_cmp_stats) show_compression_stats(pctx);
 
