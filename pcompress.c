@@ -1854,7 +1854,6 @@ redo:
 		}
 	}
 uncomp_done:
-	if (pctx->t_errored) err = pctx->t_errored;
 	if (thread) {
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
@@ -1870,6 +1869,12 @@ uncomp_done:
 		if (thread == 2)
 			pthread_join(writer_thr, NULL);
 	}
+	/*
+	 * Only after the joins: a worker that fails verification sets
+	 * t_errored, and reading it earlier let a corrupt file exit 0 with
+	 * truncated output (~0.5% of runs).
+	 */
+	if (pctx->t_errored) err = pctx->t_errored;
 
 	/*
 	 * Ownership and mode of target should be same as original.
@@ -3032,7 +3037,6 @@ comp_done:
 		archiver_close(pctx);
 	}
 
-	if (pctx->t_errored) err = pctx->t_errored;
 	if (thread) {
 		for (i = 0; i < nprocs; i++) {
 			tdat = dary[i];
@@ -3050,6 +3054,8 @@ comp_done:
 		if (thread == 2)
 			pthread_join(writer_thr, NULL);
 	}
+	/* After the joins, as in start_decompress(): workers set t_errored. */
+	if (pctx->t_errored) err = pctx->t_errored;
 
 	if (err) {
 		if (compfd != -1 && !pctx->pipe_mode && !pctx->pipe_out) {
