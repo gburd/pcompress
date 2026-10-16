@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <pthread.h>
 #include <utils.h>
 
 #ifndef _MPLV2_LICENSE_
@@ -65,6 +66,8 @@ typedef unsigned char uchar_t;
 
 	vice versa for output streams! */
 
+static pthread_mutex_t codec_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /*
  * Helper routine to bridge to packPNM C++ lib, without changing packJPG itself.
  * packPNM has same API interface as packJPG. Just the function names are different.
@@ -73,12 +76,15 @@ size_t
 packpnm_filter_process(uchar_t *in_buf, size_t len, uchar_t **out_buf)
 {
 	unsigned int len1;
+	bool ok;
 
+	/* The codec keeps all its state in file statics: one call at a time. */
+	pthread_mutex_lock(&codec_lock);
 	ppnlib_init_streams(in_buf, 1, len, *out_buf, 1);
 	len1 = len;
-	if (!ppnlib_convert_stream2mem(out_buf, &len1, NULL))
-		return (0);
-	if (len1 == len)
+	ok = ppnlib_convert_stream2mem(out_buf, &len1, NULL);
+	pthread_mutex_unlock(&codec_lock);
+	if (!ok || len1 == len)
 		return (0);
 	return (len1);
 }

@@ -177,6 +177,26 @@ else
 	log_fail "archive create"
 fi
 
+# A hand-made archive with an absolute path and a "../" entry must extract
+# only inside the target directory, also for a relative target with "..".
+CRAFT="$(cd "$(dirname "$0")/.." && pwd)/tools/craft_hostile_archive.py"
+if command -v python3 >/dev/null 2>&1; then
+	mkdir -p "$T/esc" "$T/xa/sub" "$T/xb"
+	if python3 "$CRAFT" "$PCOMPRESS" "$T/evil.pz" "$T/esc" 2>/dev/null; then
+		(cd "$T/xa/sub" && $PCOMPRESS -d "$T/evil.pz" ../../xb >/dev/null 2>&1)
+		if [ -z "$(ls "$T/esc")" ] && [ ! -e "$T/dotdot_escape" ] &&
+		    [ ! -e "$T/xa/dotdot_escape" ] && [ -f "$T/xb/ok/inside" ]; then
+			log_pass "hostile archive paths stay inside the target"
+		else
+			log_fail "hostile archive: escaped ($(ls "$T/esc" "$T" | tr '\n' ' '))"
+		fi
+	else
+		log_fail "could not build the hostile archive"
+	fi
+else
+	SKIP=$((SKIP + 1)); echo "  SKIP: hostile archive (no python3)"
+fi
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

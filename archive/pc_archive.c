@@ -61,14 +61,17 @@
 #include <ftw.h>
 #include <stdint.h>
 
-static int inited = 0, filters_inited = 0;
+static int inited = 0;
 static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct ext_hash_entry {
 	uint64_t extnum;
 	int type;
 } *exthtab = NULL;
 
-static struct type_data typetab[NUM_SUB_TYPES+1];
+/* No filters: used when a context has no table. */
+static struct type_data no_filters[NUM_SUB_TYPES+1];
+#define	FILTERS(pctx)	((pctx)->filter_table ? \
+	(struct type_data *)(pctx)->filter_table : no_filters)
 
 /*
 AE_IFREG   Regular file
@@ -1042,10 +1045,11 @@ setup_extractor(pc_ctx_t *pctx)
 }
 
 static ssize_t
-process_by_filter(int fd, int *typ, struct archive *target_arc,
+process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
     struct archive *source_arc, struct archive_entry *entry,
     filter_output_t *fout, int cmp, int level)
 {
+	struct type_data *typetab = FILTERS(pctx);
 	struct filter_info fi;
 	int64_t wrtn;
 
@@ -1117,12 +1121,12 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 	}
 
 	if (typ != TYPE_UNKNOWN) {
-		if (typetab[(typ >> 3)].filter_func != NULL) {
+		if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
 			int64_t rv;
-			char *fname = typetab[(typ >> 3)].filter_name;
+			char *fname = FILTERS(pctx)[(typ >> 3)].filter_name;
 
 			pctx->ctype = typ;
-			rv = process_by_filter(fd, &(pctx->ctype), arc, NULL, entry,
+			rv = process_by_filter(pctx, fd, &(pctx->ctype), arc, NULL, entry,
 			    &fout, 1, pctx->level);
 			if (rv != FILTER_RETURN_SKIP &&
 			    rv != FILTER_RETURN_ERROR) {
@@ -1195,12 +1199,12 @@ do_map:
 			pctx->ctype = detect_type_by_data(src, len);
 			typ = pctx->ctype;
 			if (typ != TYPE_UNKNOWN) {
-				if (typetab[(typ >> 3)].filter_func != NULL) {
+				if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
 					int64_t rv;
-					char *fname = typetab[(typ >> 3)].filter_name;
+					char *fname = FILTERS(pctx)[(typ >> 3)].filter_name;
 
 					munmap(mapbuf, len);
-					rv = process_by_filter(fd, &(pctx->ctype), arc, NULL, entry,
+					rv = process_by_filter(pctx, fd, &(pctx->ctype), arc, NULL, entry,
 					    &fout, 1, pctx->level);
 					if (rv != FILTER_RETURN_SKIP &&
 					    rv != FILTER_RETURN_ERROR) {
@@ -1453,10 +1457,10 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 
 	ret = ARCHIVE_OK;
 	if (typ != TYPE_UNKNOWN) {
-		if (typetab[(typ >> 3)].filter_func != NULL) {
+		if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
 			int64_t rv;
 
-			rv = process_by_filter(-1, &typ, aw, ar, entry, &fout, 0, 0);
+			rv = process_by_filter(pctx, -1, &typ, aw, ar, entry, &fout, 0, 0);
 			if (rv == FILTER_RETURN_ERROR) {
 				archive_set_error(ar, archive_errno(aw),
 				    "%s", archive_error_string(aw));
@@ -1477,7 +1481,7 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 				if (pctx->err_paths_fd) {
 					fprintf(pctx->err_paths_fd, "%s,%s\n",
 					    archive_entry_pathname(entry),
-					    typetab[(typ >> 3)].filter_name);
+					    FILTERS(pctx)[(typ >> 3)].filter_name);
 				}
 				ret = ARCHIVE_WARN;
 			}
@@ -1530,7 +1534,7 @@ archive_extract_entry(struct archive *a, struct archive_entry *entry,
 	if (archive_entry_has_xattr(entry, FILTER_XATTR_ENTRY,
 	    (const void **)&filter_name, &name_size))
 	{
-		typ = type_tag_from_filter_name(typetab, filter_name, name_size);
+		typ = type_tag_from_filter_name(FILTERS(pctx), filter_name, name_size);
 		archive_entry_xattr_delete_entry(entry, FILTER_XATTR_ENTRY);
 	}
 	r = archive_write_header(ad, entry);
@@ -1616,13 +1620,45 @@ archive_list_entry(struct archive *a, struct archive_entry *entry, int typ)
 }
 
 /*
+ * Put an entry (and its hardlink target) under dir. Leading '/' is dropped
+ * first, as when the archive was made, so a crafted absolute path cannot
+ * escape dir; ARCHIVE_EXTRACT_SECURE_NODOTDOT/SYMLINKS reject the rest.
+ */
+static int
+prefix_path(const char *dir, const char *n, char *p, size_t plen)
+{
+	while (*n == '/')
+		n++;
+	return (snprintf(p, plen, "%s" PATHSEP_STR "%s", dir, n) >= (int)plen ? -1 : 0);
+}
+
+static int
+prefix_entry(struct archive_entry *entry, const char *dir)
+{
+	char p[PATH_MAX];
+	const char *n;
+
+	if ((n = archive_entry_pathname(entry)) == NULL)
+		return (0);
+	if (prefix_path(dir, n, p, sizeof (p)) == -1)
+		return (-1);
+	archive_entry_copy_pathname(entry, p);
+	if ((n = archive_entry_hardlink(entry)) != NULL) {
+		if (prefix_path(dir, n, p, sizeof (p)) == -1)
+			return (-1);
+		archive_entry_copy_hardlink(entry, p);
+	}
+	return (0);
+}
+
+/*
  * Extract Thread function. Read an uncompressed archive from the decompressor stage
  * and extract members to disk.
  */
 static void *
 extractor_thread_func(void *dat) {
 	pc_ctx_t *pctx = (pc_ctx_t *)dat;
-	char cwd[PATH_MAX], got_cwd;
+	char fpath[PATH_MAX], todir[PATH_MAX];
 	int flags, rv;
 	uint32_t ctr;
 	struct archive_entry *entry;
@@ -1630,7 +1666,6 @@ extractor_thread_func(void *dat) {
 
 	/* Silence compiler. */
 	awd = NULL;
-	got_cwd = 0;
 
 	if (!pctx->list_mode) {
 		flags = ARCHIVE_EXTRACT_TIME;
@@ -1654,12 +1689,6 @@ extractor_thread_func(void *dat) {
 		if (pctx->no_overwrite_newer)
 			flags |= ARCHIVE_EXTRACT_NO_OVERWRITE_NEWER;
 
-		got_cwd = 1;
-		if (getcwd(cwd, PATH_MAX) == NULL) {
-			log_msg(LOG_WARN, 1, "Cannot get current directory.");
-			got_cwd = 0;
-		}
-
 		awd = archive_write_disk_new();
 		archive_write_disk_set_options(awd, flags);
 		archive_write_disk_set_standard_lookup(awd);
@@ -1669,11 +1698,16 @@ extractor_thread_func(void *dat) {
 	archive_read_open(arc, pctx, arc_open_callback, extract_read_callback, extract_close_callback);
 
 	/*
-	 * Change directory after opening the archive, otherwise archive_read_open() can fail
-	 * for relative paths.
+	 * Entries are extracted under to_filename by prefixing their paths;
+	 * chdir() would move every thread in the process (and every other
+	 * context running in it).
 	 */
 	if (!pctx->list_mode) {
-		if (chdir(pctx->to_filename) == -1) {
+		struct stat sb;
+
+		/* Absolute, so the ".." check applies to the entry, not the target. */
+		if (realpath(pctx->to_filename, todir) == NULL ||
+		    stat(todir, &sb) == -1 || !S_ISDIR(sb.st_mode)) {
 			log_msg(LOG_ERR, 1, "Cannot change to dir: %s", pctx->to_filename);
 			goto done;
 		}
@@ -1681,7 +1715,9 @@ extractor_thread_func(void *dat) {
 		/*
 		 * Open list file for pathnames that had filter errors (if any).
 		 */
-		pctx->err_paths_fd = fopen("filter_failures.txt", "w");
+		if (snprintf(fpath, sizeof (fpath), "%s" PATHSEP_STR "filter_failures.txt",
+		    todir) < (int)sizeof (fpath))
+			pctx->err_paths_fd = fopen(fpath, "w");
 	}
 
 	/*
@@ -1733,6 +1769,13 @@ extractor_thread_func(void *dat) {
 #endif
 
 		if (!pctx->list_mode) {
+			if (prefix_entry(entry, todir) == -1) {
+				log_msg(LOG_WARN, 0, "%s: path too long, skipped",
+				    archive_entry_pathname(entry));
+				rv = copy_data_skip(arc, entry, typ);
+				ctr++;
+				continue;
+			}
 			rv = archive_extract_entry(arc, entry, awd, typ, pctx);
 		} else {
 			rv = archive_list_entry(arc, entry, typ);
@@ -1763,12 +1806,8 @@ extractor_thread_func(void *dat) {
 		} else {
 			if (pctx->err_paths_fd) {
 				fclose(pctx->err_paths_fd);
-				(void) unlink("filter_failures.txt");
+				(void) unlink(fpath);
 			}
-		}
-
-		if (got_cwd) {
-			rv = chdir(cwd);
 		}
 	}
 	archive_read_free(arc);
@@ -1817,7 +1856,6 @@ init_archive_mod(void) {
 				exthtab[slot].type = extlist[i].type;
 			}
 
-			memset(typetab, 0, sizeof (typetab));
 			inited = 1;
 		} else {
 			rv = 1;
@@ -1828,31 +1866,34 @@ init_archive_mod(void) {
 }
 
 void
-init_filters(struct filter_flags *ff)
+free_filters(pc_ctx_t *pctx)
 {
-	pthread_mutex_lock(&init_mutex);
-	if (!filters_inited) {
-		add_filters_by_type(typetab, ff);
-		filters_inited = 1;
-	}
-	pthread_mutex_unlock(&init_mutex);
+	free(pctx->filter_table);
+	pctx->filter_table = NULL;
+}
+
+/*
+ * Each context has its own table: a process-wide one kept the flags of
+ * whichever context set it first, so a later job (say, a decompress that
+ * needs every filter) silently ran with the wrong set.
+ */
+void
+init_filters(pc_ctx_t *pctx, struct filter_flags *ff)
+{
+	struct type_data *t;
+
+	free_filters(pctx);
+	t = calloc(NUM_SUB_TYPES + 1, sizeof (struct type_data));
+	if (t == NULL)
+		return;	/* no filters: entries are stored unfiltered */
+	add_filters_by_type(t, ff);
+	pctx->filter_table = t;
 }
 
 void
-disable_all_filters(void)
+disable_all_filters(pc_ctx_t *pctx)
 {
-	struct filter_flags ff;
-
-	pthread_mutex_lock(&init_mutex);
-	if (!filters_inited) {
-		ff.enable_packjpg = 0;
-		ff.enable_wavpack = 0;
-		add_filters_by_type(typetab, &ff);
-		filters_inited = 1;
-	} else {
-		memset(typetab, 0, sizeof (typetab));
-	}
-	pthread_mutex_unlock(&init_mutex);
+	free_filters(pctx);
 }
 
 /*

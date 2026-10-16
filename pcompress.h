@@ -383,6 +383,7 @@ typedef struct pc_ctx {
 	int min_chunk;
 	int enable_packjpg;
 	int enable_wavpack;
+	void *filter_table;	/* struct type_data[NUM_SUB_TYPES+1], archive filters */
 	int list_mode;
 	FILE *err_paths_fd;
 	uint32_t errored_count;

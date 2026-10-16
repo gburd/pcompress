@@ -2749,7 +2749,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 		if (FILTER_SCRATCH_SIZE_MAX >= msys_info.freeram ||
 		    msys_info.freeram - FILTER_SCRATCH_SIZE_MAX < FILTER_SCRATCH_SIZE_MAX) {
 			log_msg(LOG_WARN, 0, "Not enough memory. Disabling advanced filters.");
-			disable_all_filters();
+			disable_all_filters(pctx);
 		} else {
 			msys_info.freeram -= FILTER_SCRATCH_SIZE_MAX;
 		}
@@ -3358,6 +3358,7 @@ destroy_pc_context(pc_ctx_t *pctx)
 		free(pctx->pwd_file);
 	free((void *)(pctx->exec_name));
 	slab_cleanup(pctx->hide_mem_stats);
+	free_filters(pctx);
 	free(pctx);
 }
 
@@ -3922,9 +3923,6 @@ opt_done:
 					pctx->exe_preprocess = 1;
 					ff.exe_preprocess = 1;
 				}
-				init_filters(&ff);
-				pctx->enable_packjpg = ff.enable_packjpg;
-				pctx->enable_wavpack = ff.enable_wavpack;
 			}
 
 			/*
@@ -3953,6 +3951,15 @@ opt_done:
 			}
 			if (pctx->level > 9) pctx->delta2_nstrides = NSTRIDES_EXTRA;
 		}
+		/*
+		 * Archive filters come from -j/-x or the level. This used to run
+		 * only for the level-based choice, so -j and -x were ignored.
+		 */
+		if (pctx->archive_mode) {
+			init_filters(pctx, &ff);
+			pctx->enable_packjpg = ff.enable_packjpg;
+			pctx->enable_wavpack = ff.enable_wavpack;
+		}
 		if (pctx->lzp_preprocess || pctx->enable_delta2_encode || pctx->exe_preprocess) {
 			pctx->preprocess_mode = 1;
 			pctx->enable_analyzer = 1;
@@ -3968,7 +3975,7 @@ opt_done:
 		pctx->enable_packjpg = 1;
 		pctx->enable_wavpack = 1;
 		pctx->exe_preprocess = 1;
-		init_filters(&ff);
+		init_filters(pctx, &ff);
 	}
 	pctx->inited = 1;
 

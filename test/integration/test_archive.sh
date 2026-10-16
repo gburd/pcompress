@@ -109,6 +109,29 @@ for t in "" "-T"; do
 done
 rm -f "${ARCDIR}.pz"
 
+echo ""
+echo "--- -j applies packJPG ---"
+# -j was ignored in 4.0.x (filters were set only for the level-based choice).
+JPG="$(cd "$(dirname "$0")/.." && pwd)/res/jpg/screen.jpg"
+JDIR="datafiles/jtest"
+wipe() { [ -e "$1" ] && find "$1" -depth -delete; :; }
+if [ -f "$JPG" ]; then
+	wipe "$JDIR"; wipe datafiles/jout; rm -f "$JDIR.pz"
+	mkdir -p "$JDIR" datafiles/jout && cp "$JPG" "$JDIR/"
+	$PCOMPRESS -a -c lz4 -l1 "$JDIR" 2>/dev/null; plain=$(wc -c < "$JDIR.pz")
+	rm -f "$JDIR.pz"
+	$PCOMPRESS -a -c lz4 -l1 -j "$JDIR" 2>/dev/null; filt=$(wc -c < "$JDIR.pz")
+	if [ "$filt" -lt "$plain" ] &&
+	    $PCOMPRESS -d "$JDIR.pz" datafiles/jout 2>/dev/null &&
+	    cmp -s "$JPG" "datafiles/jout/$JDIR/screen.jpg"; then
+		log_pass "-j filter ($plain -> $filt bytes, restored exactly)"
+	else
+		log_fail "-j filter: plain=$plain filtered=$filt or restore differs"
+	fi
+	wipe "$JDIR"; wipe datafiles/jout; rm -f "$JDIR.pz"
+else
+	log_skip "-j filter (no test JPEG)"
+fi
 
 echo ""
 echo "========================================="

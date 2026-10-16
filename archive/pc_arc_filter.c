@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <limits.h>
+#include <pthread.h>
 #include <utils.h>
 #include <sys/mman.h>
 #include <ctype.h>
@@ -68,14 +69,13 @@ ssize_t dispack_filter(struct filter_info *fi, void *filter_private);
 void
 add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 {
-	struct scratch_buffer *sdat = NULL;
+	/* Filters use per-thread scratch buffers (ensure_buffer()); none here. */
+	static struct scratch_buffer unused;
+	struct scratch_buffer *sdat = &unused;
 	int slot;
 #ifndef _MPLV2_LICENSE_
 
 	if (ff->enable_packjpg) {
-		sdat = (struct scratch_buffer *)malloc(sizeof (struct scratch_buffer));
-		sdat->in_buff = NULL;
-		sdat->in_bufflen = 0;
 
 		slot = TYPE_JPEG >> 3;
 		typetab[slot].filter_private = sdat;
@@ -98,11 +98,6 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 #endif
 
 	if (ff->exe_preprocess) {
-		if (!sdat) {
-			sdat = (struct scratch_buffer *)malloc(sizeof (struct scratch_buffer));
-			sdat->in_buff = NULL;
-			sdat->in_bufflen = 0;
-		}
 		slot = TYPE_EXE32_PE >> 3;
 		typetab[slot].filter_private = sdat;
 		typetab[slot].filter_func = dispack_filter;
@@ -112,12 +107,6 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 
 #ifdef _ENABLE_WAVPACK_
 	if (ff->enable_wavpack) {
-		if (!sdat) {
-			sdat = (struct scratch_buffer *)malloc(sizeof (struct scratch_buffer));
-			sdat->in_buff = NULL;
-			sdat->in_bufflen = -1;
-		}
-
 		slot = TYPE_WAV >> 3;
 		typetab[slot].filter_private = sdat;
 		typetab[slot].filter_func = wavpack_filter;
@@ -142,14 +131,61 @@ type_tag_from_filter_name(struct type_data *typetab, const char *fname, size_t l
     }
     return (TYPE_UNKNOWN);
 }
+/*
+ * The filter table is shared by every context in the process, so its
+ * scratch_buffer cannot hold per-call data. Each thread (an archiver or
+ * extractor thread runs one entry at a time) gets its own buffer instead;
+ * the table's sdat argument is ignored.
+ */
+static pthread_key_t scratch_key;
+static pthread_once_t scratch_once = PTHREAD_ONCE_INIT;
+
 static void
-ensure_buffer(struct scratch_buffer *sdat, uint64_t len)
+scratch_free(void *p)
 {
-	if (sdat->in_bufflen < len) {
-		if (sdat->in_buff) free(sdat->in_buff);
+	struct scratch_buffer *b = (struct scratch_buffer *)p;
+
+	free(b->in_buff);
+	free(b);
+}
+
+static void
+scratch_key_init(void)
+{
+	(void) pthread_key_create(&scratch_key, scratch_free);
+}
+
+static struct scratch_buffer *
+thread_scratch(void)
+{
+	struct scratch_buffer *b;
+
+	pthread_once(&scratch_once, scratch_key_init);
+	if ((b = pthread_getspecific(scratch_key)) == NULL) {
+		if ((b = calloc(1, sizeof (*b))) == NULL)
+			return (NULL);
+		(void) pthread_setspecific(scratch_key, b);
+	}
+	return (b);
+}
+
+/* Returns this thread's scratch buffer with room for len bytes, or NULL. */
+static struct scratch_buffer *
+ensure_buffer(struct scratch_buffer *unused, uint64_t len)
+{
+	struct scratch_buffer *sdat = thread_scratch();
+
+	(void) unused;
+	if (sdat == NULL)
+		return (NULL);
+	if (sdat->in_buff == NULL || sdat->in_bufflen < len) {
+		free(sdat->in_buff);
 		sdat->in_bufflen = len;
 		sdat->in_buff = malloc(sdat->in_bufflen);
+		if (sdat->in_buff == NULL)
+			sdat->in_bufflen = 0;
 	}
+	return (sdat);
 }
 
 /*
@@ -219,8 +255,8 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * Allocate input buffer and read archive data stream for the entry
 		 * into this buffer.
 		 */
-		ensure_buffer(sdat, len);
-		if (sdat->in_buff == NULL) {
+		sdat = ensure_buffer(sdat, len);
+		if (sdat == NULL || sdat->in_buff == NULL) {
 			log_msg(LOG_ERR, 1, "Out of memory.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -339,8 +375,8 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * Allocate input buffer and read archive data stream for the entry
 		 * into this buffer.
 		 */
-		ensure_buffer(sdat, len);
-		if (sdat->in_buff == NULL) {
+		sdat = ensure_buffer(sdat, len);
+		if (sdat == NULL || sdat->in_buff == NULL) {
 			log_msg(LOG_ERR, 1, "Out of memory.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -462,8 +498,8 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 * Allocate input buffer and read archive data stream for the entry
 		 * into this buffer.
 		 */
-		ensure_buffer(sdat, len);
-		if (sdat->in_buff == NULL) {
+		sdat = ensure_buffer(sdat, len);
+		if (sdat == NULL || sdat->in_buff == NULL) {
 			log_msg(LOG_ERR, 1, "Out of memory.");
 			return (FILTER_RETURN_ERROR);
 		}
@@ -580,8 +616,8 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		 * Allocate input buffer and read archive data stream for the entry
 		 * into this buffer.
 		 */
-		ensure_buffer(sdat, len);
-		if (sdat->in_buff == NULL) {
+		sdat = ensure_buffer(sdat, len);
+		if (sdat == NULL || sdat->in_buff == NULL) {
 			log_msg(LOG_ERR, 1, "Out of memory.");
 			return (FILTER_RETURN_ERROR);
 		}

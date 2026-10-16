@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <pthread.h>
 #include <utils.h>
 
 #ifndef _MPLV2_LICENSE_
@@ -67,6 +68,8 @@ typedef unsigned char uchar_t;
 
 #define	POLAROID_LE 0x64696f72616c6f50
 
+static pthread_mutex_t codec_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /*
  * Helper routine to bridge to packJPG C++ lib, without changing packJPG itself.
  */
@@ -75,6 +78,7 @@ packjpg_filter_process(uchar_t *in_buf, size_t len, uchar_t **out_buf)
 {
 	unsigned int len1;
 	uchar_t *pos;
+	bool ok;
 
 	/*
 	 * Workaround for packJPG limitation, not a bug per se. Images created with
@@ -94,11 +98,14 @@ packjpg_filter_process(uchar_t *in_buf, size_t len, uchar_t **out_buf)
 		pos++;
 		pos = (uchar_t *)memchr(pos, 'P', 512);
 	}
+
+	/* The codec keeps all its state in file statics: one call at a time. */
+	pthread_mutex_lock(&codec_lock);
 	pjglib_init_streams(in_buf, 1, len, *out_buf, 1);
 	len1 = len;
-	if (!pjglib_convert_stream2mem(out_buf, &len1, NULL))
-		return (0);
-	if (len1 == len)
+	ok = pjglib_convert_stream2mem(out_buf, &len1, NULL);
+	pthread_mutex_unlock(&codec_lock);
+	if (!ok || len1 == len)
 		return (0);
 	return (len1);
 }

@@ -122,11 +122,14 @@ int init_archive_mod(void);
  */
 int insert_filter_data(filter_func_ptr func, void *filter_private, const char *ext);
 
-/** Initialize filter flags from configuration. */
-void init_filters(struct filter_flags *ff);
+/** Set this context's archive filters from ff (replaces any earlier set). */
+void init_filters(pc_ctx_t *pctx, struct filter_flags *ff);
 
-/** Disable all content filters. */
-void disable_all_filters(void);
+/** Disable all of this context's archive filters. */
+void disable_all_filters(pc_ctx_t *pctx);
+
+/** Free this context's filter table. */
+void free_filters(pc_ctx_t *pctx);
 
 
 #ifdef	__cplusplus
