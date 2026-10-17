@@ -213,8 +213,10 @@ the `.pz` format.
 | 40+n | 32 | tag: BLAKE2b-256 over bytes [0, 40+n) |
 
 With a key, the payload is XSalsa20-encrypted and the tag is keyed
-(encrypt-then-MAC); the encryption and MAC keys are BLAKE2b-256 of the
-caller's key with distinct labels. `pc_chunk_open()` checks magic,
+(encrypt-then-MAC). The encryption and MAC keys are the two halves of
+BLAKE2b-512(caller's key, "pcompress chunk subkeys"). They must not be
+32-byte BLAKE2b outputs: chunk ids are exactly those, keyed with the same
+key over caller data, and they are public as object names. `pc_chunk_open()` checks magic,
 version, flags, algorithm id and the declared length (at most 4 GB, and
 for raw objects exactly the payload length) before anything else, then
 the tag in constant time, and only then decrypts and decompresses into

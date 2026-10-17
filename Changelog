@@ -10,6 +10,8 @@ Library: chunk-level building blocks for backup tools (libpcompress(3),
   Chunk index (pc_index_*): a persistent, append-only set of chunk ids;
   examples/pzstore uses it.
   Additions only: the 4.1.0 ABI is unchanged.
+  (Sealed objects written by development snapshots before this fix do not
+  open: their subkeys could be learned from a chunk id; see git log.)
 Passwords: the whole password is used, up to 4096 bytes. 4.1.0 used only
   the first 15 bytes of a -w file over 16 bytes, and its prompt refused
   passwords over 14 bytes. Files written then still decrypt (the old form

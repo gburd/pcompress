@@ -163,8 +163,8 @@ pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t
  *
  * Encrypt-then-MAC: the tag covers the header, so nothing in it can be
  * changed. open() checks the tag before it decrypts or decompresses.
- * Keys: enc = BLAKE2b-256(key, "pcompress chunk enc"),
- *       mac = BLAKE2b-256(key, "pcompress chunk mac").
+ * Keys: enc || mac = BLAKE2b-512(key, "pcompress chunk subkeys"); see
+ * subkeys() for why not two BLAKE2b-256 values.
  */
 #define	PCK_MAGIC	"PCK1"
 #define	PCK_VERSION	1
@@ -218,14 +218,24 @@ get_le64(const uchar_t *p)
 	return (v);
 }
 
+/*
+ * Chunk ids are public (object names) and are BLAKE2b-256 keyed, often with
+ * this same key, over data an attacker may choose. So the subkeys must not
+ * be BLAKE2b-256 of anything: they come from one 64-byte digest, and
+ * BLAKE2b's parameter block holds the digest length, making its output
+ * unrelated to every 32-byte id.
+ */
 static int
 subkeys(pc_ctx_t *ctx, uchar_t enc[32], uchar_t mac[32])
 {
-	static const uchar_t e[] = "pcompress chunk enc", m[] = "pcompress chunk mac";
+	static const uchar_t d[] = "pcompress chunk subkeys";
+	uchar_t k[64];
 
-	if (blake2b_keyed2(enc, 32, ctx->chunk_key, 32, e, sizeof (e) - 1, NULL, 0) != 0 ||
-	    blake2b_keyed2(mac, 32, ctx->chunk_key, 32, m, sizeof (m) - 1, NULL, 0) != 0)
+	if (blake2b_keyed2(k, 64, ctx->chunk_key, 32, d, sizeof (d) - 1, NULL, 0) != 0)
 		return (-1);
+	memcpy(enc, k, 32);
+	memcpy(mac, k + 32, 32);
+	memset(k, 0, sizeof (k));
 	return (0);
 }
 

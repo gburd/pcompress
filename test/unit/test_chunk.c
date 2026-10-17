@@ -435,8 +435,34 @@ MU_TEST(test_index)
 	mu_assert(pc_index_has(NULL, id) == -1 && pc_index_close(NULL) == 0, "NULL index");
 }
 
+/*
+ * Object names are keyed chunk ids, so they are public: no chunk id may
+ * equal a subkey. Before the fix, the id of a chunk holding exactly the
+ * MAC-key label was the MAC key; forge with it, and it must not open.
+ */
+MU_TEST(test_ids_do_not_leak_subkeys)
+{
+	unsigned char key[32], mac[32], obj[200], out[100];
+	size_t ol = sizeof (obj), pl = sizeof (out), clen;
+	pc_ctx_t *c;
+	int i;
+
+	for (i = 0; i < 32; i++)
+		key[i] = (unsigned char)(i * 7 + 1);
+	c = ctx_with("none", 0, key);
+	mu_assert_int_eq(0, pc_chunk_seal(c, "attack at dawn", 14, obj, &ol));
+	clen = ol - 40 - 32;
+	mu_assert(clen == 14, "raw payload");
+	pc_chunk_id("pcompress chunk mac", 19, key, 32, mac);
+	obj[40] ^= 1;
+	pc_chunk_id(obj, 40 + clen, mac, 32, obj + 40 + clen);
+	mu_assert(pc_chunk_open(c, obj, ol, out, &pl) != 0, "object forged with a chunk id as MAC key");
+	pc_free(c);
+}
+
 MU_TEST_SUITE(suite_chunk)
 {
+	MU_RUN_TEST(test_ids_do_not_leak_subkeys);
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
