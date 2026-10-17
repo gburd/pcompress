@@ -28,6 +28,7 @@
 #include <strings.h>
 #include <string.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <utils.h>
 #include <pcompress.h>
 #include <lz4.h>
@@ -163,16 +164,28 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 
 	} else if (lzdat->level == 2) {
 		int sz1;
+		char *mid;
 
-		sz1 = ntohl(I32_P(src));
-		rv = LZ4_decompress_safe((const char *)src + sizeof (int),
-		    (char *)dst, (int)srclen - (int)sizeof (int), sz1);
-		if (rv != sz1) {
+		/*
+		 * Two passes: src holds BE32(sz1) and an LZ4 stream of the sz1-byte
+		 * first-pass output. sz1 comes from the input: bound it by what the
+		 * second pass can expand to, and decode it into a scratch buffer
+		 * (it used to be copied back into src, which is only srclen long).
+		 */
+		if (srclen < sizeof (int) || srclen > INT_MAX)
 			return (-1);
-		}
-		memcpy(src, dst, sz1);
-		rv = LZ4_decompress_safe((const char *)src, (char *)dst,
-		    sz1, _dstlen);
+		sz1 = (int)ntohl(I32_P(src));
+		if (sz1 <= 0 || sz1 > LZ4_compressBound(_dstlen) || _dstlen < 0)
+			return (-1);
+		if ((mid = malloc(sz1)) == NULL)
+			return (-1);
+		rv = LZ4_decompress_safe((const char *)src + sizeof (int), mid,
+		    (int)srclen - (int)sizeof (int), sz1);
+		if (rv == sz1)
+			rv = LZ4_decompress_safe(mid, (char *)dst, sz1, _dstlen);
+		else
+			rv = -1;
+		free(mid);
 		if (rv != _dstlen) {
 			return (-1);
 		}

@@ -90,7 +90,8 @@ static const char *algos[] = { "zstd", "lz4", "lzma", "zlib", "bzip2", "ppmd",
 MU_TEST(test_seal_open_all)
 {
 	static const size_t sizes[] = { 0, 1, 100, 4096, 300000 };
-	static const int levels[] = { 1, 6, 9 };
+	/* 2 is lz4's two-pass mode; 14 the top of every codec's range. */
+	static const int levels[] = { 1, 2, 6, 9, 14 };
 	unsigned char key[32], *buf = malloc(300000);
 	int a, l, s, k, kind;
 
@@ -99,7 +100,7 @@ MU_TEST(test_seal_open_all)
 	for (kind = 0; kind < 3; kind++) {
 		fill(buf, 300000, kind);
 		for (a = 0; algos[a] != NULL; a++)
-			for (l = 0; l < 3; l++)
+			for (l = 0; l < 5; l++)
 				for (s = 0; s < 5; s++)
 					for (k = 0; k < 2; k++) {
 						char what[96];
@@ -460,8 +461,125 @@ MU_TEST(test_ids_do_not_leak_subkeys)
 	pc_free(c);
 }
 
+/* Build an unkeyed object around a hostile payload and open it. */
+static int
+open_forged(int alg, int lvl, uint64_t plain, const unsigned char *pay, size_t plen,
+    unsigned char *out, size_t outsz)
+{
+	unsigned char *o = malloc(40 + plen + 32);
+	size_t ol = 40 + plen + 32, pl = outsz;
+	pc_ctx_t *c = ctx_with(NULL, 0, NULL);
+	int i, rv;
+
+	memset(o, 0, 40);
+	memcpy(o, "PCK1", 4);
+	o[4] = 1;
+	o[6] = (unsigned char)alg;
+	o[7] = (unsigned char)lvl;
+	for (i = 0; i < 8; i++)
+		o[8 + i] = (unsigned char)(plain >> (8 * i));
+	memcpy(o + 40, pay, plen);
+	pc_chunk_id(o, 40 + plen, NULL, 0, o + 40 + plen);
+	rv = pc_chunk_open(c, o, ol, out, &pl);
+	pc_free(c);
+	free(o);
+	return (rv);
+}
+
+/*
+ * Hostile objects with a valid unkeyed tag reach the decompressors: no
+ * key is needed to forge one. Each of these overflowed or read out of
+ * bounds before (ASan); now each must just fail.
+ */
+MU_TEST(test_hostile_payloads)
+{
+	unsigned char out[16], pay[64], *z = calloc(1, 1 << 20), *obj;
+	size_t big = 1 << 20, ol = pc_chunk_seal_bound(1 << 20), clen;
+	pc_ctx_t *e = ctx_with("lz4", 1, NULL);
+
+	/* lz4 two-pass: a first-pass size far beyond the declared length. */
+	obj = malloc(ol + 4);
+	mu_assert_int_eq(0, pc_chunk_seal(e, z, big, obj, &ol));
+	clen = ol - 72;
+	memmove(obj + 4, obj + 40, clen);
+	obj[0] = big >> 24; obj[1] = big >> 16; obj[2] = big >> 8; obj[3] = big;
+	mu_assert(open_forged(2, 2, 16, obj, clen + 4, out, sizeof (out)) != 0, "lz4 two-pass sz1 > output");
+	obj[0] = 0x80;	/* negative */
+	mu_assert(open_forged(2, 2, 16, obj, clen + 4, out, sizeof (out)) != 0, "lz4 two-pass negative sz1");
+	mu_assert(open_forged(2, 2, 16, obj, 2, out, sizeof (out)) != 0, "lz4 two-pass short payload");
+	/* lzma: payload shorter than its 5-byte props. */
+	memset(pay, 0x5d, sizeof (pay));
+	mu_assert(open_forged(3, 6, 16, pay, 2, out, sizeof (out)) != 0, "lzma 2-byte payload");
+	/* ppmd: level nibble 15 (orders stop at 14). */
+	mu_assert(open_forged(6, 15, 16, pay, 8, out, sizeof (out)) != 0, "ppmd level 15");
+	/* adapt (mode 1) has no libbsc or LZMA state: sub-algorithms 4 and 1. */
+	mu_assert(open_forged(9, 0x46, 16, pay, 32, out, sizeof (out)) != 0, "adapt with libbsc");
+	mu_assert(open_forged(9, 0x16, 16, pay, 32, out, sizeof (out)) != 0, "adapt with lzma");
+	pc_free(e);
+	free(obj);
+	free(z);
+}
+
+/*
+ * Mutated objects with a valid unkeyed tag, for every algorithm: whatever
+ * the decompressor makes of them, open must fail or return exactly the
+ * declared length, and never touch memory it should not (run under ASan).
+ */
+MU_TEST(test_mutation_fuzz)
+{
+	static const char *fa[] = { "zstd", "lz4", "lzma", "zlib", "bzip2", "ppmd",
+	    "lzfx", "libbsc", "adapt", "adapt2", "lzmaMt", NULL };
+	size_t n = 20000, i;
+	unsigned char *in = malloc(n), *obj = malloc(n + 200), *m = malloc(n + 200);
+	unsigned char *out = malloc(1 << 16);
+	uint64_t r = 0x9e3779b97f4a7c15ULL;
+	int a, lv, it, j;
+
+	for (i = 0; i < n; i++)
+		in[i] = (unsigned char)("abcabdabeabfxyz"[(i * 7 + i / 300) % 15] + (i % 997 == 0));
+	for (a = 0; fa[a] != NULL; a++)
+		for (lv = 1; lv <= 14; lv += (lv < 3 ? 1 : 4)) {
+			pc_ctx_t *c = ctx_with(fa[a], lv, NULL);
+			size_t ol = n + 200, clen;
+
+			mu_assert_int_eq(0, pc_chunk_seal(c, in, n, obj, &ol));
+			clen = ol - 72;
+			for (it = 0; it < 300; it++) {
+				size_t ml = ol, mclen, pl;
+				uint64_t plain;
+
+				memcpy(m, obj, ol);
+				for (j = 0; j < 1 + it % 6; j++) {
+					r ^= r << 13; r ^= r >> 7; r ^= r << 17;
+					switch (r % 5) {
+					case 0: m[40 + (r >> 8) % clen] ^= (unsigned char)(1 << ((r >> 4) & 7)); break;
+					case 1: m[40 + (r >> 8) % clen] = (unsigned char)(r >> 40); break;
+					case 2: m[7] = (unsigned char)(r >> 16); break;
+					case 3:
+						plain = (r >> 20) % (2 * n + 64);
+						for (i = 0; i < 8; i++)
+							m[8 + i] = (unsigned char)(plain >> (8 * i));
+						break;
+					case 4: if (clen > 2) ml = ol - ((r >> 8) % (clen / 2)); break;
+					}
+				}
+				mclen = ml - 72;
+				pc_chunk_id(m, 40 + mclen, NULL, 0, m + 40 + mclen);
+				for (plain = 0, i = 0; i < 8; i++)
+					plain |= (uint64_t)m[8 + i] << (8 * i);
+				pl = plain <= (1 << 16) ? (size_t)plain : (1 << 16);
+				if (pc_chunk_open(c, m, ml, out, &pl) == 0)
+					mu_assert(pl == plain, "open returned a length other than declared");
+			}
+			pc_free(c);
+		}
+	free(in); free(obj); free(m); free(out);
+}
+
 MU_TEST_SUITE(suite_chunk)
 {
+	MU_RUN_TEST(test_hostile_payloads);
+	MU_RUN_TEST(test_mutation_fuzz);
 	MU_RUN_TEST(test_ids_do_not_leak_subkeys);
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_keyfile);

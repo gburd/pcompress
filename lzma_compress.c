@@ -246,6 +246,8 @@ lzma_decompress(void *src, uint64_t srclen, void *dst,
 	ELzmaStatus status;
 	SizeT dlen;
 
+	if (srclen < LZMA_PROPS_SIZE)
+		return (-1);	/* hostile input: no room for the props */
 	_srclen = srclen - LZMA_PROPS_SIZE;
 	_src = (uchar_t *)src + LZMA_PROPS_SIZE;
 	dlen = *dstlen;

@@ -87,6 +87,10 @@ ppmd_state_init(void **data, int *level, int alloc)
 {
 	CPpmd8 *_ppmd;
 
+	/* Levels 0 - 14 correspond to PPMd model orders 0 - 14. Clamp before
+	 * indexing ppmd8_mem_sz: the level can come from a chunk header. */
+	if (*level > 14) *level = 14;
+	if (*level < 0) *level = 0;
 	pthread_mutex_lock(&mem_init_lock);
 	if (!mem_inited) {
 		slab_cache_add(sizeof (CPpmd8));
@@ -97,8 +101,6 @@ ppmd_state_init(void **data, int *level, int alloc)
 	if (!_ppmd)
 		return (-1);
 
-	/* Levels 0 - 14 correspond to PPMd model orders 0 - 14. */
-	if (*level > 14) *level = 14;
 	_ppmd->Order = *level;
 
 	_ppmd->Base = 0;

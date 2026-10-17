@@ -434,6 +434,19 @@ adapt_decompress(void *src, uint64_t srclen, void *dst,
 
 	cmp_flags = CHDR_ALGO(chdr);
 
+	/*
+	 * The sub-algorithm comes from the chunk header: adapt (mode 1) has no
+	 * LZMA or libbsc state, so a header naming those must fail, not crash.
+	 */
+	if ((cmp_flags == ADAPT_COMPRESS_LZ4 && adat->lz4_data == NULL) ||
+	    (cmp_flags == ADAPT_COMPRESS_LZMA && adat->lzma_data == NULL) ||
+	    (cmp_flags == ADAPT_COMPRESS_PPMD && adat->ppmd_data == NULL) ||
+	    (cmp_flags == ADAPT_COMPRESS_BSC && adat->bsc_data == NULL) ||
+	    (cmp_flags == ADAPT_COMPRESS_ZSTD && adat->zstd_data == NULL)) {
+		log_msg(LOG_ERR, 0, "Chunk uses an algorithm this mode does not have.\n");
+		return (-1);
+	}
+
 	if (cmp_flags == ADAPT_COMPRESS_LZ4) {
 		return (lz4_decompress(src, srclen, dst, dstlen, 1, chdr, btype, adat->lz4_data));
 
