@@ -42,6 +42,8 @@ typedef struct {
 	uchar_t pkey[XSALSA20_CRYPTO_KEYBYTES];
 } salsa20_ctx_t;
 
+int xsalsa20_xor(unsigned char *out, const unsigned char *in, unsigned long long len,
+    const unsigned char nonce[24], const unsigned char key[32]);
 int salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len, uchar_t *nonce, int enc);
 int salsa20_encrypt(salsa20_ctx_t *ctx, uchar_t *plaintext, uchar_t *ciphertext, uint64_t len, uint64_t id);
 int salsa20_decrypt(salsa20_ctx_t *ctx, uchar_t *ciphertext, uchar_t *plaintext, uint64_t len, uint64_t id);

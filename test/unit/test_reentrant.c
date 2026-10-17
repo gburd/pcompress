@@ -163,6 +163,53 @@ archive_round(struct job *j, int r)
 	return (same_files(a, g) ? 0 : -1);
 }
 
+/* Chunk the input and seal/open every chunk (keyed on odd rounds). */
+static int
+chunk_round(struct job *j, int r)
+{
+	static const char *al[] = { "zstd", "lz4", "lzma", "adapt2" };
+	unsigned char key[32], *in, *obj, *back;
+	size_t n = 1u << 20, lens[256], off = 0, ol, pl;
+	pc_chunker_t *ch = pc_chunker_new(32768, 8192, 131072);
+	pc_ctx_t *c = create_pc_context();
+	FILE *f = fopen(j->in, "rb");
+	int k, nc, bad = 0;
+
+	in = malloc(n);
+	obj = malloc(pc_chunk_seal_bound(131072));
+	back = malloc(131072);
+	if (f == NULL || ch == NULL || c == NULL || fread(in, 1, n, f) != n)
+		bad = 1;
+	if (f != NULL)
+		fclose(f);
+	for (k = 0; k < 32; k++)
+		key[k] = (unsigned char)(j->id * 31 + k);
+	pc_set_algorithm(c, al[(j->id + r) % 4]);
+	pc_set_level(c, 3);
+	if (r % 2)
+		pc_set_key(c, key, 32);
+	nc = bad ? 0 : pc_chunker_feed(ch, in, n, lens, 256);
+	if (nc >= 0 && !bad)
+		nc += pc_chunker_finish(ch, lens + nc, 256 - nc);
+	for (k = 0; !bad && k < nc; k++) {
+		ol = pc_chunk_seal_bound(lens[k]);
+		pl = 131072;
+		if (pc_chunk_seal(c, in + off, lens[k], obj, &ol) != 0 ||
+		    pc_chunk_open(c, obj, ol, back, &pl) != 0 || pl != lens[k] ||
+		    memcmp(in + off, back, pl) != 0)
+			bad = 1;
+		off += lens[k];
+	}
+	if (!bad && off != n)
+		bad = 1;
+	pc_chunker_free(ch);
+	destroy_pc_context(c);
+	free(in);
+	free(obj);
+	free(back);
+	return (bad ? -1 : 0);
+}
+
 static void *
 worker(void *arg)
 {
@@ -197,6 +244,10 @@ worker(void *arg)
 		}
 		if (archive_round(j, r) != 0) {
 			fprintf(stderr, "job %d round %d: archive round trip failed\n", j->id, r);
+			j->failures++;
+		}
+		if (chunk_round(j, r) != 0) {
+			fprintf(stderr, "job %d round %d: chunk seal/open failed\n", j->id, r);
 			j->failures++;
 		}
 	}

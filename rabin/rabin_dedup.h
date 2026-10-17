@@ -207,6 +207,8 @@ extern dedupe_context_t *create_dedupe_context(uint64_t chunksize, uint64_t real
 	int nthreads, size_t freeram, archive_config_t **shared_arc);
 extern void destroy_dedupe_context(dedupe_context_t *ctx);
 extern void destroy_dedupe_index(archive_config_t **shared_arc);
+/* Rolling-hash tables as used by dedupe_compress(), built once. */
+extern void rabin_tables(const uint64_t **ir_tab, const uint64_t **out_tab);
 extern unsigned int dedupe_compress(dedupe_context_t *ctx, unsigned char *buf, 
 	uint64_t *size, uint64_t offset, uint64_t *rabin_pos, int mt);
 extern void dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size);

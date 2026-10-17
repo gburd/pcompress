@@ -408,6 +408,8 @@ struct pc_ctx {
 	int in_fd, out_fd;	/* pc_compress_fd/pc_decompress_fd; -1: use names */
 	unsigned char *pw_copy;	/* pc_set_password() copy, wiped and freed */
 	size_t pw_copy_len;
+	unsigned char chunk_key[32];	/* pc_set_key(): raw key for chunk objects */
+	int chunk_key_set;
 };
 
 /**

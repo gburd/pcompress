@@ -104,6 +104,10 @@ typedef struct {
  */
 int compute_checksum(uchar_t *cksum_buf, int cksum, uchar_t *buf, uint64_t bytes, int mt, int verbose);
 
+/** BLAKE2b, n-byte digest, keyed if key != NULL, over a then b. 0 or -1. */
+int blake2b_keyed2(uchar_t *out, int n, const uchar_t *key, int keylen,
+    const uchar_t *a, uint64_t alen, const uchar_t *b, uint64_t blen);
+
 /**
  * List available checksum algorithms to a stream.
  * @param strm  Output stream.

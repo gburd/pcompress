@@ -120,8 +120,18 @@ extern bsize_t get_bsdiff_sz(u_char *pbuf);
 extern int bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf,
 	bsize_t *_newsize);
 
-uint64_t ir[256], out[256];
+static uint64_t ir[256], out[256];
 static pthread_once_t tables_once = PTHREAD_ONCE_INIT;
+static void init_rabin_tables(void);
+
+/* The polynomial tables, for other users of the rolling hash (chunk.c). */
+void
+rabin_tables(const uint64_t **ir_tab, const uint64_t **out_tab)
+{
+	pthread_once(&tables_once, init_rabin_tables);
+	*ir_tab = ir;
+	*out_tab = out;
+}
 
 /* Irreducible-polynomial tables: pure functions of constants, built once. */
 static void

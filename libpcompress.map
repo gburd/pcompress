@@ -11,6 +11,9 @@ PCOMPRESS_1 {
 		pc_set_algorithm; pc_set_level; pc_set_chunk_size; pc_set_threads;
 		pc_set_checksum; pc_set_dedupe; pc_set_encryption; pc_set_password;
 		pc_compress_fd; pc_decompress_fd; pc_usage;
+		pc_chunker_new; pc_chunker_free; pc_chunker_feed; pc_chunker_finish;
+		pc_chunk_id; pc_set_key; pc_chunk_seal_bound; pc_chunk_seal;
+		pc_chunk_open; pc_chunk_open_size;
 	local:
 		*;
 };

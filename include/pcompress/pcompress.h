@@ -153,6 +153,72 @@ int pc_compress_fd(pc_ctx_t *ctx, int in_fd, int out_fd);
 /** Decompress a .pz stream from in_fd into out_fd. Neither is closed. */
 int pc_decompress_fd(pc_ctx_t *ctx, int in_fd, int out_fd);
 
+/* --- Chunks: building blocks for backup tools --------------------------- */
+
+/**
+ * Content-defined chunker. Boundaries depend only on the data, so the
+ * same bytes give the same chunks wherever they occur and however they
+ * are fed. Sizes in bytes; 0 picks a default (avg 64 KB, min avg/4, max
+ * avg*4). avg is rounded down to a power of two; need 64 <= min <= avg <=
+ * max <= 64 MB. NULL on bad sizes or out of memory.
+ */
+typedef struct pc_chunker pc_chunker_t;
+pc_chunker_t *pc_chunker_new(size_t avg, size_t min, size_t max);
+void pc_chunker_free(pc_chunker_t *c);
+
+/**
+ * Feed len bytes. Appends the length of each chunk that ends inside them
+ * to lens[] and returns how many (0 if none). Bytes after the last boundary
+ * are remembered for the next call. -1 on bad arguments; -2 if lens[]
+ * (nlens entries) filled up, in which case some bytes were consumed and
+ * the state is undefined: size lens[] as len / min + 1.
+ */
+int pc_chunker_feed(pc_chunker_t *c, const void *buf, size_t len, size_t *lens, int nlens);
+
+/** End of input: the final, shorter chunk (0 or 1 entries). Resets c. */
+int pc_chunker_finish(pc_chunker_t *c, size_t *lens, int nlens);
+
+/**
+ * Chunk identity: BLAKE2b-256 of the bytes, keyed if key != NULL (keylen
+ * 1-64). With a secret key the id does not reveal the content's hash to
+ * whoever stores the objects. 0 or -1.
+ */
+int pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t id[32]);
+
+/**
+ * Raw 256-bit key for pc_chunk_seal()/pc_chunk_open(); NULL, 0 clears it.
+ * With a key, objects are encrypted (XSalsa20) and authenticated (keyed
+ * BLAKE2b over header and payload); without one they carry a plain
+ * BLAKE2b checksum. -1 unless keylen is 32.
+ */
+int pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen);
+
+/** Largest object pc_chunk_seal() can produce for len input bytes. */
+size_t pc_chunk_seal_bound(size_t len);
+
+/**
+ * Compress (with the context's algorithm and level) and, if a key is set,
+ * encrypt one chunk into a self-describing object at out. *outlen is the
+ * buffer size on entry (at least pc_chunk_seal_bound(len)) and the object
+ * size on return. Incompressible data is stored raw. 0 or -1.
+ */
+int pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
+
+/**
+ * Verify and invert pc_chunk_seal(). The tag is checked before anything
+ * is decrypted or decompressed; any change to the object fails with
+ * PC_ERR_VERIFY (or PC_ERR_CORRUPT/PC_ERR_FORMAT for a bad header). *outlen
+ * is the buffer size on entry, the plaintext size on return.
+ */
+int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
+
+/**
+ * Plaintext size an object declares, from its header only (not verified),
+ * to size the buffer for pc_chunk_open(); (size_t)-1 if it is not a chunk
+ * object. 0 is a valid size.
+ */
+size_t pc_chunk_open_size(const void *obj, size_t len);
+
 /* --- Diagnostics -------------------------------------------------------- */
 
 /**

@@ -67,6 +67,14 @@ crypto_xsalsa20(unsigned char *c, const unsigned char *m, unsigned long long mle
 	return crypto_stream_salsa20_xor(c,m,mlen,n + 16,subkey);
 }
 
+/* XSalsa20 stream XOR (24-byte nonce, 32-byte key): for chunk objects. */
+int
+xsalsa20_xor(unsigned char *out, const unsigned char *in, unsigned long long len,
+    const unsigned char nonce[24], const unsigned char key[32])
+{
+	return (crypto_xsalsa20(out, in, len, nonce, key, 32));
+}
+
 int
 salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len,
 	 uchar_t *nonce, int enc)

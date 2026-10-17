@@ -36,8 +36,8 @@ MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	utils/cpu_features.c utils/cpu_features_x86_64.c \
 	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
 	filters/analyzer/analyzer.c \
-	meta_stream.c pcompress.c
-MAINHDRS = allocator.h  pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
+	meta_stream.c pcompress.c chunk.c
+MAINHDRS = include/pcompress/pcompress.h allocator.h  pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
 	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
 	filters/dispack/dis.hpp \
 	meta_stream.h filters/analyzer/analyzer.h
@@ -540,13 +540,14 @@ test-unit-build: $(LIB)
 
 # Public-API test: only include/ on the include path, linked against the
 # shared library like any other program.
-buildtmp/test_public: test/unit/test_public.c include/pcompress/pcompress.h $(LIB)
+PUBLIC_TESTS = test_public test_chunk
+$(PUBLIC_TESTS:%=buildtmp/%): buildtmp/%: test/unit/%.c include/pcompress/pcompress.h $(LIB)
 	mkdir -p buildtmp
-	$(COMPILE) $(GEN_OPT) -Iinclude -I./test/unit test/unit/test_public.c -o buildtmp/test_public.o
-	$(LINK.PROG) -o $@ buildtmp/test_public.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
+	$(COMPILE) $(GEN_OPT) -Iinclude -I./test/unit test/unit/$*.c -o buildtmp/$*.o
+	$(LINK.PROG) -o $@ buildtmp/$*.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
 
-test-unit: test-unit-build buildtmp/test_public
-	@for t in $(UNIT_TESTS) test_public; do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
+test-unit: test-unit-build $(PUBLIC_TESTS:%=buildtmp/%)
+	@for t in $(UNIT_TESTS) $(PUBLIC_TESTS); do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
 
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)
@@ -558,7 +559,8 @@ test-integration: all
 abi-check: $(LIB)
 	abidw --headers-dir include/pcompress --drop-private-types --drop-undefined-syms --exported-interfaces-only \
 	    --out-file buildtmp/libpcompress.abi $(LIB).$(LIBVER)
-	abidiff --no-added-syms --drop-private-types abi/libpcompress.abi buildtmp/libpcompress.abi
+	abidiff --no-added-syms --drop-private-types --suppressions abi/suppressions.ini \
+	    abi/libpcompress.abi buildtmp/libpcompress.abi
 
 abi-update: $(LIB)
 	abidw --headers-dir include/pcompress --drop-private-types --drop-undefined-syms --exported-interfaces-only \

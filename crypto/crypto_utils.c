@@ -719,6 +719,32 @@ hmac_cleanup(mac_ctx_t *mctx)
 }
 
 /*
+ * Keyed (key != NULL) or plain BLAKE2b with an n-byte digest (1-64) over
+ * the concatenation of up to two buffers. For chunk identities and MACs.
+ */
+int
+blake2b_keyed2(uchar_t *out, int n, const uchar_t *key, int keylen,
+    const uchar_t *a, uint64_t alen, const uchar_t *b, uint64_t blen)
+{
+	blake2b_state S __attribute__((aligned(64)));
+	int rv;
+
+	init_blake2();
+	if (n < 1 || n > 64 || keylen < 0 || keylen > 64)
+		return (-1);
+	rv = (key != NULL && keylen > 0) ? bdsp.blake2b_init_key(&S, n, key, keylen) :
+	    bdsp.blake2b_init(&S, n);
+	if (rv == 0 && alen > 0)
+		rv = bdsp.blake2b_update(&S, a, alen);
+	if (rv == 0 && blen > 0)
+		rv = bdsp.blake2b_update(&S, b, blen);
+	if (rv == 0)
+		rv = bdsp.blake2b_final(&S, out, n);
+	memset(&S, 0, sizeof (S));
+	return (rv == 0 ? 0 : -1);
+}
+
+/*
  * Encryption related functions.
  */
 int

@@ -3495,6 +3495,7 @@ destroy_pc_context(pc_ctx_t *pctx)
 		memset(pctx->pw_copy, 0, pctx->pw_copy_len);
 		free(pctx->pw_copy);
 	}
+	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
 	free(pctx);
 }
 
@@ -4524,4 +4525,11 @@ void DLL_EXPORT
 pc_usage(pc_ctx_t *ctx)
 {
 	usage(ctx);
+}
+
+/* For chunk.c: set ctx's compress/decompress handlers for one algorithm. */
+int
+pc_init_algo_handlers(pc_ctx_t *pctx, const char *algo)
+{
+	return (init_algo(pctx, algo, 1));
 }

@@ -115,6 +115,15 @@ jobs:
             $(pkg-config --libs libpcompress) -Wl,-rpath,"$PWD/inst/usr/lib"
           ./pzcat -c < README.md > r.pz && ./pzcat < r.pz | cmp - README.md
           inst/usr/bin/pcompress -d r.pz r.out && cmp r.out README.md
+      - name: examples/pzstore.c (chunker, ids, sealed objects); second put stores nothing
+        run: |
+          export PKG_CONFIG_SYSROOT_DIR="$PWD/inst" PKG_CONFIG_LIBDIR="$PWD/inst/usr/lib/pkgconfig"
+          cc $(pkg-config --cflags libpcompress) examples/pzstore.c -o pzstore \
+            $(pkg-config --libs libpcompress) -Wl,-rpath,"$PWD/inst/usr/lib"
+          head -c 32 /dev/urandom > key; cat *.c *.md > in
+          ./pzstore put st key in > m1 && ./pzstore put st key in > m2 2> second.log
+          cmp m1 m2 && grep -q '^pzstore: 0 chunks stored' second.log
+          ./pzstore get st key < m1 | cmp - in
 
   nix:
     name: "Nix package (${{ matrix.runner }})"
