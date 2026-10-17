@@ -287,8 +287,43 @@ seal_err(pc_ctx_t *ctx, pc_error_t code, const char *msg)
 	return (-1);
 }
 
+static int chunk_seal(pc_ctx_t *, const void *, size_t, void *, size_t *);
+static int chunk_open(pc_ctx_t *, const void *, size_t, void *, size_t *);
+
+/* Codec messages (e.g. "output too small" before a raw fallback) go to the
+ * context's log, not the process default. */
 int DLL_EXPORT
 pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen)
+{
+	log_state_t *prev;
+	int rv;
+
+	if (ctx == NULL)
+		return (-1);
+	prev = log_bound();
+	log_bind(&ctx->log);
+	rv = chunk_seal(ctx, in, len, outp, outlen);
+	log_bind(prev);
+	return (rv);
+}
+
+int DLL_EXPORT
+pc_chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen)
+{
+	log_state_t *prev;
+	int rv;
+
+	if (ctx == NULL)
+		return (-1);
+	prev = log_bound();
+	log_bind(&ctx->log);
+	rv = chunk_open(ctx, inp, len, out, outlen);
+	log_bind(prev);
+	return (rv);
+}
+
+static int
+chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen)
 {
 	uchar_t *o = (uchar_t *)outp, enc[32], mac[32];
 	const char *algo = ctx->algo ? ctx->algo : "zstd";
@@ -396,8 +431,8 @@ pc_chunk_open_size(const void *obj, size_t len)
 	return (n < 0 ? (size_t)-1 : (size_t)n);
 }
 
-int DLL_EXPORT
-pc_chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen)
+static int
+chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen)
 {
 	const uchar_t *p = (const uchar_t *)inp;
 	uchar_t tag[PCK_TAG], enc[32], mac[32], *buf = NULL;
