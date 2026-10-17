@@ -1,20 +1,12 @@
-/*
- * Exported symbols of libpcompress.so.1. Everything else, including the
- * bundled zstd, lz4, libbsc and libarchive, is local, so a program can link
- * its own copies of those libraries without clashes.
- */
 PCOMPRESS_1 {
 	global:
-		/* Command-line style API (since 1.0) */
 		create_pc_context; destroy_pc_context;
 		init_pc_context; init_pc_context_argstr;
 		start_pcompress; start_compress; start_decompress;
 		pc_set_userpw; usage;
 		log_msg; set_log_dest; set_log_level;
-		/* 4.1: per-context logging and errors */
 		pc_set_log; pc_last_error; pc_last_error_code; pc_strerror;
 		pc_cleanup_tempfiles;
-		/* 4.1: typed settings and descriptor I/O */
 		pc_version; pc_api_version; pc_new; pc_free;
 		pc_set_algorithm; pc_set_level; pc_set_chunk_size; pc_set_threads;
 		pc_set_checksum; pc_set_dedupe; pc_set_encryption; pc_set_password;

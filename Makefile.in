@@ -29,6 +29,7 @@ LINKLIB=pcompress
 GCC=@GCC@
 GPP=@GPP@
 LIBVER=1
+PC_VERSION=@PC_VERSION@
 MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	adaptive_compress.c lzfx_compress.c lz4_compress.c none_compress.c \
 	utils/xxhash_base.c utils/heap.c utils/cpuid.c \
@@ -505,6 +506,8 @@ $(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
 $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 	@AR@ rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
+# libpcompress.map lists the exported API (version node PCOMPRESS_1);
+# everything else, including the bundled libraries, is local.
 $(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
 	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
 	ln -sf $(LIB).$(LIBVER) $(LIB)
@@ -631,7 +634,7 @@ clean: topclean
 	exit 0
 
 distclean: clean
-	$(RM) Makefile libpcompress.exports libpcompress.pc
+	$(RM) Makefile libpcompress.exports
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM_RF) buildtmp
 	(cd @LIBARCHIVE_DIR@; make distclean; rm -rf Makefile.orig tar test test_utils cpio libarchive/test)
@@ -653,7 +656,9 @@ install: $(PROG)
 	@mkdir -p $(DESTDIR)$(PREFIX)/include/pcompress $(DESTDIR)$(PREFIX)/lib/pkgconfig
 	@cp include/pcompress/pcompress.h $(DESTDIR)$(PREFIX)/include/pcompress/
 	@chmod 0444 $(DESTDIR)$(PREFIX)/include/pcompress/pcompress.h
-	@cp libpcompress.pc $(DESTDIR)$(PREFIX)/lib/pkgconfig/
+	@# Written here, not by ./config: 'make install PREFIX=...' may differ.
+	@sed -e 's#%PREFIX%#$(PREFIX)#' -e 's#%VERSION%#$(PC_VERSION)#' \
+	    pkgconfig/libpcompress.pc.in > $(DESTDIR)$(PREFIX)/lib/pkgconfig/libpcompress.pc
 	@chmod 0444 $(DESTDIR)$(PREFIX)/lib/pkgconfig/libpcompress.pc
 
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/doc/$(PROG)

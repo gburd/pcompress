@@ -317,39 +317,6 @@ then
 fi
 
 # Check bitness of system/toolchain
-# OpenMP: GCC/clang take -fopenmp; Apple clang needs -Xpreprocessor
-# -fopenmp plus libomp (Homebrew), found via CFLAGS/LDFLAGS or brew --prefix.
-echo "Checking for OpenMP ..."
-cat << _EOF > tst.c
-#include <omp.h>
-int main(void) { int n = 0;
-#pragma omp parallel
-{ n = omp_get_num_threads(); }
-return n > 0 ? 0 : 1; }
-_EOF
-omp_flags=
-omp_libs=
-for cand in "-fopenmp|" "-Xpreprocessor -fopenmp|-lomp"; do
-	_cf=${cand%%|*}; _lf=${cand#*|}
-	if ${GCC} ${CFLAGS:-} ${_cf} tst.c -o tst ${LDFLAGS:-} ${_lf} >/dev/null 2>&1; then
-		omp_flags=$_cf; omp_libs=$_lf; break
-	fi
-	if [ "$(uname)" = Darwin ] && command -v brew >/dev/null 2>&1; then
-		_omp=$(brew --prefix libomp 2>/dev/null)
-		if [ -n "$_omp" ] && ${GCC} ${CFLAGS:-} ${_cf} -I$_omp/include tst.c -o tst \
-		    ${LDFLAGS:-} -L$_omp/lib ${_lf} >/dev/null 2>&1; then
-			omp_flags="$_cf -I$_omp/include"; omp_libs="-L$_omp/lib $_lf"; break
-		fi
-	fi
-done
-rm -f tst tst.c
-if [ -z "$omp_flags" ]; then
-	echo "ERROR: no working OpenMP for ${GCC}."
-	echo "  Debian/Ubuntu: apt install libomp-dev (clang) / gcc has it built in"
-	echo "  macOS: brew install libomp"
-	exit 1
-fi
-echo "  OpenMP: ${omp_flags} ${omp_libs}"
 
 echo "Checking for 32-bit/64-bit platform ..."
 bitness=$(./tst)
@@ -371,6 +338,42 @@ then
 	extra_opt_flags="-m64"
 fi
 rm -f tst tst.c
+
+# OpenMP: GCC/clang take -fopenmp; Apple clang needs -Xpreprocessor
+# -fopenmp plus libomp (Homebrew), found via CFLAGS/LDFLAGS or brew --prefix.
+echo "Checking for OpenMP ..."
+cat << _EOF > tst_omp.c
+#include <omp.h>
+int main(void) { int n = 0;
+#pragma omp parallel
+{ n = omp_get_num_threads(); }
+return n > 0 ? 0 : 1; }
+_EOF
+omp_flags=
+omp_libs=
+# "compile flags:link flags". Not '|': illumos /bin/sh treats it as a
+# pattern alternation in ${x%%|*}, which emptied both halves.
+for cand in "-fopenmp:" "-Xpreprocessor -fopenmp:-lomp"; do
+	_cf=${cand%%:*}; _lf=${cand#*:}
+	if ${GCC} ${CFLAGS:-} ${_cf} tst_omp.c -o tst_omp ${LDFLAGS:-} ${_lf} >/dev/null 2>&1; then
+		omp_flags=$_cf; omp_libs=$_lf; break
+	fi
+	if [ "$(uname)" = Darwin ] && command -v brew >/dev/null 2>&1; then
+		_omp=$(brew --prefix libomp 2>/dev/null)
+		if [ -n "$_omp" ] && ${GCC} ${CFLAGS:-} ${_cf} -I$_omp/include tst_omp.c -o tst_omp \
+		    ${LDFLAGS:-} -L$_omp/lib ${_lf} >/dev/null 2>&1; then
+			omp_flags="$_cf -I$_omp/include"; omp_libs="-L$_omp/lib $_lf"; break
+		fi
+	fi
+done
+rm -f tst_omp tst_omp.c
+if [ -z "$omp_flags" ]; then
+	echo "ERROR: no working OpenMP for ${GCC}."
+	echo "  Debian/Ubuntu: apt install libomp-dev (clang) / gcc has it built in"
+	echo "  macOS: brew install libomp"
+	exit 1
+fi
+echo "  OpenMP: ${omp_flags} ${omp_libs}"
 
 while [ "${arg1}" != "" ]
 do
@@ -1386,37 +1389,38 @@ if [ $is_x86 -eq 1 ]; then
 	fi
 fi
 
-# Export only the public API from the shared library (libpcompress.map);
-# the bundled zstd/lz4/libbsc/libarchive symbols stay local.
+# Export only the public API from the shared library (libpcompress.map, a
+# version script: no comments in it, illumos ld only takes '#' ones); the
+# bundled zstd/lz4/libbsc/libarchive symbols stay local. The probe uses a
+# one-symbol map: lld rejects listed names the probe does not define.
 echo "Checking how to restrict exported symbols ..."
 export_flags=""
-printf 'int pc_probe(void){return 0;}\n' > .exp_probe.c
+printf 'int pc_probe(void){return 0;}\nint pc_hidden(void){return 1;}\n' > .exp_probe.c
+printf 'PCOMPRESS_1 {\n\tglobal: pc_probe;\n\tlocal: *;\n};\n' > .exp_probe.map
+printf '_pc_probe\n' > .exp_probe.exp
 if [ "$OS" = "Darwin" ]; then
-	# The map lists several names per line; Mach-O names carry a leading _.
-	sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:\|/\*' | \
+	# Mach-O names carry a leading _; the map lists several per line.
+	sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:' | \
 	    tr ';' '\n' | tr -d ' \t' | sed -e '/^$/d' -e 's/^/_/' > libpcompress.exports
-	# The probe defines none of the listed names; ld64 only warns for that
-	# with -w. Its exit status says whether the option itself works.
-	if ${GCC} -shared -o .exp_probe.so .exp_probe.c -Wl,-w \
-	    -Wl,-exported_symbols_list,libpcompress.exports >/dev/null 2>&1; then
+	if ${GCC} -shared -o .exp_probe.so .exp_probe.c \
+	    -Wl,-exported_symbols_list,.exp_probe.exp >/dev/null 2>&1; then
 		export_flags="-Wl,-exported_symbols_list,\$(CURDIR)/libpcompress.exports"
 	fi
 elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
-    -Wl,--version-script,libpcompress.map >/dev/null 2>&1; then
+    -Wl,--version-script,.exp_probe.map >/dev/null 2>&1; then
 	export_flags="-Wl,--version-script,\$(CURDIR)/libpcompress.map"
 elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
-    -Wl,-M,libpcompress.map >/dev/null 2>&1; then
-	export_flags="-Wl,-M,\$(CURDIR)/libpcompress.map"	# illumos ld
+    -Wl,-M,.exp_probe.map >/dev/null 2>&1; then
+	export_flags="-Wl,-M,\$(CURDIR)/libpcompress.map"	# illumos/Solaris ld
 fi
-rm -f .exp_probe.c .exp_probe.so
+rm -f .exp_probe.c .exp_probe.so .exp_probe.map .exp_probe.exp
 echo "  exports: ${export_flags:-all (linker has no version-script support)}"
 
 pc_version=$(sed -n 's/.*UTILITY_VERSION[^"]*"\([^"]*\)".*/\1/p' pcompress.h)
-sed -e "s#@PREFIX@#${prefix}#" -e "s#@VERSION@#${pc_version}#" \
-    pkgconfig/libpcompress.pc.in > libpcompress.pc
 
 sed "
 s#@EXPORT_FLAGS@#${export_flags}#g
+s#@PC_VERSION@#${pc_version}#g
 s#@TEST_RPATH@#${test_rpath}#g
 s#@GCC@#${GCC}#g
 s#@GPP@#${GPP}#g
