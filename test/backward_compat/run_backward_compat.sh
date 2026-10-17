@@ -302,7 +302,9 @@ for algo in lz4 zlib bzip2 lzma; do
 
         # Verify contents
         EXTRACT_CKSUM="${WORKDIR}/archive_extract.manifest"
-        (cd "$extract_dir" && find . -type f -exec sha256sum {} \; 2>/dev/null || find . -type f -exec shasum -a 256 {} \; 2>/dev/null || find . -type f -exec md5sum {} \;) | sort > "$EXTRACT_CKSUM"
+        # Members keep their full path (the absolute $ARCDIR minus its
+        # leading /), so compare that subtree, not the extraction root.
+        (cd "$extract_dir/${ARCDIR#/}" && find . -type f -exec sha256sum {} \; 2>/dev/null || find . -type f -exec shasum -a 256 {} \; 2>/dev/null || find . -type f -exec md5sum {} \;) | sort > "$EXTRACT_CKSUM"
 
         if diff "$ARCDIR_CKSUM" "$EXTRACT_CKSUM" >/dev/null 2>&1; then
             log_pass "$label"

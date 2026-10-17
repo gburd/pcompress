@@ -568,9 +568,14 @@ abi-update: $(LIB)
 
 # What packagers run: fast, no network, no root. Sequential: under make -j
 # the two would relink/rebuild the library while the other is running it.
+# Reference .pz files from earlier releases must keep decompressing.
+test-backward-compat: all
+	sh test/backward_compat/run_backward_compat.sh --verify-reference
+
 check:
 	$(MAKE) test-unit
 	$(MAKE) test-integration
+	$(MAKE) test-backward-compat
 
 test-all: all test-unit-build
 	(cd test; sh run_all_tests.sh all)
