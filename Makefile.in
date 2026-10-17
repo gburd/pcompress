@@ -477,7 +477,8 @@ $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 LIBARCHIVE_A = @LIBARCHIVE_DIR@/.libs/libarchive.a
 Libarchive: $(LIBARCHIVE_A)
 
-$(LIBARCHIVE_A):
+# Rebuilt when the pcompress patch changes (./config applies new parts).
+$(LIBARCHIVE_A): archive/patches/pcompress_libarchive.patch
 	(cd @LIBARCHIVE_DIR@; $(MAKE))
 
 LIBBSC_CPP_SRCS = $(LIBBSCDIR)/libbsc/adler32/adler32.cpp \

@@ -1312,17 +1312,26 @@ echo "*************** Running configure in libarchive ****************"
 		exit 1
 	fi
  fi
- # Apply pcompress patches if not already applied
+ # Apply pcompress patches if not already applied. File by file, so a tree
+ # patched by an older pcompress picks up only the new parts.
  if [ -f ../patches/pcompress_libarchive.patch ]; then
-	# Already fully applied?  (A reverse dry-run succeeds only then.)
-	if ! patch -p1 -R -s -f --dry-run < ../patches/pcompress_libarchive.patch >/dev/null 2>&1; then
-		echo "  Applying pcompress custom patches to libarchive ..."
-		if ! patch -p1 -N -s < ../patches/pcompress_libarchive.patch; then
+	pcp=.pcpatch.$$
+	mkdir "$pcp" || exit 1
+	awk -v d="$pcp" '/^diff --git /{n++} {print > (d "/" sprintf("%03d", n) ".diff")}' \
+	    ../patches/pcompress_libarchive.patch
+	for pf in "$pcp"/*.diff; do
+		grep -q '^--- ' "$pf" || continue
+		# Already applied?  (A reverse dry-run succeeds only then.)
+		patch -p1 -R -s -f --dry-run < "$pf" >/dev/null 2>&1 && continue
+		echo "  Applying pcompress libarchive patch: $(sed -n 's#^+++ b/##p' "$pf")"
+		if ! patch -p1 -N -s < "$pf"; then
 			echo "ERROR: pcompress libarchive patch failed to apply."
 			echo "       Reset the submodule: git -C $libarchive_dir checkout ."
+			find "$pcp" -depth -delete
 			exit 1
 		fi
-	fi
+	done
+	find "$pcp" -depth -delete
  fi
  # libarchive runs on our threads: it needs the thread-safe errno etc.
  # (illumos/Solaris use a global errno without -D_REENTRANT).

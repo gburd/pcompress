@@ -394,3 +394,50 @@ index 97e0b8a0..8b6b77b2 100644
 +	a->is_metadata_streaming = flag;
 +	return (0);
 +}
+diff --git a/libarchive/archive_read_support_format_tar.c b/libarchive/archive_read_support_format_tar.c
+--- a/libarchive/archive_read_support_format_tar.c
++++ b/libarchive/archive_read_support_format_tar.c
+@@ -153,6 +153,8 @@
+ 	int			 compat_2x;
+ 	int			 process_mac_extensions;
+ 	int			 read_concatenated_archives;
++	int			 default_inode;
++	int			 default_dev;
+ };
+ 
+ /* Track which size fields were present in the headers */
+@@ -518,26 +520,22 @@
+ 	 * probably not worthwhile just to support the relatively
+ 	 * obscure tar->cpio conversion case.
+ 	 */
+-	/* TODO: Move this into `struct tar` to avoid conflicts
+-	 * when reading multiple archives */
+-	static int default_inode;
+-	static int default_dev;
+ 	struct tar *tar;
+ 	const char *p;
+ 	const wchar_t *wp;
+ 	int r;
+ 	size_t l, unconsumed = 0;
+ 
+-	/* Assign default device/inode values. */
+-	archive_entry_set_dev(entry, 1 + default_dev); /* Don't use zero. */
+-	archive_entry_set_ino(entry, ++default_inode); /* Don't use zero. */
++	tar = (struct tar *)(a->format->data);
++
++	/* Assign default device/inode values (per archive, as upstream). */
++	archive_entry_set_dev(entry, 1 + tar->default_dev); /* Don't use zero. */
++	archive_entry_set_ino(entry, ++tar->default_inode); /* Don't use zero. */
+ 	/* Limit generated st_ino number to 16 bits. */
+-	if (default_inode >= 0xffff) {
+-		++default_dev;
+-		default_inode = 0;
++	if (tar->default_inode >= 0xffff) {
++		++tar->default_dev;
++		tar->default_inode = 0;
+ 	}
+-
+-	tar = (struct tar *)(a->format->data);
+ 	tar->entry_offset = 0;
+ 	gnu_clear_sparse_list(tar);
+ 	tar->size_fields = 0; /* We don't have any size info yet */
