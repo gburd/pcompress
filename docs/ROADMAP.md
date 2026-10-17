@@ -15,20 +15,20 @@ Goal: a library that serves two users without breaking either.
 The library supplies the data-path building blocks. Snapshots, retention,
 scheduling and storage backends belong in the consuming program.
 
-## What is wrong today (verified, 4.0.2)
+## What was wrong (verified on 4.0.2), and status
 
-| # | Problem | Evidence |
-|---|---------|----------|
-| P1 | Two contexts in one process crash | Two threads, each with `create_pc_context()` + `start_pcompress()`: SIGSEGV every run, also with `--disable-allocator`. |
-| P2 | Process-global state | Slab allocator, global-dedupe index (`rabin_dedup.c: arc`), log destination, CPU/hash dispatch tables, `getopt` state, archive filter table, OpenMP thread count. `destroy_pc_context()` runs `slab_cleanup()` for the whole process. |
-| P3 | The API is the command line | `init_pc_context_argstr("pcompress -c zstd …")`, then `start_pcompress()`. Inputs and outputs are file paths. The library opens files, picks names, writes a temp file and renames it. No buffer or callback I/O. |
-| P4 | No public headers | `make install` ships `libpcompress.so.1` and no headers. `pcompress.h` exposes `pc_ctx_t` internals. Bundled zstd, lz4, libbsc and libarchive symbols are exported and would clash with another copy in the same program. |
-| P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. |
-| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). |
-| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. |
-| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. |
-| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. |
-| P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. |
+| # | Problem | Evidence | Status |
+|---|---------|----------|--------|
+| P1 | Two contexts in one process crash | Two threads, each with `create_pc_context()` + `start_pcompress()`: SIGSEGV every run, also with `--disable-allocator`. | Fixed in 4.1.0 |
+| P2 | Process-global state | Slab allocator, global-dedupe index (`rabin_dedup.c: arc`), log destination, CPU/hash dispatch tables, `getopt` state, archive filter table, OpenMP thread count. `destroy_pc_context()` runs `slab_cleanup()` for the whole process. | Fixed in 4.1.0 (adaptive `-C` counters still shared) |
+| P3 | The API is the command line | `init_pc_context_argstr("pcompress -c zstd …")`, then `start_pcompress()`. Inputs and outputs are file paths. The library opens files, picks names, writes a temp file and renames it. No buffer or callback I/O. | Fixed in 4.1.0 (fd I/O; no callback I/O) |
+| P4 | No public headers | `make install` ships `libpcompress.so.1` and no headers. `pcompress.h` exposes `pc_ctx_t` internals. Bundled zstd, lz4, libbsc and libarchive symbols are exported and would clash with another copy in the same program. | Fixed in 4.1.0 |
+| P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. | Fixed in 4.1.0 |
+| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Open (Phase 5) |
+| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Open (Phase 3) |
+| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Open (Phase 6) |
+| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Partly: `pc_set_password()` uses every byte; CLI cap and raw keys open (Phase 4) |
+| P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
 
 ## Phases
 

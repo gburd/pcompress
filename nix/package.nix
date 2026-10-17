@@ -46,7 +46,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "pcompress";
-  version = "4.0.2";
+  version = "4.1.0";
 
   src =
     if src != null then
