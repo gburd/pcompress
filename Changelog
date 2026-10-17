@@ -7,6 +7,8 @@ Library: chunk-level building blocks for backup tools (libpcompress(3),
   256-bit key). examples/pzstore.c is a small deduplicating store on them.
   Key files (pc_keyfile_create/open): a random key wrapped with a password
   of any length (scrypt).
+  Chunk index (pc_index_*): a persistent, append-only set of chunk ids;
+  examples/pzstore uses it.
   Additions only: the 4.1.0 ABI is unchanged.
 Passwords: the whole password is used, up to 4096 bytes. 4.1.0 used only
   the first 15 bytes of a -w file over 16 bytes, and its prompt refused

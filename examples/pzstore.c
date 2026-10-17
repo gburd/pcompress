@@ -8,7 +8,8 @@
  *
  * <keyfile> holds 32 raw key bytes. Each chunk is stored once, as
  * <store>/<keyed id>; the id is keyed so object names do not reveal content
- * hashes. Run "put" twice on the same file: the second run stores nothing.
+ * hashes. <store>/index (pc_index_*) remembers what is stored, so a second
+ * "put" of the same file stores nothing and asks the store nothing.
  *
  *   cc $(pkg-config --cflags libpcompress) pzstore.c -o pzstore $(pkg-config --libs libpcompress)
  */
@@ -41,24 +42,23 @@ hex(const unsigned char id[32], char out[65])
 		sprintf(out + 2 * i, "%02x", id[i]);
 }
 
-/* Store one chunk unless an object with its id exists. 1 stored, 0 dedup, -1 error. */
+/* Store one chunk unless the index has it. 1 stored, 0 dedup, -1 error. */
 static int
-put_chunk(pc_ctx_t *c, const char *store, const unsigned char *key,
+put_chunk(pc_ctx_t *c, pc_index_t *idx, const char *store, const unsigned char *key,
     const unsigned char *buf, size_t len, unsigned char *obj)
 {
 	unsigned char id[32];
 	char name[65], path[4096], tmp[4200];
 	size_t ol = pc_chunk_seal_bound(len);
-	struct stat st;
 	FILE *f;
 
 	if (pc_chunk_id(buf, len, key, 32, id) != 0)
 		return (-1);
 	hex(id, name);
 	printf("%s %zu\n", name, len);
-	snprintf(path, sizeof (path), "%s/%s", store, name);
-	if (stat(path, &st) == 0)
+	if (pc_index_has(idx, id) == 1)
 		return (0);
+	snprintf(path, sizeof (path), "%s/%s", store, name);
 	if (pc_chunk_seal(c, buf, len, obj, &ol) != 0) {
 		fprintf(stderr, "pzstore: seal: %s\n", pc_last_error(c));
 		return (-1);
@@ -69,7 +69,8 @@ put_chunk(pc_ctx_t *c, const char *store, const unsigned char *key,
 		fprintf(stderr, "pzstore: %s: %s\n", path, strerror(errno));
 		return (-1);
 	}
-	return (1);
+	/* Only now: the index must never claim an object that is not there. */
+	return (pc_index_add(idx, id) < 0 ? -1 : 1);
 }
 
 static int
@@ -81,8 +82,12 @@ put(pc_ctx_t *c, const char *store, const unsigned char *key, const char *file)
 	FILE *in = fopen(file, "rb");
 	long stored = 0, dedup = 0;
 	int n, k, rv = 0, eof = 0;
+	char ipath[4096];
+	pc_index_t *idx;
 
-	if (ch == NULL || buf == NULL || obj == NULL || in == NULL)
+	snprintf(ipath, sizeof (ipath), "%s/index", store);
+	idx = pc_index_open(ipath);
+	if (ch == NULL || buf == NULL || obj == NULL || in == NULL || idx == NULL)
 		return (-1);
 	while (rv == 0 && !eof) {
 		r = fread(buf + have, 1, 4 * MAXCHUNK - have, in);
@@ -92,7 +97,7 @@ put(pc_ctx_t *c, const char *store, const unsigned char *key, const char *file)
 		if (n < 0)
 			rv = -1;
 		for (off = 0, k = 0; rv == 0 && k < n; off += lens[k++]) {
-			int s = put_chunk(c, store, key, buf + off, lens[k], obj);
+			int s = put_chunk(c, idx, store, key, buf + off, lens[k], obj);
 
 			if (s < 0)
 				rv = -1;
@@ -104,6 +109,8 @@ put(pc_ctx_t *c, const char *store, const unsigned char *key, const char *file)
 		have -= off;
 	}
 	fprintf(stderr, "pzstore: %ld chunks stored, %ld already present\n", stored, dedup);
+	if (pc_index_close(idx) != 0)
+		rv = -1;
 	fclose(in);
 	pc_chunker_free(ch);
 	free(buf);

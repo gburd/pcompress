@@ -29,6 +29,12 @@
     <elf-symbol name='pc_compress_fd' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_decompress_fd' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_free' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_add' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_close' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_count' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_has' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_open' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_index_sync' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_keyfile_create' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_keyfile_open' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_keyfile_size' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -151,6 +157,7 @@
     <elf-symbol name='fstatat' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
     <elf-symbol name='fstatfs' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
     <elf-symbol name='fstatvfs' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
+    <elf-symbol name='fsync' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
     <elf-symbol name='ftell' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
     <elf-symbol name='ftruncate' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
     <elf-symbol name='futimens' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='no'/>
@@ -316,91 +323,122 @@
   <abi-instr address-size='64' path='chunk.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
     <typedef-decl name='__uint8_t' type-id='type-id-2' size-in-bits='8' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='38' column='1' hash='6ebac62b3366db68' id='type-id-3'/>
     <typedef-decl name='uint8_t' type-id='type-id-3' size-in-bits='8' filepath='/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h' line='24' column='1' hash='6ebac62b3366db68' id='type-id-4'/>
-    <pointer-type-def type-id='type-id-5' size-in-bits='64' hash='54c1e9f81ec7a1db' id='type-id-6'/>
-    <pointer-type-def type-id='type-id-4' size-in-bits='64' hash='24d8cca8965ce13e' id='type-id-7'/>
-    <pointer-type-def type-id='type-id-8' size-in-bits='64' id='type-id-9'/>
-    <typedef-decl name='pc_chunker_t' type-id='type-id-10' filepath='./utils/../include/pcompress/pcompress.h' line='165' column='1' id='type-id-8'/>
-    <class-decl name='pc_chunker' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='/home/admin/pcompress/chunk.c' line='38' column='1' id='type-id-10'/>
-    <function-decl name='pc_chunker_new' mangled-name='pc_chunker_new' filepath='/home/admin/pcompress/chunk.c' line='52' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_new@@PCOMPRESS_1' hash='a46227d8770aeeb5'>
-      <parameter type-id='type-id-5' name='avg' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
-      <parameter type-id='type-id-5' name='min' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
-      <parameter type-id='type-id-5' name='max' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
-      <return type-id='type-id-9'/>
-    </function-decl>
-    <function-decl name='pc_chunker_free' mangled-name='pc_chunker_free' filepath='/home/admin/pcompress/chunk.c' line='79' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_free@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='79' column='1'/>
+    <qualified-type-def type-id='type-id-4' const='yes' hash='5a6582fbecdbfc78' id='type-id-5'/>
+    <pointer-type-def type-id='type-id-5' size-in-bits='64' hash='d2a42ec7d4838233' id='type-id-6'/>
+    <pointer-type-def type-id='type-id-7' size-in-bits='64' hash='54c1e9f81ec7a1db' id='type-id-8'/>
+    <pointer-type-def type-id='type-id-4' size-in-bits='64' hash='24d8cca8965ce13e' id='type-id-9'/>
+    <pointer-type-def type-id='type-id-10' size-in-bits='64' id='type-id-11'/>
+    <pointer-type-def type-id='type-id-12' size-in-bits='64' id='type-id-13'/>
+    <typedef-decl name='pc_chunker_t' type-id='type-id-14' filepath='./utils/../include/pcompress/pcompress.h' line='165' column='1' id='type-id-10'/>
+    <typedef-decl name='pc_index_t' type-id='type-id-15' filepath='./utils/../include/pcompress/pcompress.h' line='218' column='1' id='type-id-12'/>
+    <class-decl name='pc_chunker' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='/home/admin/pcompress/chunk.c' line='40' column='1' id='type-id-14'/>
+    <function-decl name='pc_chunker_new' mangled-name='pc_chunker_new' filepath='/home/admin/pcompress/chunk.c' line='54' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_new@@PCOMPRESS_1' hash='a46227d8770aeeb5'>
+      <parameter type-id='type-id-7' name='avg' filepath='/home/admin/pcompress/chunk.c' line='54' column='1'/>
+      <parameter type-id='type-id-7' name='min' filepath='/home/admin/pcompress/chunk.c' line='54' column='1'/>
+      <parameter type-id='type-id-7' name='max' filepath='/home/admin/pcompress/chunk.c' line='54' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='pc_chunker_feed' mangled-name='pc_chunker_feed' filepath='/home/admin/pcompress/chunk.c' line='94' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_feed@@PCOMPRESS_1' hash='f49be1eccf4e1fb0'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
-      <parameter type-id='type-id-12' name='buf' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
-      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
-      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
+    <function-decl name='pc_chunker_free' mangled-name='pc_chunker_free' filepath='/home/admin/pcompress/chunk.c' line='81' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_free@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
+      <parameter type-id='type-id-11' name='c' filepath='/home/admin/pcompress/chunk.c' line='81' column='1'/>
+      <return type-id='type-id-16'/>
+    </function-decl>
+    <function-decl name='pc_chunker_feed' mangled-name='pc_chunker_feed' filepath='/home/admin/pcompress/chunk.c' line='96' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_feed@@PCOMPRESS_1' hash='f49be1eccf4e1fb0'>
+      <parameter type-id='type-id-11' name='c' filepath='/home/admin/pcompress/chunk.c' line='96' column='1'/>
+      <parameter type-id='type-id-17' name='buf' filepath='/home/admin/pcompress/chunk.c' line='96' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='96' column='1'/>
+      <parameter type-id='type-id-8' name='lens' filepath='/home/admin/pcompress/chunk.c' line='96' column='1'/>
+      <parameter type-id='type-id-18' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='96' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_chunker_finish' mangled-name='pc_chunker_finish' filepath='/home/admin/pcompress/chunk.c' line='123' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_finish@@PCOMPRESS_1' hash='a554350138708921'>
+      <parameter type-id='type-id-11' name='c' filepath='/home/admin/pcompress/chunk.c' line='123' column='1'/>
+      <parameter type-id='type-id-8' name='lens' filepath='/home/admin/pcompress/chunk.c' line='123' column='1'/>
+      <parameter type-id='type-id-18' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='123' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_chunk_id' mangled-name='pc_chunk_id' filepath='/home/admin/pcompress/chunk.c' line='141' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_id@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
+      <parameter type-id='type-id-17' name='in' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-17' name='pw' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-7' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-9' name='key' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_chunk_seal_bound' mangled-name='pc_chunk_seal_bound' filepath='/home/admin/pcompress/chunk.c' line='195' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal_bound@@PCOMPRESS_1' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='195' column='1'/>
+      <return type-id='type-id-7'/>
+    </function-decl>
+    <function-decl name='pc_chunk_seal' mangled-name='pc_chunk_seal' filepath='/home/admin/pcompress/chunk.c' line='293' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-17' name='inp' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-17' name='out' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-8' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_chunk_open_size' mangled-name='pc_chunk_open_size' filepath='/home/admin/pcompress/chunk.c' line='394' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open_size@@PCOMPRESS_1' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-17' name='obj' filepath='/home/admin/pcompress/chunk.c' line='394' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='394' column='1'/>
+      <return type-id='type-id-7'/>
+    </function-decl>
+    <function-decl name='pc_chunk_open' mangled-name='pc_chunk_open' filepath='/home/admin/pcompress/chunk.c' line='402' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-17' name='inp' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-17' name='out' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <parameter type-id='type-id-8' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='402' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_set_key' mangled-name='pc_set_key' filepath='/home/admin/pcompress/chunk.c' line='489' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_key@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <parameter type-id='type-id-17' name='key' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <parameter type-id='type-id-7' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_size' mangled-name='pc_keyfile_size' filepath='/home/admin/pcompress/chunk.c' line='556' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_size@@PCOMPRESS_1' hash='e0055d99adb0e173'>
+      <return type-id='type-id-7'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_create' mangled-name='pc_keyfile_create' filepath='/home/admin/pcompress/chunk.c' line='562' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_create@@PCOMPRESS_1' hash='3eebd9f8d1ae85f9'>
+      <parameter type-id='type-id-17' name='pw' filepath='/home/admin/pcompress/chunk.c' line='562' column='1'/>
+      <parameter type-id='type-id-7' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='562' column='1'/>
+      <parameter type-id='type-id-9' name='key' filepath='/home/admin/pcompress/chunk.c' line='562' column='1'/>
+      <parameter type-id='type-id-17' name='out' filepath='/home/admin/pcompress/chunk.c' line='562' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_open' mangled-name='pc_keyfile_open' filepath='/home/admin/pcompress/chunk.c' line='592' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_open@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
+      <parameter type-id='type-id-17' name='in' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-7' name='len' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-17' name='pw' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-7' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <parameter type-id='type-id-9' name='key' filepath='/home/admin/pcompress/chunk.c' line='592' column='1'/>
+      <return type-id='type-id-18'/>
+    </function-decl>
+    <class-decl name='pc_index' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='/home/admin/pcompress/chunk.c' line='633' column='1' id='type-id-15'/>
+    <function-decl name='pc_index_open' mangled-name='pc_index_open' filepath='/home/admin/pcompress/chunk.c' line='726' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_open@@PCOMPRESS_1' hash='53885bde0aa65efe'>
+      <parameter type-id='type-id-20' name='path' filepath='/home/admin/pcompress/chunk.c' line='726' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_chunker_finish' mangled-name='pc_chunker_finish' filepath='/home/admin/pcompress/chunk.c' line='121' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_finish@@PCOMPRESS_1' hash='a554350138708921'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
-      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
-      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
-      <return type-id='type-id-13'/>
+    <function-decl name='pc_index_has' mangled-name='pc_index_has' filepath='/home/admin/pcompress/chunk.c' line='766' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_has@@PCOMPRESS_1' hash='a98397be84ead388'>
+      <parameter type-id='type-id-13' name='x' filepath='/home/admin/pcompress/chunk.c' line='776' column='1'/>
+      <parameter type-id='type-id-6' name='id' filepath='/home/admin/pcompress/chunk.c' line='776' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
-    <function-decl name='pc_chunk_id' mangled-name='pc_chunk_id' filepath='/home/admin/pcompress/chunk.c' line='139' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_id@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
-      <parameter type-id='type-id-12' name='in' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <return type-id='type-id-13'/>
+    <function-decl name='pc_index_add' mangled-name='pc_index_add' filepath='/home/admin/pcompress/chunk.c' line='776' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_add@@PCOMPRESS_1' hash='a98397be84ead388'>
+      <parameter type-id='type-id-13' name='x' filepath='/home/admin/pcompress/chunk.c' line='776' column='1'/>
+      <parameter type-id='type-id-6' name='id' filepath='/home/admin/pcompress/chunk.c' line='776' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
-    <function-decl name='pc_chunk_seal_bound' mangled-name='pc_chunk_seal_bound' filepath='/home/admin/pcompress/chunk.c' line='193' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal_bound@@PCOMPRESS_1' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='193' column='1'/>
-      <return type-id='type-id-5'/>
+    <function-decl name='pc_index_count' mangled-name='pc_index_count' filepath='/home/admin/pcompress/chunk.c' line='792' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_count@@PCOMPRESS_1' hash='e0055d99adb0e173'>
+      <parameter type-id='type-id-13' name='x' filepath='/home/admin/pcompress/chunk.c' line='792' column='1'/>
+      <return type-id='type-id-7'/>
     </function-decl>
-    <function-decl name='pc_chunk_seal' mangled-name='pc_chunk_seal' filepath='/home/admin/pcompress/chunk.c' line='291' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <return type-id='type-id-13'/>
+    <function-decl name='pc_index_sync' mangled-name='pc_index_sync' filepath='/home/admin/pcompress/chunk.c' line='798' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_sync@@PCOMPRESS_1' hash='388da3fa973fde78'>
+      <parameter type-id='type-id-13' name='x' filepath='/home/admin/pcompress/chunk.c' line='806' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
-    <function-decl name='pc_chunk_open_size' mangled-name='pc_chunk_open_size' filepath='/home/admin/pcompress/chunk.c' line='392' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open_size@@PCOMPRESS_1' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-12' name='obj' filepath='/home/admin/pcompress/chunk.c' line='392' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='392' column='1'/>
-      <return type-id='type-id-5'/>
-    </function-decl>
-    <function-decl name='pc_chunk_open' mangled-name='pc_chunk_open' filepath='/home/admin/pcompress/chunk.c' line='400' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
-      <return type-id='type-id-13'/>
-    </function-decl>
-    <function-decl name='pc_set_key' mangled-name='pc_set_key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_key@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <return type-id='type-id-13'/>
-    </function-decl>
-    <function-decl name='pc_keyfile_size' mangled-name='pc_keyfile_size' filepath='/home/admin/pcompress/chunk.c' line='554' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_size@@PCOMPRESS_1' hash='e0055d99adb0e173'>
-      <return type-id='type-id-5'/>
-    </function-decl>
-    <function-decl name='pc_keyfile_create' mangled-name='pc_keyfile_create' filepath='/home/admin/pcompress/chunk.c' line='560' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_create@@PCOMPRESS_1' hash='3eebd9f8d1ae85f9'>
-      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
-      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
-      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
-      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
-      <return type-id='type-id-13'/>
-    </function-decl>
-    <function-decl name='pc_keyfile_open' mangled-name='pc_keyfile_open' filepath='/home/admin/pcompress/chunk.c' line='590' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_open@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
-      <parameter type-id='type-id-12' name='in' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
-      <return type-id='type-id-13'/>
+    <function-decl name='pc_index_close' mangled-name='pc_index_close' filepath='/home/admin/pcompress/chunk.c' line='806' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_index_close@@PCOMPRESS_1' hash='388da3fa973fde78'>
+      <parameter type-id='type-id-13' name='x' filepath='/home/admin/pcompress/chunk.c' line='806' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
   </abi-instr>
   <abi-instr address-size='64' path='crypto/crypto_utils.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
@@ -410,583 +448,583 @@
     <var-decl name='stdout' type-id='type-id-1' visibility='default' filepath='/usr/include/stdio.h' line='150' column='1' elf-symbol-id='stdout'/>
   </abi-instr>
   <abi-instr address-size='64' path='pcompress.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
-    <array-type-def dimensions='1' type-id='type-id-15' size-in-bits='32768' hash='b4b2e1ad43ccf47e' id='type-id-16'>
-      <subrange length='4096' lower-bound='0' upper-bound='4095' type-id='type-id-17' size-in-bits='64' is-anonymous='yes' hash='28c39550727a8b34' id='type-id-18'/>
+    <array-type-def dimensions='1' type-id='type-id-21' size-in-bits='32768' hash='b4b2e1ad43ccf47e' id='type-id-22'>
+      <subrange length='4096' lower-bound='0' upper-bound='4095' type-id='type-id-23' size-in-bits='64' is-anonymous='yes' hash='28c39550727a8b34' id='type-id-24'/>
     </array-type-def>
-    <array-type-def dimensions='1' type-id='type-id-15' size-in-bits='320' hash='e7f9696e246a3049' id='type-id-19'>
-      <subrange length='40' lower-bound='0' upper-bound='39' type-id='type-id-17' size-in-bits='64' is-anonymous='yes' hash='6281bd35fbce8744' id='type-id-20'/>
+    <array-type-def dimensions='1' type-id='type-id-21' size-in-bits='320' hash='e7f9696e246a3049' id='type-id-25'>
+      <subrange length='40' lower-bound='0' upper-bound='39' type-id='type-id-23' size-in-bits='64' is-anonymous='yes' hash='6281bd35fbce8744' id='type-id-26'/>
     </array-type-def>
-    <enum-decl name='compress_op_t' naming-typedef-id='type-id-21' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='399' column='1' hash='4c8bed079515a341' id='type-id-22'>
-      <underlying-type type-id='type-id-23'/>
+    <enum-decl name='compress_op_t' naming-typedef-id='type-id-27' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='399' column='1' hash='4c8bed079515a341' id='type-id-28'>
+      <underlying-type type-id='type-id-29'/>
     </enum-decl>
-    <type-decl name='short int' size-in-bits='16' hash='6c2352eccdcd3eea#3' id='type-id-24'/>
-    <class-decl name='__pthread_internal_list' is-struct='yes' visibility='default' size-in-bits='128' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='51' column='1' hash='5bcfb7f1ab39fa47' id='type-id-25'>
+    <type-decl name='short int' size-in-bits='16' hash='6c2352eccdcd3eea#3' id='type-id-30'/>
+    <class-decl name='__pthread_internal_list' is-struct='yes' visibility='default' size-in-bits='128' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='51' column='1' hash='5bcfb7f1ab39fa47' id='type-id-31'>
       <data-member access='public' layout-offset-in-bits='0'>
-        <var-decl name='__prev' type-id='type-id-26' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='53' column='1'/>
+        <var-decl name='__prev' type-id='type-id-32' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='53' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='64'>
-        <var-decl name='__next' type-id='type-id-26' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='54' column='1'/>
+        <var-decl name='__next' type-id='type-id-32' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='54' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='__pthread_mutex_s' is-struct='yes' visibility='default' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='22' column='1' hash='765d7e157ef2ec37' id='type-id-27'>
+    <class-decl name='__pthread_mutex_s' is-struct='yes' visibility='default' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='22' column='1' hash='765d7e157ef2ec37' id='type-id-33'>
       <data-member access='public' layout-offset-in-bits='0'>
-        <var-decl name='__lock' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='24' column='1'/>
+        <var-decl name='__lock' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='24' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='32'>
-        <var-decl name='__count' type-id='type-id-28' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='25' column='1'/>
+        <var-decl name='__count' type-id='type-id-34' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='25' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='64'>
-        <var-decl name='__owner' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='26' column='1'/>
+        <var-decl name='__owner' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='26' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='96'>
-        <var-decl name='__nusers' type-id='type-id-28' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='28' column='1'/>
+        <var-decl name='__nusers' type-id='type-id-34' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='28' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='128'>
-        <var-decl name='__kind' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='32' column='1'/>
+        <var-decl name='__kind' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='32' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='160'>
-        <var-decl name='__spins' type-id='type-id-24' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='34' column='1'/>
+        <var-decl name='__spins' type-id='type-id-30' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='34' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='176'>
-        <var-decl name='__elision' type-id='type-id-24' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='35' column='1'/>
+        <var-decl name='__elision' type-id='type-id-30' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='35' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='192'>
-        <var-decl name='__list' type-id='type-id-29' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='36' column='1'/>
+        <var-decl name='__list' type-id='type-id-35' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/struct_mutex.h' line='36' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='pc_ctx' is-struct='yes' visibility='default' size-in-bits='74048' filepath='./pcompress.h' line='324' column='1' hash='842445a8e4fd0265' id='type-id-30'>
+    <class-decl name='pc_ctx' is-struct='yes' visibility='default' size-in-bits='74048' filepath='./pcompress.h' line='324' column='1' hash='842445a8e4fd0265' id='type-id-36'>
       <data-member access='public' layout-offset-in-bits='0'>
-        <var-decl name='_compress_func' type-id='type-id-31' visibility='default' filepath='./pcompress.h' line='325' column='1'/>
+        <var-decl name='_compress_func' type-id='type-id-37' visibility='default' filepath='./pcompress.h' line='325' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='64'>
-        <var-decl name='_decompress_func' type-id='type-id-31' visibility='default' filepath='./pcompress.h' line='326' column='1'/>
+        <var-decl name='_decompress_func' type-id='type-id-37' visibility='default' filepath='./pcompress.h' line='326' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='128'>
-        <var-decl name='_init_func' type-id='type-id-32' visibility='default' filepath='./pcompress.h' line='327' column='1'/>
+        <var-decl name='_init_func' type-id='type-id-38' visibility='default' filepath='./pcompress.h' line='327' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='192'>
-        <var-decl name='_deinit_func' type-id='type-id-33' visibility='default' filepath='./pcompress.h' line='328' column='1'/>
+        <var-decl name='_deinit_func' type-id='type-id-39' visibility='default' filepath='./pcompress.h' line='328' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='256'>
-        <var-decl name='_stats_func' type-id='type-id-34' visibility='default' filepath='./pcompress.h' line='329' column='1'/>
+        <var-decl name='_stats_func' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='329' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='320'>
-        <var-decl name='_props_func' type-id='type-id-35' visibility='default' filepath='./pcompress.h' line='330' column='1'/>
+        <var-decl name='_props_func' type-id='type-id-41' visibility='default' filepath='./pcompress.h' line='330' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='384'>
-        <var-decl name='inited' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='332' column='1'/>
+        <var-decl name='inited' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='332' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='416'>
-        <var-decl name='main_cancel' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='333' column='1'/>
+        <var-decl name='main_cancel' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='333' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='448'>
-        <var-decl name='adapt_mode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='334' column='1'/>
+        <var-decl name='adapt_mode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='334' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='480'>
-        <var-decl name='pipe_mode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='335' column='1'/>
+        <var-decl name='pipe_mode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='335' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='512'>
-        <var-decl name='pipe_out' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='335' column='1'/>
+        <var-decl name='pipe_out' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='335' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='544'>
-        <var-decl name='nthreads' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='336' column='1'/>
+        <var-decl name='nthreads' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='336' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='576'>
-        <var-decl name='hide_cmp_stats' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='337' column='1'/>
+        <var-decl name='hide_cmp_stats' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='337' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='608'>
-        <var-decl name='show_chunks' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='338' column='1'/>
+        <var-decl name='show_chunks' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='338' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='640'>
-        <var-decl name='enable_rabin_scan' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='339' column='1'/>
+        <var-decl name='enable_rabin_scan' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='339' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='672'>
-        <var-decl name='enable_rabin_global' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='340' column='1'/>
+        <var-decl name='enable_rabin_global' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='340' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='704'>
-        <var-decl name='dedupe_index' type-id='type-id-36' visibility='default' filepath='./pcompress.h' line='341' column='1'/>
+        <var-decl name='dedupe_index' type-id='type-id-42' visibility='default' filepath='./pcompress.h' line='341' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='768'>
-        <var-decl name='enable_delta_encode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='342' column='1'/>
+        <var-decl name='enable_delta_encode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='342' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='800'>
-        <var-decl name='enable_delta2_encode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='343' column='1'/>
+        <var-decl name='enable_delta2_encode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='343' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='832'>
-        <var-decl name='delta2_nstrides' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='344' column='1'/>
+        <var-decl name='delta2_nstrides' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='344' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='864'>
-        <var-decl name='enable_rabin_split' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='345' column='1'/>
+        <var-decl name='enable_rabin_split' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='345' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='896'>
-        <var-decl name='enable_fixed_scan' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='346' column='1'/>
+        <var-decl name='enable_fixed_scan' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='346' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='928'>
-        <var-decl name='enable_analyzer' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='347' column='1'/>
+        <var-decl name='enable_analyzer' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='347' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='960'>
-        <var-decl name='preprocess_mode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='348' column='1'/>
+        <var-decl name='preprocess_mode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='348' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='992'>
-        <var-decl name='lzp_preprocess' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='349' column='1'/>
+        <var-decl name='lzp_preprocess' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='349' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1024'>
-        <var-decl name='exe_preprocess' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='350' column='1'/>
+        <var-decl name='exe_preprocess' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='350' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1056'>
-        <var-decl name='encrypt_type' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='351' column='1'/>
+        <var-decl name='encrypt_type' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='351' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1088'>
-        <var-decl name='archive_mode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='352' column='1'/>
+        <var-decl name='archive_mode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='352' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1120'>
-        <var-decl name='enable_archive_sort' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='353' column='1'/>
+        <var-decl name='enable_archive_sort' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='353' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1152'>
-        <var-decl name='pagesize' type-id='type-id-37' visibility='default' filepath='./pcompress.h' line='354' column='1'/>
+        <var-decl name='pagesize' type-id='type-id-43' visibility='default' filepath='./pcompress.h' line='354' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1216'>
-        <var-decl name='force_archive_perms' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='355' column='1'/>
+        <var-decl name='force_archive_perms' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='355' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1248'>
-        <var-decl name='no_overwrite_newer' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='356' column='1'/>
+        <var-decl name='no_overwrite_newer' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='356' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1280'>
-        <var-decl name='advanced_opts' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='357' column='1'/>
+        <var-decl name='advanced_opts' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='357' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1312'>
-        <var-decl name='meta_stream' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='358' column='1'/>
+        <var-decl name='meta_stream' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='358' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1344'>
-        <var-decl name='archive_members_file' type-id='type-id-16' visibility='default' filepath='./pcompress.h' line='363' column='1'/>
+        <var-decl name='archive_members_file' type-id='type-id-22' visibility='default' filepath='./pcompress.h' line='363' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34112'>
-        <var-decl name='archive_members_fd' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='364' column='1'/>
+        <var-decl name='archive_members_fd' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='364' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34144'>
-        <var-decl name='archive_members_count' type-id='type-id-38' visibility='default' filepath='./pcompress.h' line='365' column='1'/>
+        <var-decl name='archive_members_count' type-id='type-id-44' visibility='default' filepath='./pcompress.h' line='365' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34176'>
-        <var-decl name='archive_ctx' type-id='type-id-12' visibility='default' filepath='./pcompress.h' line='366' column='1'/>
+        <var-decl name='archive_ctx' type-id='type-id-17' visibility='default' filepath='./pcompress.h' line='366' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34240'>
-        <var-decl name='archive_sort_buf' type-id='type-id-12' visibility='default' filepath='./pcompress.h' line='366' column='1'/>
+        <var-decl name='archive_sort_buf' type-id='type-id-17' visibility='default' filepath='./pcompress.h' line='366' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34304'>
-        <var-decl name='archive_thread' type-id='type-id-39' visibility='default' filepath='./pcompress.h' line='367' column='1'/>
+        <var-decl name='archive_thread' type-id='type-id-45' visibility='default' filepath='./pcompress.h' line='367' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34368'>
-        <var-decl name='archive_thread_started' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='368' column='1'/>
+        <var-decl name='archive_thread_started' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='368' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='34400'>
-        <var-decl name='archive_temp_file' type-id='type-id-16' visibility='default' filepath='./pcompress.h' line='369' column='1'/>
+        <var-decl name='archive_temp_file' type-id='type-id-22' visibility='default' filepath='./pcompress.h' line='369' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67168'>
-        <var-decl name='archive_temp_fd' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='370' column='1'/>
+        <var-decl name='archive_temp_fd' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='370' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67200'>
-        <var-decl name='archive_temp_size' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='371' column='1'/>
+        <var-decl name='archive_temp_size' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='371' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67264'>
-        <var-decl name='archive_size' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='371' column='1'/>
+        <var-decl name='archive_size' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='371' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67328'>
-        <var-decl name='temp_mmap_buf' type-id='type-id-41' visibility='default' filepath='./pcompress.h' line='372' column='1'/>
+        <var-decl name='temp_mmap_buf' type-id='type-id-47' visibility='default' filepath='./pcompress.h' line='372' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67392'>
-        <var-decl name='temp_mmap_pos' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='373' column='1'/>
+        <var-decl name='temp_mmap_pos' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='373' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67456'>
-        <var-decl name='temp_file_pos' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='373' column='1'/>
+        <var-decl name='temp_file_pos' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='373' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67520'>
-        <var-decl name='temp_mmap_len' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='374' column='1'/>
+        <var-decl name='temp_mmap_len' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='374' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67584'>
-        <var-decl name='fn' type-id='type-id-42' visibility='default' filepath='./pcompress.h' line='375' column='1'/>
+        <var-decl name='fn' type-id='type-id-48' visibility='default' filepath='./pcompress.h' line='375' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='67648'>
-        <var-decl name='read_sem' type-id='type-id-43' visibility='default' filepath='./pcompress.h' line='376' column='1'/>
+        <var-decl name='read_sem' type-id='type-id-49' visibility='default' filepath='./pcompress.h' line='376' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='68224'>
-        <var-decl name='write_sem' type-id='type-id-43' visibility='default' filepath='./pcompress.h' line='376' column='1'/>
+        <var-decl name='write_sem' type-id='type-id-49' visibility='default' filepath='./pcompress.h' line='376' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='68800'>
-        <var-decl name='write_mutex' type-id='type-id-44' visibility='default' filepath='./pcompress.h' line='377' column='1'/>
+        <var-decl name='write_mutex' type-id='type-id-50' visibility='default' filepath='./pcompress.h' line='377' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69120'>
-        <var-decl name='arc_buf' type-id='type-id-41' visibility='default' filepath='./pcompress.h' line='378' column='1'/>
+        <var-decl name='arc_buf' type-id='type-id-47' visibility='default' filepath='./pcompress.h' line='378' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69184'>
-        <var-decl name='arc_buf_size' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='379' column='1'/>
+        <var-decl name='arc_buf_size' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='379' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69248'>
-        <var-decl name='arc_buf_pos' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='379' column='1'/>
+        <var-decl name='arc_buf_pos' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='379' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69312'>
-        <var-decl name='arc_closed' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='380' column='1'/>
+        <var-decl name='arc_closed' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='380' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69344'>
-        <var-decl name='arc_writing' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='380' column='1'/>
+        <var-decl name='arc_writing' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='380' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69376'>
-        <var-decl name='btype' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='381' column='1'/>
+        <var-decl name='btype' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='381' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69408'>
-        <var-decl name='ctype' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='381' column='1'/>
+        <var-decl name='ctype' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='381' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69440'>
-        <var-decl name='interesting' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='382' column='1'/>
+        <var-decl name='interesting' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='382' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69472'>
-        <var-decl name='min_chunk' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='383' column='1'/>
+        <var-decl name='min_chunk' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='383' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69504'>
-        <var-decl name='enable_packjpg' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='384' column='1'/>
+        <var-decl name='enable_packjpg' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='384' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69536'>
-        <var-decl name='enable_wavpack' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='385' column='1'/>
+        <var-decl name='enable_wavpack' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='385' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69568'>
-        <var-decl name='filter_table' type-id='type-id-12' visibility='default' filepath='./pcompress.h' line='386' column='1'/>
+        <var-decl name='filter_table' type-id='type-id-17' visibility='default' filepath='./pcompress.h' line='386' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69632'>
-        <var-decl name='list_mode' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='387' column='1'/>
+        <var-decl name='list_mode' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='387' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69696'>
         <var-decl name='err_paths_fd' type-id='type-id-1' visibility='default' filepath='./pcompress.h' line='388' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69760'>
-        <var-decl name='errored_count' type-id='type-id-38' visibility='default' filepath='./pcompress.h' line='389' column='1'/>
+        <var-decl name='errored_count' type-id='type-id-44' visibility='default' filepath='./pcompress.h' line='389' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69792'>
-        <var-decl name='chunk_num' type-id='type-id-28' visibility='default' filepath='./pcompress.h' line='391' column='1'/>
+        <var-decl name='chunk_num' type-id='type-id-34' visibility='default' filepath='./pcompress.h' line='391' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69824'>
-        <var-decl name='largest_chunk' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
+        <var-decl name='largest_chunk' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69888'>
-        <var-decl name='smallest_chunk' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
+        <var-decl name='smallest_chunk' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='69952'>
-        <var-decl name='avg_chunk' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
+        <var-decl name='avg_chunk' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='392' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70016'>
-        <var-decl name='chunksize' type-id='type-id-40' visibility='default' filepath='./pcompress.h' line='393' column='1'/>
+        <var-decl name='chunksize' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='393' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70080'>
-        <var-decl name='algo' type-id='type-id-45' visibility='default' filepath='./pcompress.h' line='394' column='1'/>
+        <var-decl name='algo' type-id='type-id-20' visibility='default' filepath='./pcompress.h' line='394' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70144'>
-        <var-decl name='filename' type-id='type-id-45' visibility='default' filepath='./pcompress.h' line='394' column='1'/>
+        <var-decl name='filename' type-id='type-id-20' visibility='default' filepath='./pcompress.h' line='394' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70208'>
-        <var-decl name='to_filename' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='395' column='1'/>
+        <var-decl name='to_filename' type-id='type-id-51' visibility='default' filepath='./pcompress.h' line='395' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70272'>
-        <var-decl name='exec_name' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='396' column='1'/>
+        <var-decl name='exec_name' type-id='type-id-51' visibility='default' filepath='./pcompress.h' line='396' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70336'>
-        <var-decl name='do_compress' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='397' column='1'/>
+        <var-decl name='do_compress' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='397' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70368'>
-        <var-decl name='level' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='397' column='1'/>
+        <var-decl name='level' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='397' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70400'>
-        <var-decl name='do_uncompress' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='398' column='1'/>
+        <var-decl name='do_uncompress' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='398' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70432'>
-        <var-decl name='cksum_bytes' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='399' column='1'/>
+        <var-decl name='cksum_bytes' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='399' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70464'>
-        <var-decl name='mac_bytes' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='399' column='1'/>
+        <var-decl name='mac_bytes' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='399' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70496'>
-        <var-decl name='cksum' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='400' column='1'/>
+        <var-decl name='cksum' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='400' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70528'>
-        <var-decl name='t_errored' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='400' column='1'/>
+        <var-decl name='t_errored' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='400' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70560'>
-        <var-decl name='rab_blk_size' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='401' column='1'/>
+        <var-decl name='rab_blk_size' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='401' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70592'>
-        <var-decl name='keylen' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='401' column='1'/>
+        <var-decl name='keylen' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='401' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70656'>
-        <var-decl name='crypto_ctx' type-id='type-id-47' visibility='default' filepath='./pcompress.h' line='402' column='1'/>
+        <var-decl name='crypto_ctx' type-id='type-id-52' visibility='default' filepath='./pcompress.h' line='402' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='70976'>
-        <var-decl name='user_pw' type-id='type-id-48' visibility='default' filepath='./pcompress.h' line='403' column='1'/>
+        <var-decl name='user_pw' type-id='type-id-53' visibility='default' filepath='./pcompress.h' line='403' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='71040'>
-        <var-decl name='user_pw_len' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='404' column='1'/>
+        <var-decl name='user_pw_len' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='404' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='71104'>
-        <var-decl name='pwd_file' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='405' column='1'/>
+        <var-decl name='pwd_file' type-id='type-id-51' visibility='default' filepath='./pcompress.h' line='405' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='71168'>
-        <var-decl name='f_name' type-id='type-id-46' visibility='default' filepath='./pcompress.h' line='405' column='1'/>
+        <var-decl name='f_name' type-id='type-id-51' visibility='default' filepath='./pcompress.h' line='405' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='71232'>
-        <var-decl name='meta_ctx' type-id='type-id-49' visibility='default' filepath='./pcompress.h' line='406' column='1'/>
+        <var-decl name='meta_ctx' type-id='type-id-54' visibility='default' filepath='./pcompress.h' line='406' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='71296'>
-        <var-decl name='log' type-id='type-id-50' visibility='default' filepath='./pcompress.h' line='407' column='1'/>
+        <var-decl name='log' type-id='type-id-55' visibility='default' filepath='./pcompress.h' line='407' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73536'>
-        <var-decl name='in_fd' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='408' column='1'/>
+        <var-decl name='in_fd' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='408' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73568'>
-        <var-decl name='out_fd' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='408' column='1'/>
+        <var-decl name='out_fd' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='408' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73600'>
-        <var-decl name='pw_copy' type-id='type-id-48' visibility='default' filepath='./pcompress.h' line='409' column='1'/>
+        <var-decl name='pw_copy' type-id='type-id-53' visibility='default' filepath='./pcompress.h' line='409' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73664'>
-        <var-decl name='pw_copy_len' type-id='type-id-5' visibility='default' filepath='./pcompress.h' line='410' column='1'/>
+        <var-decl name='pw_copy_len' type-id='type-id-7' visibility='default' filepath='./pcompress.h' line='410' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73728'>
-        <var-decl name='chunk_key' type-id='type-id-51' visibility='default' filepath='./pcompress.h' line='411' column='1'/>
+        <var-decl name='chunk_key' type-id='type-id-56' visibility='default' filepath='./pcompress.h' line='411' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='73984'>
-        <var-decl name='chunk_key_set' type-id='type-id-13' visibility='default' filepath='./pcompress.h' line='412' column='1'/>
+        <var-decl name='chunk_key_set' type-id='type-id-18' visibility='default' filepath='./pcompress.h' line='412' column='1'/>
       </data-member>
     </class-decl>
-    <typedef-decl name='__pthread_list_t' type-id='type-id-25' size-in-bits='128' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='55' column='1' id='type-id-29'/>
-    <typedef-decl name='__uint32_t' type-id='type-id-28' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='42' column='1' hash='e66b43f97c38e87a' id='type-id-52'/>
-    <typedef-decl name='__uint64_t' type-id='type-id-17' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='45' column='1' hash='8fdc5eea2983a729' id='type-id-53'/>
-    <typedef-decl name='compress_func_ptr' type-id='type-id-54' size-in-bits='64' filepath='./utils/utils.h' line='395' column='1' hash='fd7a63c0c6c822c4' id='type-id-31'/>
-    <typedef-decl name='compress_op_t' type-id='type-id-22' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='402' column='1' hash='4c8bed079515a341' id='type-id-21'/>
-    <typedef-decl name='deinit_func_ptr' type-id='type-id-55' size-in-bits='64' filepath='./utils/utils.h' line='408' column='1' hash='fd7a63c0c6c822c4' id='type-id-33'/>
-    <typedef-decl name='init_func_ptr' type-id='type-id-56' size-in-bits='64' filepath='./utils/utils.h' line='405' column='1' hash='fd7a63c0c6c822c4' id='type-id-32'/>
-    <typedef-decl name='pc_ctx_t' type-id='type-id-30' size-in-bits='74048' filepath='./utils/../include/pcompress/pcompress.h' line='54' column='1' id='type-id-57'/>
-    <typedef-decl name='pc_log_fn' type-id='type-id-58' size-in-bits='64' filepath='./utils/../include/pcompress/pcompress.h' line='79' column='1' hash='fd7a63c0c6c822c4' id='type-id-59'/>
-    <typedef-decl name='props_func_ptr' type-id='type-id-60' size-in-bits='64' filepath='./utils/utils.h' line='412' column='1' hash='fd7a63c0c6c822c4' id='type-id-35'/>
-    <typedef-decl name='pthread_mutex_t' type-id='type-id-61' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='72' column='1' id='type-id-44'/>
-    <typedef-decl name='pthread_t' type-id='type-id-17' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='27' column='1' hash='8fdc5eea2983a729' id='type-id-39'/>
-    <typedef-decl name='size_t' type-id='type-id-17' size-in-bits='64' filepath='/usr/lib/gcc/x86_64-linux-gnu/14/include/stddef.h' line='214' column='1' hash='8fdc5eea2983a729' id='type-id-5'/>
-    <typedef-decl name='stats_func_ptr' type-id='type-id-62' size-in-bits='64' filepath='./utils/utils.h' line='410' column='1' hash='fd7a63c0c6c822c4' id='type-id-34'/>
-    <typedef-decl name='uchar_t' type-id='type-id-2' size-in-bits='8' filepath='./utils/utils.h' line='75' column='1' hash='6ebac62b3366db68' id='type-id-63'/>
-    <typedef-decl name='uint32_t' type-id='type-id-52' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h' line='26' column='1' hash='e66b43f97c38e87a' id='type-id-38'/>
-    <typedef-decl name='uint64_t' type-id='type-id-53' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h' line='27' column='1' hash='8fdc5eea2983a729' id='type-id-40'/>
-    <union-decl name='pthread_mutex_t' naming-typedef-id='type-id-44' visibility='default' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='67' column='1' hash='8e3e5ddbcaed875f' id='type-id-61'>
+    <typedef-decl name='__pthread_list_t' type-id='type-id-31' size-in-bits='128' filepath='/usr/include/x86_64-linux-gnu/bits/thread-shared-types.h' line='55' column='1' id='type-id-35'/>
+    <typedef-decl name='__uint32_t' type-id='type-id-34' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='42' column='1' hash='e66b43f97c38e87a' id='type-id-57'/>
+    <typedef-decl name='__uint64_t' type-id='type-id-23' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='45' column='1' hash='8fdc5eea2983a729' id='type-id-58'/>
+    <typedef-decl name='compress_func_ptr' type-id='type-id-59' size-in-bits='64' filepath='./utils/utils.h' line='395' column='1' hash='fd7a63c0c6c822c4' id='type-id-37'/>
+    <typedef-decl name='compress_op_t' type-id='type-id-28' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='402' column='1' hash='4c8bed079515a341' id='type-id-27'/>
+    <typedef-decl name='deinit_func_ptr' type-id='type-id-60' size-in-bits='64' filepath='./utils/utils.h' line='408' column='1' hash='fd7a63c0c6c822c4' id='type-id-39'/>
+    <typedef-decl name='init_func_ptr' type-id='type-id-61' size-in-bits='64' filepath='./utils/utils.h' line='405' column='1' hash='fd7a63c0c6c822c4' id='type-id-38'/>
+    <typedef-decl name='pc_ctx_t' type-id='type-id-36' size-in-bits='74048' filepath='./utils/../include/pcompress/pcompress.h' line='54' column='1' id='type-id-62'/>
+    <typedef-decl name='pc_log_fn' type-id='type-id-63' size-in-bits='64' filepath='./utils/../include/pcompress/pcompress.h' line='79' column='1' hash='fd7a63c0c6c822c4' id='type-id-64'/>
+    <typedef-decl name='props_func_ptr' type-id='type-id-65' size-in-bits='64' filepath='./utils/utils.h' line='412' column='1' hash='fd7a63c0c6c822c4' id='type-id-41'/>
+    <typedef-decl name='pthread_mutex_t' type-id='type-id-66' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='72' column='1' id='type-id-50'/>
+    <typedef-decl name='pthread_t' type-id='type-id-23' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='27' column='1' hash='8fdc5eea2983a729' id='type-id-45'/>
+    <typedef-decl name='size_t' type-id='type-id-23' size-in-bits='64' filepath='/usr/lib/gcc/x86_64-linux-gnu/14/include/stddef.h' line='214' column='1' hash='8fdc5eea2983a729' id='type-id-7'/>
+    <typedef-decl name='stats_func_ptr' type-id='type-id-67' size-in-bits='64' filepath='./utils/utils.h' line='410' column='1' hash='fd7a63c0c6c822c4' id='type-id-40'/>
+    <typedef-decl name='uchar_t' type-id='type-id-2' size-in-bits='8' filepath='./utils/utils.h' line='75' column='1' hash='6ebac62b3366db68' id='type-id-68'/>
+    <typedef-decl name='uint32_t' type-id='type-id-57' size-in-bits='32' filepath='/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h' line='26' column='1' hash='e66b43f97c38e87a' id='type-id-44'/>
+    <typedef-decl name='uint64_t' type-id='type-id-58' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/stdint-uintn.h' line='27' column='1' hash='8fdc5eea2983a729' id='type-id-46'/>
+    <union-decl name='pthread_mutex_t' naming-typedef-id='type-id-50' visibility='default' size-in-bits='320' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='67' column='1' hash='8e3e5ddbcaed875f' id='type-id-66'>
       <data-member access='public'>
-        <var-decl name='__data' type-id='type-id-27' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='69' column='1'/>
+        <var-decl name='__data' type-id='type-id-33' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='69' column='1'/>
       </data-member>
       <data-member access='public'>
-        <var-decl name='__size' type-id='type-id-19' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='70' column='1'/>
+        <var-decl name='__size' type-id='type-id-25' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='70' column='1'/>
       </data-member>
       <data-member access='public'>
-        <var-decl name='__align' type-id='type-id-37' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='71' column='1'/>
+        <var-decl name='__align' type-id='type-id-43' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/pthreadtypes.h' line='71' column='1'/>
       </data-member>
     </union-decl>
     <type-decl name='unsigned char' size-in-bits='8' hash='6ebac62b3366db68' id='type-id-2'/>
-    <array-type-def dimensions='1' type-id='type-id-2' size-in-bits='256' hash='4f93c1c3a68a8b74' id='type-id-51'>
-      <subrange length='32' lower-bound='0' upper-bound='31' type-id='type-id-17' size-in-bits='64' is-anonymous='yes' hash='99f823ef025a9d75' id='type-id-64'/>
+    <array-type-def dimensions='1' type-id='type-id-2' size-in-bits='256' hash='4f93c1c3a68a8b74' id='type-id-56'>
+      <subrange length='32' lower-bound='0' upper-bound='31' type-id='type-id-23' size-in-bits='64' is-anonymous='yes' hash='99f823ef025a9d75' id='type-id-69'/>
     </array-type-def>
-    <type-decl name='unsigned int' size-in-bits='32' hash='e66b43f97c38e87a' id='type-id-28'/>
-    <pointer-type-def type-id='type-id-25' size-in-bits='64' hash='b83eb2deac70d470' id='type-id-26'/>
-    <pointer-type-def type-id='type-id-46' size-in-bits='64' hash='a93039fe023ed77b' id='type-id-65'/>
-    <pointer-type-def type-id='type-id-66' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-55'/>
-    <pointer-type-def type-id='type-id-67' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-56'/>
-    <pointer-type-def type-id='type-id-68' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-54'/>
-    <pointer-type-def type-id='type-id-13' size-in-bits='64' hash='3fd83b2c14ae2f2f' id='type-id-69'/>
-    <pointer-type-def type-id='type-id-57' size-in-bits='64' hash='df0ce62c6e3b3322' id='type-id-14'/>
-    <pointer-type-def type-id='type-id-63' size-in-bits='64' hash='94e5a949a492b70d' id='type-id-41'/>
-    <pointer-type-def type-id='type-id-40' size-in-bits='64' hash='a7b536d51360d693' id='type-id-70'/>
-    <pointer-type-def type-id='type-id-2' size-in-bits='64' hash='f0221758ecf0c0cb' id='type-id-48'/>
+    <type-decl name='unsigned int' size-in-bits='32' hash='e66b43f97c38e87a' id='type-id-34'/>
+    <pointer-type-def type-id='type-id-31' size-in-bits='64' hash='b83eb2deac70d470' id='type-id-32'/>
+    <pointer-type-def type-id='type-id-51' size-in-bits='64' hash='a93039fe023ed77b' id='type-id-70'/>
     <pointer-type-def type-id='type-id-71' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-60'/>
-    <pointer-type-def type-id='type-id-72' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-62'/>
-    <pointer-type-def type-id='type-id-73' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-58'/>
-    <pointer-type-def type-id='type-id-12' size-in-bits='64' hash='473a9667a2856e32' id='type-id-74'/>
-    <pointer-type-def type-id='type-id-75' size-in-bits='64' id='type-id-76'/>
-    <pointer-type-def type-id='type-id-77' size-in-bits='64' id='type-id-36'/>
-    <pointer-type-def type-id='type-id-78' size-in-bits='64' id='type-id-42'/>
-    <pointer-type-def type-id='type-id-79' size-in-bits='64' id='type-id-49'/>
-    <class-decl name='_meta_ctx' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-80'/>
-    <class-decl name='crypto_ctx_t' is-struct='yes' naming-typedef-id='type-id-47' visibility='default' is-declaration-only='yes' filepath='./crypto/crypto_utils.h' line='82' column='1' id='type-id-81'/>
-    <typedef-decl name='crypto_ctx_t' type-id='type-id-81' filepath='./crypto/crypto_utils.h' line='90' column='1' id='type-id-47'/>
-    <typedef-decl name='meta_ctx_t' type-id='type-id-80' filepath='./meta_stream.h' line='61' column='1' id='type-id-79'/>
-    <class-decl name='archive_config_t' is-struct='yes' naming-typedef-id='type-id-77' visibility='default' is-declaration-only='yes' filepath='./rabin/global/dedupe_config.h' line='60' column='1' id='type-id-82'/>
-    <typedef-decl name='archive_config_t' type-id='type-id-82' filepath='./rabin/global/dedupe_config.h' line='92' column='1' id='type-id-77'/>
-    <class-decl name='algo_props_t' is-struct='yes' naming-typedef-id='type-id-75' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='261' column='1' id='type-id-83'/>
-    <typedef-decl name='algo_props_t' type-id='type-id-83' filepath='./utils/utils.h' line='273' column='1' id='type-id-75'/>
-    <class-decl name='fn_list' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='289' column='1' id='type-id-78'/>
-    <class-decl name='log_state' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='451' column='1' id='type-id-84'/>
-    <typedef-decl name='log_state_t' type-id='type-id-84' filepath='./utils/utils.h' line='457' column='1' id='type-id-50'/>
-    <class-decl name='_compat_sem' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='483' column='1' id='type-id-85'/>
-    <typedef-decl name='Sem_t' type-id='type-id-85' filepath='./utils/utils.h' line='486' column='1' id='type-id-43'/>
+    <pointer-type-def type-id='type-id-72' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-61'/>
+    <pointer-type-def type-id='type-id-73' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-59'/>
+    <pointer-type-def type-id='type-id-18' size-in-bits='64' hash='3fd83b2c14ae2f2f' id='type-id-74'/>
+    <pointer-type-def type-id='type-id-62' size-in-bits='64' hash='df0ce62c6e3b3322' id='type-id-19'/>
+    <pointer-type-def type-id='type-id-68' size-in-bits='64' hash='94e5a949a492b70d' id='type-id-47'/>
+    <pointer-type-def type-id='type-id-46' size-in-bits='64' hash='a7b536d51360d693' id='type-id-75'/>
+    <pointer-type-def type-id='type-id-2' size-in-bits='64' hash='f0221758ecf0c0cb' id='type-id-53'/>
+    <pointer-type-def type-id='type-id-76' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-65'/>
+    <pointer-type-def type-id='type-id-77' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-67'/>
+    <pointer-type-def type-id='type-id-78' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-63'/>
+    <pointer-type-def type-id='type-id-17' size-in-bits='64' hash='473a9667a2856e32' id='type-id-79'/>
+    <pointer-type-def type-id='type-id-80' size-in-bits='64' id='type-id-81'/>
+    <pointer-type-def type-id='type-id-82' size-in-bits='64' id='type-id-42'/>
+    <pointer-type-def type-id='type-id-83' size-in-bits='64' id='type-id-48'/>
+    <pointer-type-def type-id='type-id-84' size-in-bits='64' id='type-id-54'/>
+    <class-decl name='_meta_ctx' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-85'/>
+    <class-decl name='crypto_ctx_t' is-struct='yes' naming-typedef-id='type-id-52' visibility='default' is-declaration-only='yes' filepath='./crypto/crypto_utils.h' line='82' column='1' id='type-id-86'/>
+    <typedef-decl name='crypto_ctx_t' type-id='type-id-86' filepath='./crypto/crypto_utils.h' line='90' column='1' id='type-id-52'/>
+    <typedef-decl name='meta_ctx_t' type-id='type-id-85' filepath='./meta_stream.h' line='61' column='1' id='type-id-84'/>
+    <class-decl name='archive_config_t' is-struct='yes' naming-typedef-id='type-id-82' visibility='default' is-declaration-only='yes' filepath='./rabin/global/dedupe_config.h' line='60' column='1' id='type-id-87'/>
+    <typedef-decl name='archive_config_t' type-id='type-id-87' filepath='./rabin/global/dedupe_config.h' line='92' column='1' id='type-id-82'/>
+    <class-decl name='algo_props_t' is-struct='yes' naming-typedef-id='type-id-80' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='261' column='1' id='type-id-88'/>
+    <typedef-decl name='algo_props_t' type-id='type-id-88' filepath='./utils/utils.h' line='273' column='1' id='type-id-80'/>
+    <class-decl name='fn_list' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='289' column='1' id='type-id-83'/>
+    <class-decl name='log_state' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='451' column='1' id='type-id-89'/>
+    <typedef-decl name='log_state_t' type-id='type-id-89' filepath='./utils/utils.h' line='457' column='1' id='type-id-55'/>
+    <class-decl name='_compat_sem' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='483' column='1' id='type-id-90'/>
+    <typedef-decl name='Sem_t' type-id='type-id-90' filepath='./utils/utils.h' line='486' column='1' id='type-id-49'/>
     <function-decl name='usage' mangled-name='usage' filepath='/home/admin/pcompress/pcompress.c' line='160' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='usage@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='create_pc_context' mangled-name='create_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3397' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='create_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <return type-id='type-id-14'/>
+      <return type-id='type-id-19'/>
     </function-decl>
     <function-decl name='destroy_pc_context' mangled-name='destroy_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3432' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='destroy_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='init_pc_context_argstr' mangled-name='init_pc_context_argstr' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context_argstr@@PCOMPRESS_1' hash='612ef747c3f89a8e'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
-      <parameter type-id='type-id-46' name='args' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
+      <parameter type-id='type-id-51' name='args' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='start_pcompress' mangled-name='start_pcompress' filepath='/home/admin/pcompress/pcompress.c' line='4084' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_pcompress@@PCOMPRESS_1' hash='6085ee7ef85bede2'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4084' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4084' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_log' mangled-name='pc_set_log' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_log@@PCOMPRESS_1' hash='5dadbedef91cc391'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
-      <parameter type-id='type-id-59' name='fn' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
-      <parameter type-id='type-id-12' name='arg' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
-      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-64' name='fn' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-17' name='arg' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-18' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='pc_last_error' mangled-name='pc_last_error' filepath='/home/admin/pcompress/pcompress.c' line='4118' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error@@PCOMPRESS_1' hash='9e0e8db782fee6cf'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4118' column='1'/>
-      <return type-id='type-id-45'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4118' column='1'/>
+      <return type-id='type-id-20'/>
     </function-decl>
     <function-decl name='pc_last_error_code' mangled-name='pc_last_error_code' filepath='/home/admin/pcompress/pcompress.c' line='4125' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error_code@@PCOMPRESS_1' hash='330e0cefb374436a'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4125' column='1'/>
-      <return type-id='type-id-86'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4125' column='1'/>
+      <return type-id='type-id-91'/>
     </function-decl>
     <function-decl name='pc_set_userpw' mangled-name='pc_set_userpw' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_userpw@@PCOMPRESS_1' hash='85dfd162af5b0424'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
-      <parameter type-id='type-id-48' name='pwdata' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
-      <parameter type-id='type-id-13' name='pwlen' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
+      <parameter type-id='type-id-53' name='pwdata' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
+      <parameter type-id='type-id-18' name='pwlen' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='start_decompress' mangled-name='start_decompress' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_decompress@@PCOMPRESS_1' hash='05e2ec78a5d25c2d'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
-      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
-      <parameter type-id='type-id-46' name='to_filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
+      <parameter type-id='type-id-20' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
+      <parameter type-id='type-id-51' name='to_filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='start_compress' mangled-name='start_compress' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_compress@@PCOMPRESS_1' hash='60e8632b0c08c173'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
-      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
-      <parameter type-id='type-id-40' name='chunksize' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
-      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-20' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-46' name='chunksize' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-18' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='init_pc_context' mangled-name='init_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context@@PCOMPRESS_1' hash='5b91cce70958e098'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
-      <parameter type-id='type-id-13' name='argc' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
-      <parameter type-id='type-id-65' name='argv' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+      <parameter type-id='type-id-18' name='argc' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+      <parameter type-id='type-id-70' name='argv' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_version' mangled-name='pc_version' filepath='/home/admin/pcompress/pcompress.c' line='4196' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_version@@PCOMPRESS_1' hash='53885bde0aa65efe'>
-      <return type-id='type-id-45'/>
+      <return type-id='type-id-20'/>
     </function-decl>
     <function-decl name='pc_api_version' mangled-name='pc_api_version' filepath='/home/admin/pcompress/pcompress.c' line='4202' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_api_version@@PCOMPRESS_1' hash='388da3fa973fde78'>
-      <return type-id='type-id-13'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_new' mangled-name='pc_new' filepath='/home/admin/pcompress/pcompress.c' line='4208' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_new@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <return type-id='type-id-14'/>
+      <return type-id='type-id-19'/>
     </function-decl>
     <function-decl name='pc_free' mangled-name='pc_free' filepath='/home/admin/pcompress/pcompress.c' line='4218' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_free@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='pc_set_algorithm' mangled-name='pc_set_algorithm' filepath='/home/admin/pcompress/pcompress.c' line='4239' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_algorithm@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
-      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <parameter type-id='type-id-20' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_level' mangled-name='pc_set_level' filepath='/home/admin/pcompress/pcompress.c' line='4248' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_level@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-18' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_chunk_size' mangled-name='pc_set_chunk_size' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_chunk_size@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
-      <parameter type-id='type-id-40' name='bytes' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
+      <parameter type-id='type-id-46' name='bytes' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_threads' mangled-name='pc_set_threads' filepath='/home/admin/pcompress/pcompress.c' line='4275' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_threads@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-18' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_checksum' mangled-name='pc_set_checksum' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_checksum@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
-      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <parameter type-id='type-id-20' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_dedupe' mangled-name='pc_set_dedupe' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_dedupe@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-18' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_encryption' mangled-name='pc_set_encryption' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_encryption@@PCOMPRESS_1' hash='5888bf265793b177'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
-      <parameter type-id='type-id-45' name='alg' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
-      <parameter type-id='type-id-13' name='keylen' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
+      <parameter type-id='type-id-20' name='alg' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
+      <parameter type-id='type-id-18' name='keylen' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_set_password' mangled-name='pc_set_password' filepath='/home/admin/pcompress/pcompress.c' line='4347' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_password@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <parameter type-id='type-id-17' name='key' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <parameter type-id='type-id-7' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='489' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_compress_fd' mangled-name='pc_compress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4460' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_compress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-18' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-18' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_decompress_fd' mangled-name='pc_decompress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_decompress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-18' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-18' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <return type-id='type-id-18'/>
     </function-decl>
     <function-decl name='pc_usage' mangled-name='pc_usage' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_usage@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-19' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
-    <function-type size-in-bits='64' hash='526e7560c155d13e' id='type-id-66'>
+    <function-type size-in-bits='64' hash='526e7560c155d13e' id='type-id-71'>
+      <parameter type-id='type-id-79'/>
+      <return type-id='type-id-18'/>
+    </function-type>
+    <function-type size-in-bits='64' hash='96bcc231164b2248' id='type-id-72'>
+      <parameter type-id='type-id-79'/>
       <parameter type-id='type-id-74'/>
-      <return type-id='type-id-13'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-46'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-27'/>
+      <return type-id='type-id-18'/>
     </function-type>
-    <function-type size-in-bits='64' hash='96bcc231164b2248' id='type-id-67'>
-      <parameter type-id='type-id-74'/>
-      <parameter type-id='type-id-69'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-40'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-21'/>
-      <return type-id='type-id-13'/>
+    <function-type size-in-bits='64' hash='ff3f5efaab85fa06' id='type-id-73'>
+      <parameter type-id='type-id-17'/>
+      <parameter type-id='type-id-46'/>
+      <parameter type-id='type-id-17'/>
+      <parameter type-id='type-id-75'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-68'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-17'/>
+      <return type-id='type-id-18'/>
     </function-type>
-    <function-type size-in-bits='64' hash='ff3f5efaab85fa06' id='type-id-68'>
-      <parameter type-id='type-id-12'/>
-      <parameter type-id='type-id-40'/>
-      <parameter type-id='type-id-12'/>
-      <parameter type-id='type-id-70'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-63'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-12'/>
-      <return type-id='type-id-13'/>
+    <function-type size-in-bits='64' hash='b6a97d07f8261bc0' id='type-id-76'>
+      <parameter type-id='type-id-81'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-46'/>
+      <return type-id='type-id-16'/>
     </function-type>
-    <function-type size-in-bits='64' hash='b6a97d07f8261bc0' id='type-id-71'>
-      <parameter type-id='type-id-76'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-40'/>
-      <return type-id='type-id-11'/>
+    <function-type size-in-bits='64' hash='388da3fa973fde78' id='type-id-77'>
+      <parameter type-id='type-id-18'/>
+      <return type-id='type-id-16'/>
     </function-type>
-    <function-type size-in-bits='64' hash='388da3fa973fde78' id='type-id-72'>
-      <parameter type-id='type-id-13'/>
-      <return type-id='type-id-11'/>
-    </function-type>
-    <function-type size-in-bits='64' hash='e9ea91a7eab8302c' id='type-id-73'>
-      <parameter type-id='type-id-12'/>
-      <parameter type-id='type-id-13'/>
-      <parameter type-id='type-id-45'/>
-      <return type-id='type-id-11'/>
+    <function-type size-in-bits='64' hash='e9ea91a7eab8302c' id='type-id-78'>
+      <parameter type-id='type-id-17'/>
+      <parameter type-id='type-id-18'/>
+      <parameter type-id='type-id-20'/>
+      <return type-id='type-id-16'/>
     </function-type>
   </abi-instr>
   <abi-instr address-size='64' path='rabin/rabin_dedup.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
@@ -994,18 +1032,18 @@
   <abi-instr address-size='64' path='utils/phash/recycle.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
   </abi-instr>
   <abi-instr address-size='64' path='utils/utils.c' comp-dir-path='/home/admin/pcompress' language='LANG_C99'>
-    <type-decl name='char' size-in-bits='8' hash='65b2d157027b431a' id='type-id-15'/>
-    <array-type-def dimensions='1' type-id='type-id-15' size-in-bits='8' hash='f7aed1c6cc6e7b3c' id='type-id-87'>
-      <subrange length='1' lower-bound='0' upper-bound='0' type-id='type-id-17' size-in-bits='64' is-anonymous='yes' hash='eba0a2b392137dcb' id='type-id-88'/>
+    <type-decl name='char' size-in-bits='8' hash='65b2d157027b431a' id='type-id-21'/>
+    <array-type-def dimensions='1' type-id='type-id-21' size-in-bits='8' hash='f7aed1c6cc6e7b3c' id='type-id-92'>
+      <subrange length='1' lower-bound='0' upper-bound='0' type-id='type-id-23' size-in-bits='64' is-anonymous='yes' hash='eba0a2b392137dcb' id='type-id-93'/>
     </array-type-def>
-    <array-type-def dimensions='1' type-id='type-id-15' size-in-bits='160' hash='99641d293d1da856' id='type-id-89'>
-      <subrange length='20' lower-bound='0' upper-bound='19' type-id='type-id-17' size-in-bits='64' is-anonymous='yes' hash='1ca9e41140ea49be' id='type-id-90'/>
+    <array-type-def dimensions='1' type-id='type-id-21' size-in-bits='160' hash='99641d293d1da856' id='type-id-94'>
+      <subrange length='20' lower-bound='0' upper-bound='19' type-id='type-id-23' size-in-bits='64' is-anonymous='yes' hash='1ca9e41140ea49be' id='type-id-95'/>
     </array-type-def>
-    <enum-decl name='log_level_t' naming-typedef-id='type-id-91' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='425' column='1' hash='9882aa20d8ea617f' id='type-id-92'>
-      <underlying-type type-id='type-id-23'/>
+    <enum-decl name='log_level_t' naming-typedef-id='type-id-96' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='425' column='1' hash='9882aa20d8ea617f' id='type-id-97'>
+      <underlying-type type-id='type-id-29'/>
     </enum-decl>
-    <enum-decl name='pc_error_t' naming-typedef-id='type-id-86' size-in-bits='32' alignment-in-bits='32' filepath='./utils/../include/pcompress/pcompress.h' line='57' column='1' hash='91e48d6c781baa7d' id='type-id-93'>
-      <underlying-type type-id='type-id-23'/>
+    <enum-decl name='pc_error_t' naming-typedef-id='type-id-91' size-in-bits='32' alignment-in-bits='32' filepath='./utils/../include/pcompress/pcompress.h' line='57' column='1' hash='91e48d6c781baa7d' id='type-id-98'>
+      <underlying-type type-id='type-id-29'/>
       <enumerator name='PC_OK' value='0'/>
       <enumerator name='PC_ERR_ARGS' value='1'/>
       <enumerator name='PC_ERR_IO' value='2'/>
@@ -1016,150 +1054,150 @@
       <enumerator name='PC_ERR_CRYPTO' value='7'/>
       <enumerator name='PC_ERR_INTERNAL' value='8'/>
     </enum-decl>
-    <type-decl name='int' size-in-bits='32' hash='09d17c08f594edc7' id='type-id-13'/>
-    <type-decl name='long int' size-in-bits='64' hash='b119fe0931d2ee10#2' id='type-id-37'/>
-    <type-decl name='signed char' size-in-bits='8' hash='3c595c3350588f18' id='type-id-94'/>
-    <class-decl name='_IO_FILE' is-struct='yes' visibility='default' size-in-bits='1728' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='50' column='1' hash='a4bd2f88347a2dd0' id='type-id-95'>
+    <type-decl name='int' size-in-bits='32' hash='09d17c08f594edc7' id='type-id-18'/>
+    <type-decl name='long int' size-in-bits='64' hash='b119fe0931d2ee10#2' id='type-id-43'/>
+    <type-decl name='signed char' size-in-bits='8' hash='3c595c3350588f18' id='type-id-99'/>
+    <class-decl name='_IO_FILE' is-struct='yes' visibility='default' size-in-bits='1728' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='50' column='1' hash='a4bd2f88347a2dd0' id='type-id-100'>
       <data-member access='public' layout-offset-in-bits='0'>
-        <var-decl name='_flags' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='52' column='1'/>
+        <var-decl name='_flags' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='52' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='64'>
-        <var-decl name='_IO_read_ptr' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='55' column='1'/>
+        <var-decl name='_IO_read_ptr' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='55' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='128'>
-        <var-decl name='_IO_read_end' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='56' column='1'/>
+        <var-decl name='_IO_read_end' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='56' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='192'>
-        <var-decl name='_IO_read_base' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='57' column='1'/>
+        <var-decl name='_IO_read_base' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='57' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='256'>
-        <var-decl name='_IO_write_base' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='58' column='1'/>
+        <var-decl name='_IO_write_base' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='58' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='320'>
-        <var-decl name='_IO_write_ptr' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='59' column='1'/>
+        <var-decl name='_IO_write_ptr' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='59' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='384'>
-        <var-decl name='_IO_write_end' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='60' column='1'/>
+        <var-decl name='_IO_write_end' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='60' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='448'>
-        <var-decl name='_IO_buf_base' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='61' column='1'/>
+        <var-decl name='_IO_buf_base' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='61' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='512'>
-        <var-decl name='_IO_buf_end' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='62' column='1'/>
+        <var-decl name='_IO_buf_end' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='62' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='576'>
-        <var-decl name='_IO_save_base' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='65' column='1'/>
+        <var-decl name='_IO_save_base' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='65' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='640'>
-        <var-decl name='_IO_backup_base' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='66' column='1'/>
+        <var-decl name='_IO_backup_base' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='66' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='704'>
-        <var-decl name='_IO_save_end' type-id='type-id-46' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='67' column='1'/>
+        <var-decl name='_IO_save_end' type-id='type-id-51' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='67' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='768'>
-        <var-decl name='_markers' type-id='type-id-96' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='69' column='1'/>
+        <var-decl name='_markers' type-id='type-id-101' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='69' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='832'>
-        <var-decl name='_chain' type-id='type-id-97' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='71' column='1'/>
+        <var-decl name='_chain' type-id='type-id-102' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='71' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='896'>
-        <var-decl name='_fileno' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='73' column='1'/>
+        <var-decl name='_fileno' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='73' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='928'>
-        <var-decl name='_flags2' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='74' column='1'/>
+        <var-decl name='_flags2' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='74' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='952'>
-        <var-decl name='_short_backupbuf' type-id='type-id-87' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='76' column='1'/>
+        <var-decl name='_short_backupbuf' type-id='type-id-92' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='76' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='960'>
-        <var-decl name='_old_offset' type-id='type-id-98' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='77' column='1'/>
+        <var-decl name='_old_offset' type-id='type-id-103' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='77' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1024'>
-        <var-decl name='_cur_column' type-id='type-id-99' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='80' column='1'/>
+        <var-decl name='_cur_column' type-id='type-id-104' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='80' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1040'>
-        <var-decl name='_vtable_offset' type-id='type-id-94' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='81' column='1'/>
+        <var-decl name='_vtable_offset' type-id='type-id-99' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='81' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1048'>
-        <var-decl name='_shortbuf' type-id='type-id-87' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='82' column='1'/>
+        <var-decl name='_shortbuf' type-id='type-id-92' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='82' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1088'>
-        <var-decl name='_lock' type-id='type-id-100' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='84' column='1'/>
+        <var-decl name='_lock' type-id='type-id-105' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='84' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1152'>
-        <var-decl name='_offset' type-id='type-id-101' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='92' column='1'/>
+        <var-decl name='_offset' type-id='type-id-106' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='92' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1216'>
-        <var-decl name='_codecvt' type-id='type-id-102' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='94' column='1'/>
+        <var-decl name='_codecvt' type-id='type-id-107' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='94' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1280'>
-        <var-decl name='_wide_data' type-id='type-id-103' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='95' column='1'/>
+        <var-decl name='_wide_data' type-id='type-id-108' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='95' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1344'>
-        <var-decl name='_freeres_list' type-id='type-id-97' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='96' column='1'/>
+        <var-decl name='_freeres_list' type-id='type-id-102' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='96' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1408'>
-        <var-decl name='_freeres_buf' type-id='type-id-12' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='97' column='1'/>
+        <var-decl name='_freeres_buf' type-id='type-id-17' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='97' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1472'>
-        <var-decl name='_prevchain' type-id='type-id-104' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='98' column='1'/>
+        <var-decl name='_prevchain' type-id='type-id-109' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='98' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1536'>
-        <var-decl name='_mode' type-id='type-id-13' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='99' column='1'/>
+        <var-decl name='_mode' type-id='type-id-18' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='99' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='1568'>
-        <var-decl name='_unused2' type-id='type-id-89' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='101' column='1'/>
+        <var-decl name='_unused2' type-id='type-id-94' visibility='default' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='101' column='1'/>
       </data-member>
     </class-decl>
-    <typedef-decl name='FILE' type-id='type-id-95' size-in-bits='1728' filepath='/usr/include/x86_64-linux-gnu/bits/types/FILE.h' line='7' column='1' id='type-id-105'/>
-    <typedef-decl name='_IO_lock_t' type-id='type-id-11' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='44' column='1' id='type-id-106'/>
-    <typedef-decl name='__off64_t' type-id='type-id-37' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='153' column='1' hash='b119fe0931d2ee10' id='type-id-101'/>
-    <typedef-decl name='__off_t' type-id='type-id-37' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='152' column='1' hash='b119fe0931d2ee10' id='type-id-98'/>
-    <typedef-decl name='log_level_t' type-id='type-id-92' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='430' column='1' hash='9882aa20d8ea617f' id='type-id-91'/>
-    <typedef-decl name='pc_error_t' type-id='type-id-93' size-in-bits='32' alignment-in-bits='32' filepath='./utils/../include/pcompress/pcompress.h' line='67' column='1' hash='91e48d6c781baa7d' id='type-id-86'/>
-    <type-decl name='unnamed-enum-underlying-type-32' size-in-bits='32' alignment-in-bits='32' is-anonymous='yes' hash='5181a58e665b3619' id='type-id-23'/>
-    <type-decl name='unsigned long int' size-in-bits='64' hash='8fdc5eea2983a729#2' id='type-id-17'/>
-    <type-decl name='unsigned short int' size-in-bits='16' hash='d7723bb93a30b11d#3' id='type-id-99'/>
-    <pointer-type-def type-id='type-id-105' size-in-bits='64' hash='4cdc26b379a5c62d' id='type-id-1'/>
-    <pointer-type-def type-id='type-id-95' size-in-bits='64' hash='071f36dcbe00ad00' id='type-id-97'/>
-    <pointer-type-def type-id='type-id-97' size-in-bits='64' hash='e8c018048121152c' id='type-id-104'/>
-    <pointer-type-def type-id='type-id-15' size-in-bits='64' hash='e533f42d1dd4942c' id='type-id-46'/>
-    <qualified-type-def type-id='type-id-15' const='yes' hash='3e50fd33f9bb78d9' id='type-id-107'/>
-    <pointer-type-def type-id='type-id-107' size-in-bits='64' hash='c44743f354f6a443' id='type-id-45'/>
-    <pointer-type-def type-id='type-id-108' size-in-bits='64' id='type-id-102'/>
-    <pointer-type-def type-id='type-id-106' size-in-bits='64' id='type-id-100'/>
-    <pointer-type-def type-id='type-id-109' size-in-bits='64' id='type-id-96'/>
-    <pointer-type-def type-id='type-id-110' size-in-bits='64' id='type-id-103'/>
-    <pointer-type-def type-id='type-id-111' size-in-bits='64' id='type-id-112'/>
-    <class-decl name='_IO_codecvt' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-108'/>
-    <class-decl name='_IO_marker' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-109'/>
-    <class-decl name='_IO_wide_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-110'/>
-    <class-decl name='log_dest_t' is-struct='yes' naming-typedef-id='type-id-111' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='434' column='1' id='type-id-113'/>
-    <typedef-decl name='log_dest_t' type-id='type-id-113' filepath='./utils/utils.h' line='438' column='1' id='type-id-111'/>
+    <typedef-decl name='FILE' type-id='type-id-100' size-in-bits='1728' filepath='/usr/include/x86_64-linux-gnu/bits/types/FILE.h' line='7' column='1' id='type-id-110'/>
+    <typedef-decl name='_IO_lock_t' type-id='type-id-16' filepath='/usr/include/x86_64-linux-gnu/bits/types/struct_FILE.h' line='44' column='1' id='type-id-111'/>
+    <typedef-decl name='__off64_t' type-id='type-id-43' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='153' column='1' hash='b119fe0931d2ee10' id='type-id-106'/>
+    <typedef-decl name='__off_t' type-id='type-id-43' size-in-bits='64' filepath='/usr/include/x86_64-linux-gnu/bits/types.h' line='152' column='1' hash='b119fe0931d2ee10' id='type-id-103'/>
+    <typedef-decl name='log_level_t' type-id='type-id-97' size-in-bits='32' alignment-in-bits='32' filepath='./utils/utils.h' line='430' column='1' hash='9882aa20d8ea617f' id='type-id-96'/>
+    <typedef-decl name='pc_error_t' type-id='type-id-98' size-in-bits='32' alignment-in-bits='32' filepath='./utils/../include/pcompress/pcompress.h' line='67' column='1' hash='91e48d6c781baa7d' id='type-id-91'/>
+    <type-decl name='unnamed-enum-underlying-type-32' size-in-bits='32' alignment-in-bits='32' is-anonymous='yes' hash='5181a58e665b3619' id='type-id-29'/>
+    <type-decl name='unsigned long int' size-in-bits='64' hash='8fdc5eea2983a729#2' id='type-id-23'/>
+    <type-decl name='unsigned short int' size-in-bits='16' hash='d7723bb93a30b11d#3' id='type-id-104'/>
+    <pointer-type-def type-id='type-id-110' size-in-bits='64' hash='4cdc26b379a5c62d' id='type-id-1'/>
+    <pointer-type-def type-id='type-id-100' size-in-bits='64' hash='071f36dcbe00ad00' id='type-id-102'/>
+    <pointer-type-def type-id='type-id-102' size-in-bits='64' hash='e8c018048121152c' id='type-id-109'/>
+    <pointer-type-def type-id='type-id-21' size-in-bits='64' hash='e533f42d1dd4942c' id='type-id-51'/>
+    <qualified-type-def type-id='type-id-21' const='yes' hash='3e50fd33f9bb78d9' id='type-id-112'/>
+    <pointer-type-def type-id='type-id-112' size-in-bits='64' hash='c44743f354f6a443' id='type-id-20'/>
+    <pointer-type-def type-id='type-id-113' size-in-bits='64' id='type-id-107'/>
+    <pointer-type-def type-id='type-id-111' size-in-bits='64' id='type-id-105'/>
+    <pointer-type-def type-id='type-id-114' size-in-bits='64' id='type-id-101'/>
+    <pointer-type-def type-id='type-id-115' size-in-bits='64' id='type-id-108'/>
+    <pointer-type-def type-id='type-id-116' size-in-bits='64' id='type-id-117'/>
+    <class-decl name='_IO_codecvt' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-113'/>
+    <class-decl name='_IO_marker' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-114'/>
+    <class-decl name='_IO_wide_data' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-115'/>
+    <class-decl name='log_dest_t' is-struct='yes' naming-typedef-id='type-id-116' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='434' column='1' id='type-id-118'/>
+    <typedef-decl name='log_dest_t' type-id='type-id-118' filepath='./utils/utils.h' line='438' column='1' id='type-id-116'/>
     <function-decl name='set_log_dest' mangled-name='set_log_dest' filepath='utils/utils.c' line='478' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='set_log_dest@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
-      <parameter type-id='type-id-112' name='dest' filepath='utils/utils.c' line='478' column='1'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-117' name='dest' filepath='utils/utils.c' line='478' column='1'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='set_log_level' mangled-name='set_log_level' filepath='utils/utils.c' line='486' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='set_log_level@@PCOMPRESS_1' hash='388da3fa973fde78'>
-      <parameter type-id='type-id-13'/>
-      <return type-id='type-id-11'/>
+      <parameter type-id='type-id-18'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='pc_strerror' mangled-name='pc_strerror' filepath='utils/utils.c' line='523' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_strerror@@PCOMPRESS_1' hash='5c7d8c12876a548b'>
-      <parameter type-id='type-id-86' name='code' filepath='utils/utils.c' line='523' column='1'/>
-      <return type-id='type-id-45'/>
+      <parameter type-id='type-id-91' name='code' filepath='utils/utils.c' line='523' column='1'/>
+      <return type-id='type-id-20'/>
     </function-decl>
     <function-decl name='log_msg' mangled-name='log_msg' filepath='utils/utils.c' line='534' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='log_msg@@PCOMPRESS_1' hash='8ab23d4f1e474680'>
-      <parameter type-id='type-id-91' name='log_level' filepath='utils/utils.c' line='534' column='1'/>
-      <parameter type-id='type-id-13' name='show_errno' filepath='utils/utils.c' line='534' column='1'/>
-      <parameter type-id='type-id-45' name='format' filepath='utils/utils.c' line='534' column='1'/>
+      <parameter type-id='type-id-96' name='log_level' filepath='utils/utils.c' line='534' column='1'/>
+      <parameter type-id='type-id-18' name='show_errno' filepath='utils/utils.c' line='534' column='1'/>
+      <parameter type-id='type-id-20' name='format' filepath='utils/utils.c' line='534' column='1'/>
       <parameter is-variadic='yes'/>
-      <return type-id='type-id-11'/>
+      <return type-id='type-id-16'/>
     </function-decl>
     <function-decl name='pc_cleanup_tempfiles' mangled-name='pc_cleanup_tempfiles' filepath='utils/utils.c' line='630' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_cleanup_tempfiles@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
-      <return type-id='type-id-11'/>
+      <return type-id='type-id-16'/>
     </function-decl>
-    <type-decl name='variadic parameter type' id='type-id-114'/>
-    <type-decl name='void' id='type-id-11'/>
-    <pointer-type-def type-id='type-id-11' id='type-id-12'/>
+    <type-decl name='variadic parameter type' id='type-id-119'/>
+    <type-decl name='void' id='type-id-16'/>
+    <pointer-type-def type-id='type-id-16' id='type-id-17'/>
   </abi-instr>
 </abi-corpus>

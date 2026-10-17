@@ -24,7 +24,7 @@ scheduling and storage backends belong in the consuming program.
 | P3 | The API is the command line | `init_pc_context_argstr("pcompress -c zstd …")`, then `start_pcompress()`. Inputs and outputs are file paths. The library opens files, picks names, writes a temp file and renames it. No buffer or callback I/O. | Fixed in 4.1.0 (fd I/O; no callback I/O) |
 | P4 | No public headers | `make install` ships `libpcompress.so.1` and no headers. `pcompress.h` exposes `pc_ctx_t` internals. Bundled zstd, lz4, libbsc and libarchive symbols are exported and would clash with another copy in the same program. | Fixed in 4.1.0 |
 | P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. | Fixed in 4.1.0 |
-| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Open (Phase 5) |
+| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Fixed for chunk stores after 4.1.0 (Phase 5); `.pz` global dedupe stays per file |
 | P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed after 4.1.0 (Phase 3) |
 | P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Open (Phase 6) |
 | P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed after 4.1.0 (Phase 4); raw keys for `.pz` wait for a new format version |
@@ -183,6 +183,19 @@ Not done:
   temp-file behaviour becomes the default implementation, so the CLI is
   unchanged.
 - **Done when:** a second backup of an unchanged tree stores no new chunks.
+
+**Status: done (unreleased), narrowed.**
+- `pc_index_*`: a persistent, append-only set of chunk ids.
+  `examples/pzstore` uses it, so a second `put` of unchanged data
+  stores nothing and asks the store nothing. CI checks this.
+- "Pluggable" turned out to be free: the chunk calls (Phase 3) never
+  look anything up. A caller with its own catalogue checks it with
+  `pc_chunk_id()`, and no callback interface is needed.
+
+Not done:
+- Global dedupe in `.pz` still uses its own per-file index. A
+  persistent one would make a `.pz` depend on other files, a format
+  change for Phase 6 if anyone wants it.
 
 ### Phase 6: Indexed containers and single-file restore (fixes P8)
 

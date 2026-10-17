@@ -98,6 +98,18 @@ libpcompress
 .Fn pc_keyfile_create "const void *pw" "size_t pwlen" "uint8_t key[32]" "void *out"
 .Ft int
 .Fn pc_keyfile_open "const void *in" "size_t len" "const void *pw" "size_t pwlen" "uint8_t key[32]"
+.Ft pc_index_t *
+.Fn pc_index_open "const char *path"
+.Ft int
+.Fn pc_index_has "pc_index_t *idx" "const uint8_t id[32]"
+.Ft int
+.Fn pc_index_add "pc_index_t *idx" "const uint8_t id[32]"
+.Ft size_t
+.Fn pc_index_count "pc_index_t *idx"
+.Ft int
+.Fn pc_index_sync "pc_index_t *idx"
+.Ft int
+.Fn pc_index_close "pc_index_t *idx"
 .Sh DESCRIPTION
 The library behind
 .Xr pcompress 1 .
@@ -329,6 +341,32 @@ recovers the key; a wrong password or any change to the file fails.
 The KDF and its parameters are stored in the file, and
 .Fn pc_keyfile_open
 refuses parameters beyond 512 MB or unreasonable work.
+.It Fn pc_index_open
+Opens or creates a persistent set of 32-byte chunk ids, kept in an
+append-only file, so a backup tool can skip chunks it already stored
+without asking its object store.
+A file that is not an index is refused and left untouched; a partial
+record left by a crash is dropped.
+.Fn pc_index_has
+and
+.Fn pc_index_add
+return 1 or 0 (present or absent; added or already there) and \-1 on
+error.
+Adds are buffered until
+.Fn pc_index_sync
+or
+.Fn pc_index_close ,
+which write and
+.Fn fsync
+them.
+Add an id only after its object is durably stored: then a crash can only
+make the tool store a chunk twice, never skip one.
+Use one thread at a time per index.
+Several processes may append to one file; each sees the others' ids at its
+next open.
+The ids are held in memory, about 45 bytes each.
+Callers with their own catalogue need not use it: look ids up there
+instead.
 .El
 .Pp
 The object format is described in

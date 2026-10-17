@@ -12,6 +12,8 @@
  */
 
 #include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -643,5 +645,217 @@ out:
 	memset(dk, 0, sizeof (dk));
 	if (rv != 0)
 		memset(key, 0, 32);
+	return (rv);
+}
+
+/* --- Persistent chunk-id index ----------------------------------------- */
+
+/*
+ * A set of 32-byte chunk ids kept in a file, so a backup tool can tell
+ * "already stored" without asking its object store. The file is "PCIDX1",
+ * two zero bytes, then 32-byte ids in the order they were added; it is
+ * only ever appended to. On open the ids are loaded into a hash table; a
+ * partial record at the end (a crash while appending) is cut off.
+ *
+ * Adds are buffered and written by pc_index_sync()/pc_index_close(), so a
+ * crash can only lose entries, never add one: the tool then stores those
+ * chunks again, which is safe. Add an id only after its object is stored.
+ */
+#define	PCI_MAGIC	"PCIDX1\0\0"
+#define	PCI_HDR		8
+#define	PCI_BUF		(2048 * 32)
+
+/* shortcut: every id is held in memory (about 45 bytes per chunk); move to
+ * an on-disk hash if indexes of hundreds of millions of chunks appear. */
+struct pc_index {
+	int fd;
+	uint8_t (*ids)[32];	/* every id, in file order */
+	size_t n, cap;
+	uint32_t *slot;		/* open addressing: 0 empty, else index + 1 */
+	size_t nslots;		/* power of two, kept at most half full */
+	uchar_t buf[PCI_BUF];	/* adds not yet written */
+	size_t buflen;
+};
+
+static size_t
+pci_hash(const uint8_t id[32], size_t mask)
+{
+	uint64_t h = 0;
+	int i;
+
+	/* Ids are BLAKE2b output; mix anyway in case a caller uses others. */
+	for (i = 0; i < 8; i++)
+		h = (h << 8) | id[i];
+	h ^= h >> 33;
+	h *= 0xff51afd7ed558ccdULL;
+	h ^= h >> 33;
+	return ((size_t)h & mask);
+}
+
+static int
+pci_find(pc_index_t *x, const uint8_t id[32], size_t *where)
+{
+	size_t mask = x->nslots - 1, s = pci_hash(id, mask);
+
+	while (x->slot[s] != 0) {
+		if (memcmp(x->ids[x->slot[s] - 1], id, 32) == 0) {
+			*where = s;
+			return (1);
+		}
+		s = (s + 1) & mask;
+	}
+	*where = s;
+	return (0);
+}
+
+static int
+pci_grow(pc_index_t *x)
+{
+	size_t ns = x->nslots ? x->nslots * 2 : 1024, i, s;
+	uint32_t *t;
+
+	if (x->n >= UINT32_MAX - 1 || (t = calloc(ns, sizeof (*t))) == NULL)
+		return (-1);
+	free(x->slot);
+	x->slot = t;
+	x->nslots = ns;
+	for (i = 0; i < x->n; i++) {
+		(void) pci_find(x, x->ids[i], &s);
+		x->slot[s] = (uint32_t)i + 1;
+	}
+	return (0);
+}
+
+/* Insert into memory only. 1 added, 0 already present, -1 no memory. */
+static int
+pci_insert(pc_index_t *x, const uint8_t id[32])
+{
+	size_t s;
+
+	if ((x->n + 1) * 2 > x->nslots && pci_grow(x) != 0)
+		return (-1);
+	if (pci_find(x, id, &s))
+		return (0);
+	if (x->n == x->cap) {
+		size_t nc = x->cap ? x->cap * 2 : 1024;
+		void *p = realloc(x->ids, nc * 32);
+
+		if (p == NULL)
+			return (-1);
+		x->ids = p;
+		x->cap = nc;
+	}
+	memcpy(x->ids[x->n], id, 32);
+	x->slot[s] = (uint32_t)++x->n;
+	return (1);
+}
+
+static int
+pci_flush(pc_index_t *x)
+{
+	if (x->buflen > 0 && Write(x->fd, x->buf, x->buflen) != (int64_t)x->buflen)
+		return (-1);
+	x->buflen = 0;
+	return (0);
+}
+
+pc_index_t DLL_EXPORT *
+pc_index_open(const char *path)
+{
+	pc_index_t *x;
+	uchar_t hdr[PCI_HDR];
+	off_t sz, end, pos;
+
+	if (path == NULL || (x = calloc(1, sizeof (*x))) == NULL)
+		return (NULL);
+	/* O_APPEND: whole-record appends from two processes cannot overlap. */
+	if ((x->fd = open(path, O_RDWR | O_CREAT | O_APPEND, 0600)) == -1 || pci_grow(x) != 0)
+		goto fail;
+	sz = lseek(x->fd, 0, SEEK_END);
+	if (sz == 0) {
+		if (Write(x->fd, PCI_MAGIC, PCI_HDR) != PCI_HDR)
+			goto fail;
+		return (x);
+	}
+	if (sz < PCI_HDR || lseek(x->fd, 0, SEEK_SET) != 0 ||
+	    Read(x->fd, hdr, PCI_HDR) != PCI_HDR || memcmp(hdr, PCI_MAGIC, PCI_HDR) != 0)
+		goto fail;	/* not an index file: never overwrite it */
+	end = PCI_HDR + ((sz - PCI_HDR) / 32) * 32;
+	for (pos = PCI_HDR; pos < end; ) {
+		size_t want = (size_t)(end - pos < PCI_BUF ? end - pos : PCI_BUF), i;
+
+		if (Read(x->fd, x->buf, want) != (int64_t)want)
+			goto fail;
+		for (i = 0; i < want; i += 32)
+			if (pci_insert(x, x->buf + i) < 0)
+				goto fail;
+		pos += want;
+	}
+	/* Drop a partial last record (a crash while appending). */
+	if (end != sz && ftruncate(x->fd, end) != 0)
+		goto fail;
+	return (x);
+fail:
+	if (x->fd != -1)
+		close(x->fd);
+	free(x->slot);
+	free(x->ids);
+	free(x);
+	return (NULL);
+}
+
+int DLL_EXPORT
+pc_index_has(pc_index_t *x, const uint8_t id[32])
+{
+	size_t s;
+
+	if (x == NULL || id == NULL)
+		return (-1);
+	return (pci_find(x, id, &s));
+}
+
+int DLL_EXPORT
+pc_index_add(pc_index_t *x, const uint8_t id[32])
+{
+	int r;
+
+	if (x == NULL || id == NULL)
+		return (-1);
+	if ((r = pci_insert(x, id)) != 1)
+		return (r);
+	if (x->buflen + 32 > PCI_BUF && pci_flush(x) != 0)
+		return (-1);
+	memcpy(x->buf + x->buflen, id, 32);
+	x->buflen += 32;
+	return (1);
+}
+
+size_t DLL_EXPORT
+pc_index_count(pc_index_t *x)
+{
+	return (x ? x->n : 0);
+}
+
+int DLL_EXPORT
+pc_index_sync(pc_index_t *x)
+{
+	if (x == NULL || pci_flush(x) != 0 || fsync(x->fd) != 0)
+		return (-1);
+	return (0);
+}
+
+int DLL_EXPORT
+pc_index_close(pc_index_t *x)
+{
+	int rv;
+
+	if (x == NULL)
+		return (0);
+	rv = pc_index_sync(x);
+	if (close(x->fd) != 0)
+		rv = -1;
+	free(x->slot);
+	free(x->ids);
+	free(x);
 	return (rv);
 }

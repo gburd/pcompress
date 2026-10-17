@@ -205,6 +205,24 @@ size_t pc_keyfile_size(void);
 int pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out);
 int pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, uint8_t key[32]);
 
+/**
+ * Persistent set of chunk ids (an append-only file), so a backup tool can
+ * skip chunks it already stored without asking its object store.
+ * pc_index_open() creates the file if needed (refusing a file that is not
+ * an index) and loads it. pc_index_has() and pc_index_add() return 1 /
+ * 0 (present / absent, added / already there) or -1. Adds are written by
+ * pc_index_sync() and pc_index_close(); add an id only after its object is
+ * durably stored, so a crash can only make the tool store a chunk twice.
+ * One thread at a time per index.
+ */
+typedef struct pc_index pc_index_t;
+pc_index_t *pc_index_open(const char *path);
+int pc_index_has(pc_index_t *idx, const uint8_t id[32]);
+int pc_index_add(pc_index_t *idx, const uint8_t id[32]);
+size_t pc_index_count(pc_index_t *idx);
+int pc_index_sync(pc_index_t *idx);
+int pc_index_close(pc_index_t *idx);
+
 /** Largest object pc_chunk_seal() can produce for len input bytes. */
 size_t pc_chunk_seal_bound(size_t len);
 

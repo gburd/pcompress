@@ -229,6 +229,13 @@ for the tag. New files use N=2^17, r=8, p=1; open refuses log2 N outside
 10-22, r outside 1-32 and p outside 1-16, so a crafted file cannot make
 it allocate more than 512 MB.
 
+**Chunk index** (`pc_index_*`): the file is `PCIDX1`, two zero bytes,
+then 32-byte ids in the order they were added. It is only appended to
+(`O_APPEND`, whole records), loaded into an open-addressing hash table on
+open, and a torn last record is cut off. The `.pz` global-dedupe index
+(`rabin/global/index.c`) is separate and still per file: making it
+persistent would make one `.pz` depend on others.
+
 **Passwords for `.pz`.** The whole password is used. Up to 4.1.0 a `-w`
 file over 16 bytes was read as its first 15 bytes; decryption tries that
 form too when the two differ, and the header HMAC decides.

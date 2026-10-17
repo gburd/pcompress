@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
@@ -359,8 +360,84 @@ MU_TEST(test_keyfile)
 	pc_free(d);
 }
 
+MU_TEST(test_index)
+{
+	char path[256];
+	const char *t = getenv("TMPDIR");
+	uint8_t id[32];
+	pc_index_t *x;
+	FILE *f;
+	int i;
+
+	snprintf(path, sizeof (path), "%s/pc_idx_%d", t ? t : "/tmp", (int)getpid());
+	unlink(path);
+	x = pc_index_open(path);
+	mu_assert(x != NULL, "open new index");
+	for (i = 0; i < 100000; i++) {
+		pc_chunk_id(&i, sizeof (i), NULL, 0, id);
+		mu_assert_int_eq(0, pc_index_has(x, id));
+		mu_assert_int_eq(1, pc_index_add(x, id));
+		mu_assert_int_eq(0, pc_index_add(x, id));	/* duplicate */
+	}
+	mu_assert(pc_index_count(x) == 100000, "count");
+	mu_assert_int_eq(0, pc_index_close(x));
+	/* Reopen: everything is there, nothing extra. */
+	x = pc_index_open(path);
+	mu_assert(x != NULL && pc_index_count(x) == 100000, "reload");
+	for (i = 0; i < 100000; i += 997) {
+		pc_chunk_id(&i, sizeof (i), NULL, 0, id);
+		mu_assert_int_eq(1, pc_index_has(x, id));
+	}
+	i = -1;
+	pc_chunk_id(&i, sizeof (i), NULL, 0, id);
+	mu_assert_int_eq(0, pc_index_has(x, id));
+	mu_assert_int_eq(0, pc_index_close(x));
+	/* A torn last record (crash mid-append) is dropped, the rest kept. */
+	f = fopen(path, "ab");
+	fwrite("partial", 1, 7, f);
+	fclose(f);
+	x = pc_index_open(path);
+	mu_assert(x != NULL && pc_index_count(x) == 100000, "torn record");
+	mu_assert_int_eq(1, pc_index_add(x, id));
+	mu_assert_int_eq(0, pc_index_close(x));
+	x = pc_index_open(path);
+	mu_assert(x != NULL && pc_index_count(x) == 100001 && pc_index_has(x, id) == 1,
+	    "add after a torn record");
+	pc_index_close(x);
+	/* Two handles appending (e.g. two processes): both sets survive. */
+	{
+		pc_index_t *a = pc_index_open(path), *b = pc_index_open(path);
+
+		mu_assert(a != NULL && b != NULL, "two handles");
+		for (i = 200000; i < 200000 + 5000; i++) {
+			pc_chunk_id(&i, sizeof (i), NULL, 0, id);
+			mu_assert_int_eq(1, pc_index_add(i & 1 ? a : b, id));
+		}
+		mu_assert_int_eq(0, pc_index_close(a));
+		mu_assert_int_eq(0, pc_index_close(b));
+		x = pc_index_open(path);
+		mu_assert(x != NULL && pc_index_count(x) == 100001 + 5000, "both handles' adds kept");
+		pc_index_close(x);
+	}
+	/* Not an index: refused and left alone. */
+	f = fopen(path, "wb");
+	fputs("precious data, not an index", f);
+	fclose(f);
+	mu_assert(pc_index_open(path) == NULL, "foreign file opened");
+	f = fopen(path, "rb");
+	{
+		char b[64] = { 0 };
+		mu_assert(fread(b, 1, sizeof (b), f) == 27 && strcmp(b, "precious data, not an index") == 0,
+		    "foreign file modified");
+	}
+	fclose(f);
+	unlink(path);
+	mu_assert(pc_index_has(NULL, id) == -1 && pc_index_close(NULL) == 0, "NULL index");
+}
+
 MU_TEST_SUITE(suite_chunk)
 {
+	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
 	MU_RUN_TEST(test_chunker);
