@@ -24,6 +24,8 @@ A crafted archive with absolute member paths could write outside the
 ./config failed on illumos/Solaris in 4.0.x (OpenMP probe under ksh93).
 Bundled libarchive: tar entry numbering used function statics (a race
   between concurrent extractions); now per archive, as upstream.
+LZMA SDK: three match-finder fields were read before being set
+  (valgrind).
 
 Compatibility: the file format is unchanged (version 10). 4.0.2 and 4.1.0
   read each other's files, archives and streams in both directions, and
