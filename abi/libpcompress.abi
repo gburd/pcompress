@@ -29,6 +29,9 @@
     <elf-symbol name='pc_compress_fd' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_decompress_fd' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_free' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_keyfile_create' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_keyfile_open' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
+    <elf-symbol name='pc_keyfile_size' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_last_error' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_last_error_code' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='pc_new' version='PCOMPRESS_1' is-default-version='yes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -317,68 +320,86 @@
     <pointer-type-def type-id='type-id-4' size-in-bits='64' hash='24d8cca8965ce13e' id='type-id-7'/>
     <pointer-type-def type-id='type-id-8' size-in-bits='64' id='type-id-9'/>
     <typedef-decl name='pc_chunker_t' type-id='type-id-10' filepath='./utils/../include/pcompress/pcompress.h' line='165' column='1' id='type-id-8'/>
-    <class-decl name='pc_chunker' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='/home/admin/pcompress/chunk.c' line='37' column='1' id='type-id-10'/>
-    <function-decl name='pc_chunker_new' mangled-name='pc_chunker_new' filepath='/home/admin/pcompress/chunk.c' line='51' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_new@@PCOMPRESS_1' hash='a46227d8770aeeb5'>
-      <parameter type-id='type-id-5' name='avg' filepath='/home/admin/pcompress/chunk.c' line='51' column='1'/>
-      <parameter type-id='type-id-5' name='min' filepath='/home/admin/pcompress/chunk.c' line='51' column='1'/>
-      <parameter type-id='type-id-5' name='max' filepath='/home/admin/pcompress/chunk.c' line='51' column='1'/>
+    <class-decl name='pc_chunker' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='/home/admin/pcompress/chunk.c' line='38' column='1' id='type-id-10'/>
+    <function-decl name='pc_chunker_new' mangled-name='pc_chunker_new' filepath='/home/admin/pcompress/chunk.c' line='52' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_new@@PCOMPRESS_1' hash='a46227d8770aeeb5'>
+      <parameter type-id='type-id-5' name='avg' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
+      <parameter type-id='type-id-5' name='min' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
+      <parameter type-id='type-id-5' name='max' filepath='/home/admin/pcompress/chunk.c' line='52' column='1'/>
       <return type-id='type-id-9'/>
     </function-decl>
-    <function-decl name='pc_chunker_free' mangled-name='pc_chunker_free' filepath='/home/admin/pcompress/chunk.c' line='78' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_free@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='78' column='1'/>
+    <function-decl name='pc_chunker_free' mangled-name='pc_chunker_free' filepath='/home/admin/pcompress/chunk.c' line='79' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_free@@PCOMPRESS_1' hash='7f32ffea222edbe7'>
+      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='79' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='pc_chunker_feed' mangled-name='pc_chunker_feed' filepath='/home/admin/pcompress/chunk.c' line='93' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_feed@@PCOMPRESS_1' hash='f49be1eccf4e1fb0'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='93' column='1'/>
-      <parameter type-id='type-id-12' name='buf' filepath='/home/admin/pcompress/chunk.c' line='93' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='93' column='1'/>
-      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='93' column='1'/>
-      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='93' column='1'/>
+    <function-decl name='pc_chunker_feed' mangled-name='pc_chunker_feed' filepath='/home/admin/pcompress/chunk.c' line='94' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_feed@@PCOMPRESS_1' hash='f49be1eccf4e1fb0'>
+      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
+      <parameter type-id='type-id-12' name='buf' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
+      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
+      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='94' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_chunker_finish' mangled-name='pc_chunker_finish' filepath='/home/admin/pcompress/chunk.c' line='120' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_finish@@PCOMPRESS_1' hash='a554350138708921'>
-      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='120' column='1'/>
-      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='120' column='1'/>
-      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='120' column='1'/>
+    <function-decl name='pc_chunker_finish' mangled-name='pc_chunker_finish' filepath='/home/admin/pcompress/chunk.c' line='121' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunker_finish@@PCOMPRESS_1' hash='a554350138708921'>
+      <parameter type-id='type-id-9' name='c' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
+      <parameter type-id='type-id-6' name='lens' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
+      <parameter type-id='type-id-13' name='nlens' filepath='/home/admin/pcompress/chunk.c' line='121' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_chunk_id' mangled-name='pc_chunk_id' filepath='/home/admin/pcompress/chunk.c' line='138' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_id@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
-      <parameter type-id='type-id-12' name='buf' filepath='/home/admin/pcompress/chunk.c' line='138' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='138' column='1'/>
-      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='138' column='1'/>
-      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='138' column='1'/>
-      <parameter type-id='type-id-7' name='id' filepath='/home/admin/pcompress/chunk.c' line='138' column='1'/>
+    <function-decl name='pc_chunk_id' mangled-name='pc_chunk_id' filepath='/home/admin/pcompress/chunk.c' line='139' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_id@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
+      <parameter type-id='type-id-12' name='in' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_chunk_seal_bound' mangled-name='pc_chunk_seal_bound' filepath='/home/admin/pcompress/chunk.c' line='192' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal_bound@@PCOMPRESS_1' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='192' column='1'/>
+    <function-decl name='pc_chunk_seal_bound' mangled-name='pc_chunk_seal_bound' filepath='/home/admin/pcompress/chunk.c' line='193' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal_bound@@PCOMPRESS_1' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='193' column='1'/>
       <return type-id='type-id-5'/>
     </function-decl>
-    <function-decl name='pc_chunk_seal' mangled-name='pc_chunk_seal' filepath='/home/admin/pcompress/chunk.c' line='290' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
+    <function-decl name='pc_chunk_seal' mangled-name='pc_chunk_seal' filepath='/home/admin/pcompress/chunk.c' line='291' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_seal@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_chunk_open_size' mangled-name='pc_chunk_open_size' filepath='/home/admin/pcompress/chunk.c' line='391' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open_size@@PCOMPRESS_1' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-12' name='obj' filepath='/home/admin/pcompress/chunk.c' line='391' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='391' column='1'/>
+    <function-decl name='pc_chunk_open_size' mangled-name='pc_chunk_open_size' filepath='/home/admin/pcompress/chunk.c' line='392' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open_size@@PCOMPRESS_1' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-12' name='obj' filepath='/home/admin/pcompress/chunk.c' line='392' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='392' column='1'/>
       <return type-id='type-id-5'/>
     </function-decl>
-    <function-decl name='pc_chunk_open' mangled-name='pc_chunk_open' filepath='/home/admin/pcompress/chunk.c' line='399' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
-      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='399' column='1'/>
+    <function-decl name='pc_chunk_open' mangled-name='pc_chunk_open' filepath='/home/admin/pcompress/chunk.c' line='400' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_chunk_open@@PCOMPRESS_1' hash='feb30d8ff968dd4c'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-12' name='inp' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
+      <parameter type-id='type-id-6' name='outlen' filepath='/home/admin/pcompress/chunk.c' line='400' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_key' mangled-name='pc_set_key' filepath='/home/admin/pcompress/chunk.c' line='486' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_key@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
-      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
-      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
+    <function-decl name='pc_set_key' mangled-name='pc_set_key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_key@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
+      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
+      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
+      <return type-id='type-id-13'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_size' mangled-name='pc_keyfile_size' filepath='/home/admin/pcompress/chunk.c' line='554' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_size@@PCOMPRESS_1' hash='e0055d99adb0e173'>
+      <return type-id='type-id-5'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_create' mangled-name='pc_keyfile_create' filepath='/home/admin/pcompress/chunk.c' line='560' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_create@@PCOMPRESS_1' hash='3eebd9f8d1ae85f9'>
+      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
+      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
+      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
+      <parameter type-id='type-id-12' name='out' filepath='/home/admin/pcompress/chunk.c' line='560' column='1'/>
+      <return type-id='type-id-13'/>
+    </function-decl>
+    <function-decl name='pc_keyfile_open' mangled-name='pc_keyfile_open' filepath='/home/admin/pcompress/chunk.c' line='590' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_keyfile_open@@PCOMPRESS_1' hash='f89138ca7ba8db73'>
+      <parameter type-id='type-id-12' name='in' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-5' name='len' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-12' name='pw' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-5' name='pwlen' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
+      <parameter type-id='type-id-7' name='key' filepath='/home/admin/pcompress/chunk.c' line='590' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
   </abi-instr>
@@ -784,8 +805,8 @@
     <pointer-type-def type-id='type-id-78' size-in-bits='64' id='type-id-42'/>
     <pointer-type-def type-id='type-id-79' size-in-bits='64' id='type-id-49'/>
     <class-decl name='_meta_ctx' is-struct='yes' visibility='default' is-declaration-only='yes' id='type-id-80'/>
-    <class-decl name='crypto_ctx_t' is-struct='yes' naming-typedef-id='type-id-47' visibility='default' is-declaration-only='yes' filepath='./crypto/crypto_utils.h' line='75' column='1' id='type-id-81'/>
-    <typedef-decl name='crypto_ctx_t' type-id='type-id-81' filepath='./crypto/crypto_utils.h' line='83' column='1' id='type-id-47'/>
+    <class-decl name='crypto_ctx_t' is-struct='yes' naming-typedef-id='type-id-47' visibility='default' is-declaration-only='yes' filepath='./crypto/crypto_utils.h' line='82' column='1' id='type-id-81'/>
+    <typedef-decl name='crypto_ctx_t' type-id='type-id-81' filepath='./crypto/crypto_utils.h' line='90' column='1' id='type-id-47'/>
     <typedef-decl name='meta_ctx_t' type-id='type-id-80' filepath='./meta_stream.h' line='61' column='1' id='type-id-79'/>
     <class-decl name='archive_config_t' is-struct='yes' naming-typedef-id='type-id-77' visibility='default' is-declaration-only='yes' filepath='./rabin/global/dedupe_config.h' line='60' column='1' id='type-id-82'/>
     <typedef-decl name='archive_config_t' type-id='type-id-82' filepath='./rabin/global/dedupe_config.h' line='92' column='1' id='type-id-77'/>
@@ -797,134 +818,134 @@
     <class-decl name='_compat_sem' is-struct='yes' visibility='default' is-declaration-only='yes' filepath='./utils/utils.h' line='483' column='1' id='type-id-85'/>
     <typedef-decl name='Sem_t' type-id='type-id-85' filepath='./utils/utils.h' line='486' column='1' id='type-id-43'/>
     <function-decl name='usage' mangled-name='usage' filepath='/home/admin/pcompress/pcompress.c' line='160' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='usage@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4525' column='1'/>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='create_pc_context' mangled-name='create_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='create_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
+    <function-decl name='create_pc_context' mangled-name='create_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3397' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='create_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
       <return type-id='type-id-14'/>
     </function-decl>
-    <function-decl name='destroy_pc_context' mangled-name='destroy_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3485' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='destroy_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4525' column='1'/>
+    <function-decl name='destroy_pc_context' mangled-name='destroy_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='3432' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='destroy_pc_context@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='init_pc_context_argstr' mangled-name='init_pc_context_argstr' filepath='/home/admin/pcompress/pcompress.c' line='3503' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context_argstr@@PCOMPRESS_1' hash='612ef747c3f89a8e'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='3503' column='1'/>
-      <parameter type-id='type-id-46' name='args' filepath='/home/admin/pcompress/pcompress.c' line='3503' column='1'/>
+    <function-decl name='init_pc_context_argstr' mangled-name='init_pc_context_argstr' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context_argstr@@PCOMPRESS_1' hash='612ef747c3f89a8e'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
+      <parameter type-id='type-id-46' name='args' filepath='/home/admin/pcompress/pcompress.c' line='3450' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='start_pcompress' mangled-name='start_pcompress' filepath='/home/admin/pcompress/pcompress.c' line='4137' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_pcompress@@PCOMPRESS_1' hash='6085ee7ef85bede2'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4137' column='1'/>
+    <function-decl name='start_pcompress' mangled-name='start_pcompress' filepath='/home/admin/pcompress/pcompress.c' line='4084' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_pcompress@@PCOMPRESS_1' hash='6085ee7ef85bede2'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4084' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_log' mangled-name='pc_set_log' filepath='/home/admin/pcompress/pcompress.c' line='4162' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_log@@PCOMPRESS_1' hash='5dadbedef91cc391'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4162' column='1'/>
-      <parameter type-id='type-id-59' name='fn' filepath='/home/admin/pcompress/pcompress.c' line='4162' column='1'/>
-      <parameter type-id='type-id-12' name='arg' filepath='/home/admin/pcompress/pcompress.c' line='4162' column='1'/>
-      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4162' column='1'/>
+    <function-decl name='pc_set_log' mangled-name='pc_set_log' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_log@@PCOMPRESS_1' hash='5dadbedef91cc391'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-59' name='fn' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-12' name='arg' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
+      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4109' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='pc_last_error' mangled-name='pc_last_error' filepath='/home/admin/pcompress/pcompress.c' line='4171' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error@@PCOMPRESS_1' hash='9e0e8db782fee6cf'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4171' column='1'/>
+    <function-decl name='pc_last_error' mangled-name='pc_last_error' filepath='/home/admin/pcompress/pcompress.c' line='4118' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error@@PCOMPRESS_1' hash='9e0e8db782fee6cf'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4118' column='1'/>
       <return type-id='type-id-45'/>
     </function-decl>
-    <function-decl name='pc_last_error_code' mangled-name='pc_last_error_code' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error_code@@PCOMPRESS_1' hash='330e0cefb374436a'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+    <function-decl name='pc_last_error_code' mangled-name='pc_last_error_code' filepath='/home/admin/pcompress/pcompress.c' line='4125' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_last_error_code@@PCOMPRESS_1' hash='330e0cefb374436a'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4125' column='1'/>
       <return type-id='type-id-86'/>
     </function-decl>
-    <function-decl name='pc_set_userpw' mangled-name='pc_set_userpw' filepath='/home/admin/pcompress/pcompress.c' line='4183' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_userpw@@PCOMPRESS_1' hash='85dfd162af5b0424'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4183' column='1'/>
-      <parameter type-id='type-id-48' name='pwdata' filepath='/home/admin/pcompress/pcompress.c' line='4183' column='1'/>
-      <parameter type-id='type-id-13' name='pwlen' filepath='/home/admin/pcompress/pcompress.c' line='4183' column='1'/>
+    <function-decl name='pc_set_userpw' mangled-name='pc_set_userpw' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_userpw@@PCOMPRESS_1' hash='85dfd162af5b0424'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
+      <parameter type-id='type-id-48' name='pwdata' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
+      <parameter type-id='type-id-13' name='pwlen' filepath='/home/admin/pcompress/pcompress.c' line='4130' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='start_decompress' mangled-name='start_decompress' filepath='/home/admin/pcompress/pcompress.c' line='4203' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_decompress@@PCOMPRESS_1' hash='05e2ec78a5d25c2d'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4203' column='1'/>
-      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4203' column='1'/>
-      <parameter type-id='type-id-46' name='to_filename' filepath='/home/admin/pcompress/pcompress.c' line='4203' column='1'/>
+    <function-decl name='start_decompress' mangled-name='start_decompress' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_decompress@@PCOMPRESS_1' hash='05e2ec78a5d25c2d'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
+      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
+      <parameter type-id='type-id-46' name='to_filename' filepath='/home/admin/pcompress/pcompress.c' line='4150' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='start_compress' mangled-name='start_compress' filepath='/home/admin/pcompress/pcompress.c' line='4217' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_compress@@PCOMPRESS_1' hash='60e8632b0c08c173'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4217' column='1'/>
-      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4217' column='1'/>
-      <parameter type-id='type-id-40' name='chunksize' filepath='/home/admin/pcompress/pcompress.c' line='4217' column='1'/>
-      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4217' column='1'/>
+    <function-decl name='start_compress' mangled-name='start_compress' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='start_compress@@PCOMPRESS_1' hash='60e8632b0c08c173'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-45' name='filename' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-40' name='chunksize' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
+      <parameter type-id='type-id-13' name='level' filepath='/home/admin/pcompress/pcompress.c' line='4164' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='init_pc_context' mangled-name='init_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='4231' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context@@PCOMPRESS_1' hash='5b91cce70958e098'>
-      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4231' column='1'/>
-      <parameter type-id='type-id-13' name='argc' filepath='/home/admin/pcompress/pcompress.c' line='4231' column='1'/>
-      <parameter type-id='type-id-65' name='argv' filepath='/home/admin/pcompress/pcompress.c' line='4231' column='1'/>
+    <function-decl name='init_pc_context' mangled-name='init_pc_context' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='init_pc_context@@PCOMPRESS_1' hash='5b91cce70958e098'>
+      <parameter type-id='type-id-14' name='pctx' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+      <parameter type-id='type-id-13' name='argc' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
+      <parameter type-id='type-id-65' name='argv' filepath='/home/admin/pcompress/pcompress.c' line='4178' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_version' mangled-name='pc_version' filepath='/home/admin/pcompress/pcompress.c' line='4249' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_version@@PCOMPRESS_1' hash='53885bde0aa65efe'>
+    <function-decl name='pc_version' mangled-name='pc_version' filepath='/home/admin/pcompress/pcompress.c' line='4196' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_version@@PCOMPRESS_1' hash='53885bde0aa65efe'>
       <return type-id='type-id-45'/>
     </function-decl>
-    <function-decl name='pc_api_version' mangled-name='pc_api_version' filepath='/home/admin/pcompress/pcompress.c' line='4255' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_api_version@@PCOMPRESS_1' hash='388da3fa973fde78'>
+    <function-decl name='pc_api_version' mangled-name='pc_api_version' filepath='/home/admin/pcompress/pcompress.c' line='4202' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_api_version@@PCOMPRESS_1' hash='388da3fa973fde78'>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_new' mangled-name='pc_new' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_new@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
+    <function-decl name='pc_new' mangled-name='pc_new' filepath='/home/admin/pcompress/pcompress.c' line='4208' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_new@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
       <return type-id='type-id-14'/>
     </function-decl>
-    <function-decl name='pc_free' mangled-name='pc_free' filepath='/home/admin/pcompress/pcompress.c' line='4271' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_free@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4525' column='1'/>
+    <function-decl name='pc_free' mangled-name='pc_free' filepath='/home/admin/pcompress/pcompress.c' line='4218' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_free@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
-    <function-decl name='pc_set_algorithm' mangled-name='pc_set_algorithm' filepath='/home/admin/pcompress/pcompress.c' line='4292' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_algorithm@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4341' column='1'/>
-      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4341' column='1'/>
+    <function-decl name='pc_set_algorithm' mangled-name='pc_set_algorithm' filepath='/home/admin/pcompress/pcompress.c' line='4239' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_algorithm@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_level' mangled-name='pc_set_level' filepath='/home/admin/pcompress/pcompress.c' line='4301' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_level@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
+    <function-decl name='pc_set_level' mangled-name='pc_set_level' filepath='/home/admin/pcompress/pcompress.c' line='4248' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_level@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_chunk_size' mangled-name='pc_set_chunk_size' filepath='/home/admin/pcompress/pcompress.c' line='4314' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_chunk_size@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4314' column='1'/>
-      <parameter type-id='type-id-40' name='bytes' filepath='/home/admin/pcompress/pcompress.c' line='4314' column='1'/>
+    <function-decl name='pc_set_chunk_size' mangled-name='pc_set_chunk_size' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_chunk_size@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
+      <parameter type-id='type-id-40' name='bytes' filepath='/home/admin/pcompress/pcompress.c' line='4261' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_threads' mangled-name='pc_set_threads' filepath='/home/admin/pcompress/pcompress.c' line='4328' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_threads@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
+    <function-decl name='pc_set_threads' mangled-name='pc_set_threads' filepath='/home/admin/pcompress/pcompress.c' line='4275' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_threads@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_checksum' mangled-name='pc_set_checksum' filepath='/home/admin/pcompress/pcompress.c' line='4341' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_checksum@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4341' column='1'/>
-      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4341' column='1'/>
+    <function-decl name='pc_set_checksum' mangled-name='pc_set_checksum' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_checksum@@PCOMPRESS_1' hash='596f48f9d65d92f3'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
+      <parameter type-id='type-id-45' name='name' filepath='/home/admin/pcompress/pcompress.c' line='4288' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_dedupe' mangled-name='pc_set_dedupe' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_dedupe@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
-      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4350' column='1'/>
+    <function-decl name='pc_set_dedupe' mangled-name='pc_set_dedupe' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_dedupe@@PCOMPRESS_1' hash='bc21369167d2c3fd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
+      <parameter type-id='type-id-13' name='mode' filepath='/home/admin/pcompress/pcompress.c' line='4297' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_encryption' mangled-name='pc_set_encryption' filepath='/home/admin/pcompress/pcompress.c' line='4378' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_encryption@@PCOMPRESS_1' hash='5888bf265793b177'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4378' column='1'/>
-      <parameter type-id='type-id-45' name='alg' filepath='/home/admin/pcompress/pcompress.c' line='4378' column='1'/>
-      <parameter type-id='type-id-13' name='keylen' filepath='/home/admin/pcompress/pcompress.c' line='4378' column='1'/>
+    <function-decl name='pc_set_encryption' mangled-name='pc_set_encryption' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_encryption@@PCOMPRESS_1' hash='5888bf265793b177'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
+      <parameter type-id='type-id-45' name='alg' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
+      <parameter type-id='type-id-13' name='keylen' filepath='/home/admin/pcompress/pcompress.c' line='4325' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_set_password' mangled-name='pc_set_password' filepath='/home/admin/pcompress/pcompress.c' line='4400' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_password@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
-      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
-      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='486' column='1'/>
+    <function-decl name='pc_set_password' mangled-name='pc_set_password' filepath='/home/admin/pcompress/pcompress.c' line='4347' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_set_password@@PCOMPRESS_1' hash='8e5828ee57cf1ccd'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
+      <parameter type-id='type-id-12' name='key' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
+      <parameter type-id='type-id-5' name='keylen' filepath='/home/admin/pcompress/chunk.c' line='487' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_compress_fd' mangled-name='pc_compress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4513' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_compress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
-      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
-      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
+    <function-decl name='pc_compress_fd' mangled-name='pc_compress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4460' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_compress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_decompress_fd' mangled-name='pc_decompress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_decompress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
-      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
-      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4519' column='1'/>
+    <function-decl name='pc_decompress_fd' mangled-name='pc_decompress_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_decompress_fd@@PCOMPRESS_1' hash='d4049c7bd091f430'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-13' name='in_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
+      <parameter type-id='type-id-13' name='out_fd' filepath='/home/admin/pcompress/pcompress.c' line='4466' column='1'/>
       <return type-id='type-id-13'/>
     </function-decl>
-    <function-decl name='pc_usage' mangled-name='pc_usage' filepath='/home/admin/pcompress/pcompress.c' line='4525' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_usage@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
-      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4525' column='1'/>
+    <function-decl name='pc_usage' mangled-name='pc_usage' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='pc_usage@@PCOMPRESS_1' hash='4ecdba02b026afbe'>
+      <parameter type-id='type-id-14' name='ctx' filepath='/home/admin/pcompress/pcompress.c' line='4472' column='1'/>
       <return type-id='type-id-11'/>
     </function-decl>
     <function-type size-in-bits='64' hash='526e7560c155d13e' id='type-id-66'>

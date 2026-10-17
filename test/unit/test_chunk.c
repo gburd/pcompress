@@ -318,8 +318,50 @@ MU_TEST(test_chunker)
 	free(buf);
 }
 
+MU_TEST(test_keyfile)
+{
+	const char *pw = "a passphrase much longer than sixteen bytes";
+	unsigned char kf[256], kf2[256], key[32], back[32], obj[200], out[100];
+	size_t n = pc_keyfile_size(), i, ol = sizeof (obj), pl = sizeof (out);
+	pc_ctx_t *c, *d;
+
+	mu_assert(n > 0 && n <= sizeof (kf), "keyfile size");
+	mu_assert_int_eq(0, pc_keyfile_create(pw, strlen(pw), key, kf));
+	mu_assert_int_eq(0, pc_keyfile_open(kf, n, pw, strlen(pw), back));
+	mu_assert(memcmp(key, back, 32) == 0, "key round trip");
+	/* Wrong password, including one that differs only after 16 bytes. */
+	mu_assert(pc_keyfile_open(kf, n, "a passphrase much longer than sixteen byteZ",
+	    strlen(pw), back) != 0, "wrong password accepted");
+	for (i = 0; i < 32; i++)
+		mu_assert(back[i] == 0, "key not zeroed on failure");
+	/* Any changed byte fails (sampled: each costs one scrypt). */
+	for (i = 0; i < n; i += 9) {
+		memcpy(kf2, kf, n);
+		kf2[i] ^= 0x40;
+		mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "modified keyfile accepted");
+	}
+	mu_assert(pc_keyfile_open(kf, n - 1, pw, strlen(pw), back) != 0, "short keyfile");
+	/* Absurd KDF parameters are refused before any work. */
+	memcpy(kf2, kf, n);
+	kf2[7] = 40;
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 40 accepted");
+	/* Two key files: different keys and salts. */
+	mu_assert_int_eq(0, pc_keyfile_create(pw, strlen(pw), back, kf2));
+	mu_assert(memcmp(key, back, 32) != 0 && memcmp(kf, kf2, n) != 0, "key files repeat");
+	/* The recovered key works with sealed objects. */
+	mu_assert_int_eq(0, pc_keyfile_open(kf, n, pw, strlen(pw), back));
+	c = ctx_with("zstd", 3, key);
+	d = ctx_with(NULL, 0, back);
+	mu_assert_int_eq(0, pc_chunk_seal(c, "hello, key file", 15, obj, &ol));
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, ol, out, &pl));
+	mu_assert(pl == 15 && memcmp(out, "hello, key file", 15) == 0, "seal with keyfile key");
+	pc_free(c);
+	pc_free(d);
+}
+
 MU_TEST_SUITE(suite_chunk)
 {
+	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
 	MU_RUN_TEST(test_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);

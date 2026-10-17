@@ -27,6 +27,8 @@
 .Nm pc_set_key ,
 .Nm pc_chunk_seal ,
 .Nm pc_chunk_open ,
+.Nm pc_keyfile_create ,
+.Nm pc_keyfile_open ,
 .Nm pc_version
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
@@ -90,6 +92,12 @@ libpcompress
 .Fn pc_chunk_open "pc_ctx_t *ctx" "const void *in" "size_t len" "void *out" "size_t *outlen"
 .Ft size_t
 .Fn pc_chunk_open_size "const void *obj" "size_t len"
+.Ft size_t
+.Fn pc_keyfile_size "void"
+.Ft int
+.Fn pc_keyfile_create "const void *pw" "size_t pwlen" "uint8_t key[32]" "void *out"
+.Ft int
+.Fn pc_keyfile_open "const void *in" "size_t len" "const void *pw" "size_t pwlen" "uint8_t key[32]"
 .Sh DESCRIPTION
 The library behind
 .Xr pcompress 1 .
@@ -309,6 +317,18 @@ a missing key with
 .Dv PC_ERR_CRYPTO .
 .Fn pc_chunk_open_size
 reads the plaintext size from the header (unverified) to size the buffer.
+.It Fn pc_keyfile_create
+Makes a random 256-bit key and writes it, wrapped with a password of any
+length, to
+.Fn pc_keyfile_size
+bytes at
+.Fa out
+(scrypt N=2^17 r=8 p=1, then XSalsa20 and a BLAKE2b-256 tag).
+.Fn pc_keyfile_open
+recovers the key; a wrong password or any change to the file fails.
+The KDF and its parameters are stored in the file, and
+.Fn pc_keyfile_open
+refuses parameters beyond 512 MB or unreasonable work.
 .El
 .Pp
 The object format is described in

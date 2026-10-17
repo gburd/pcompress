@@ -22,6 +22,7 @@
 #include <crypto_utils.h>
 #include <crypto_xsalsa20.h>
 #include <rabin_dedup.h>
+#include <crypto_scrypt.h>
 
 /* --- Content-defined chunker ------------------------------------------- */
 
@@ -494,4 +495,118 @@ pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen)
 	memcpy(ctx->chunk_key, key, 32);
 	ctx->chunk_key_set = 1;
 	return (0);
+}
+
+/* --- Key files ---------------------------------------------------------- */
+
+/*
+ * A key file holds a random 256-bit master key wrapped with a key derived
+ * from a password of any length (ROADMAP Phase 4). 96 bytes, little-endian:
+ *
+ *   0  6  magic "PCKEY1"
+ *   6  1  KDF id: 1 = scrypt
+ *   7  1  log2 N (scrypt work factor)
+ *   8  4  r
+ *  12  4  p
+ *  16 16  salt
+ *  32 24  nonce
+ *  56  8  reserved, 0
+ *  64 32  the wrapped key (XSalsa20 with the first half of the KDF output)
+ *  96 32  tag: BLAKE2b-256 keyed with a MAC key from the KDF, over [0, 96)
+ *
+ * (128 bytes in all.) The KDF output is 64 bytes: the first 32 encrypt,
+ * the last 32 authenticate. A wrong password fails the tag. The KDF and
+ * its parameters are in the file, so they can change without breaking old
+ * files; open refuses parameters outside sane bounds (a crafted file must
+ * not make it allocate gigabytes).
+ */
+#define	PCK_KF_MAGIC	"PCKEY1"
+#define	PCK_KF_SIZE	128
+#define	PCK_KF_SCRYPT	1
+#define	PCK_KF_LOGN	17	/* 128 MB, about 0.3 s: interactive use */
+
+static void
+put_le32(uchar_t *p, uint32_t v)
+{
+	p[0] = (uchar_t)v; p[1] = (uchar_t)(v >> 8);
+	p[2] = (uchar_t)(v >> 16); p[3] = (uchar_t)(v >> 24);
+}
+
+static uint32_t
+get_le32(const uchar_t *p)
+{
+	return ((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+	    (uint32_t)p[3] << 24);
+}
+
+static int
+kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
+{
+	uint32_t logn = hdr[7], r = get_le32(hdr + 8), p = get_le32(hdr + 12);
+
+	if (hdr[6] != PCK_KF_SCRYPT || logn < 10 || logn > 22 || r < 1 || r > 32 ||
+	    p < 1 || p > 16)
+		return (-1);	/* unknown KDF or parameters beyond 512 MB / sane work */
+	return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << logn, r, p, dk, 64));
+}
+
+size_t DLL_EXPORT
+pc_keyfile_size(void)
+{
+	return (PCK_KF_SIZE);
+}
+
+int DLL_EXPORT
+pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out)
+{
+	uchar_t *o = (uchar_t *)out, dk[64];
+	int rv = -1;
+
+	if (pw == NULL || pwlen == 0 || key == NULL || out == NULL)
+		return (-1);
+	memset(o, 0, PCK_KF_SIZE);
+	memcpy(o, PCK_KF_MAGIC, 6);
+	o[6] = PCK_KF_SCRYPT;
+	o[7] = PCK_KF_LOGN;
+	put_le32(o + 8, 8);
+	put_le32(o + 12, 1);
+	if (geturandom_bytes(o + 16, 16 + 24) != 0 || geturandom_bytes(key, 32) != 0)
+		goto out;
+	if (kf_derive(pw, pwlen, o, dk) != 0 ||
+	    xsalsa20_xor(o + 64, key, 32, o + 32, dk) != 0 ||
+	    blake2b_keyed2(o + 96, 32, dk + 32, 32, o, 96, NULL, 0) != 0)
+		goto out;
+	rv = 0;
+out:
+	memset(dk, 0, sizeof (dk));
+	if (rv != 0) {
+		memset(o, 0, PCK_KF_SIZE);
+		memset(key, 0, 32);
+	}
+	return (rv);
+}
+
+int DLL_EXPORT
+pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, uint8_t key[32])
+{
+	const uchar_t *p = (const uchar_t *)in;
+	uchar_t dk[64], tag[32];
+	int rv = -1;
+
+	if (in == NULL || pw == NULL || key == NULL || len != PCK_KF_SIZE ||
+	    memcmp(p, PCK_KF_MAGIC, 6) != 0 || get_le64(p + 56) != 0)
+		return (-1);
+	if (kf_derive(pw, pwlen, p, dk) != 0)
+		goto out;
+	if (blake2b_keyed2(tag, 32, dk + 32, 32, p, 96, NULL, 0) != 0 ||
+	    !ct_equal(tag, p + 96, 32))
+		goto out;	/* wrong password or modified file */
+	if (xsalsa20_xor(key, p + 64, 32, p + 32, dk) != 0)
+		goto out;
+	rv = 0;
+out:
+	memset(dk, 0, sizeof (dk));
+	if (rv != 0)
+		memset(key, 0, 32);
+	return (rv);
 }

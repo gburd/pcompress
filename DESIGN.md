@@ -221,6 +221,18 @@ the tag in constant time, and only then decrypts and decompresses into
 exactly the declared length. The algorithm ids never change meaning:
 add new ones at the end.
 
+**Key files** (`pc_keyfile_create`/`open`, 128 bytes): magic `PCKEY1`,
+KDF id (1 = scrypt), log2 N, r, p, a 16-byte salt and a 24-byte nonce,
+8 reserved bytes, the 32-byte key XSalsa20-encrypted, and a BLAKE2b-256
+tag over everything before it. scrypt yields 64 bytes: 32 to encrypt, 32
+for the tag. New files use N=2^17, r=8, p=1; open refuses log2 N outside
+10-22, r outside 1-32 and p outside 1-16, so a crafted file cannot make
+it allocate more than 512 MB.
+
+**Passwords for `.pz`.** The whole password is used. Up to 4.1.0 a `-w`
+file over 16 bytes was read as its first 15 bytes; decryption tries that
+form too when the two differ, and the header HMAC decides.
+
 ## Archive mode
 
 The archiver thread walks the paths with libarchive, sorts members by

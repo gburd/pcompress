@@ -27,7 +27,7 @@ scheduling and storage backends belong in the consuming program.
 | P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Open (Phase 5) |
 | P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed after 4.1.0 (Phase 3) |
 | P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Open (Phase 6) |
-| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Partly: `pc_set_password()` uses every byte; CLI cap and raw keys open (Phase 4) |
+| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed after 4.1.0 (Phase 4); raw keys for `.pz` wait for a new format version |
 | P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
 
 ## Phases
@@ -158,6 +158,20 @@ Not done, deliberately:
   current derivation for existing `.pz` files.
 - **Done when:** existing encrypted `.pz` files still decrypt, and new
   key files round-trip and reject a wrong password.
+
+**Status: done (unreleased).**
+- Raw keys: `pc_set_key()` for chunk objects (Phase 3).
+- Key files: `pc_keyfile_create/open`, with scrypt-wrapped,
+  versioned KDF parameters.
+- The 16-byte cap is gone from the prompt, `-w` files and the
+  library.
+- Old files: the legacy truncation is tried on decryption, and four
+  encrypted references written by 4.1.0 are checked by `make check`.
+
+Not done:
+- A raw-key or key-file option for `.pz` streams. That would need a
+  header flag the v10 format doesn't have, so it waits for the next
+  format version (Phase 6).
 
 ### Phase 5: Persistent, pluggable dedupe index (fixes P6)
 

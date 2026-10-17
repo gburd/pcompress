@@ -5,7 +5,15 @@ Library: chunk-level building blocks for backup tools (libpcompress(3),
   (pc_chunk_seal/pc_chunk_open: compressed, optionally XSalsa20-encrypted
   and BLAKE2b-authenticated, self-describing; pc_set_key takes a raw
   256-bit key). examples/pzstore.c is a small deduplicating store on them.
+  Key files (pc_keyfile_create/open): a random key wrapped with a password
+  of any length (scrypt).
   Additions only: the 4.1.0 ABI is unchanged.
+Passwords: the whole password is used, up to 4096 bytes. 4.1.0 used only
+  the first 15 bytes of a -w file over 16 bytes, and its prompt refused
+  passwords over 14 bytes. Files written then still decrypt (the old form
+  is tried too); files encrypted now with passwords over 16 bytes cannot be
+  read by 4.1.0 or earlier.
+make check also runs the backward-compatibility suite.
 
 == 4.1.0 Release ==
 Library:

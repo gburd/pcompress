@@ -193,6 +193,18 @@ int pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uin
  */
 int pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen);
 
+/**
+ * Key files: a random 256-bit key wrapped with a password of any length
+ * (scrypt, then XSalsa20 and a BLAKE2b-256 tag). pc_keyfile_create()
+ * writes pc_keyfile_size() bytes to out and returns the new key in key;
+ * pc_keyfile_open() recovers the key, failing on a wrong password or any
+ * change to the file. The KDF and its parameters are stored in the file.
+ * Both 0 or -1; the key is zeroed on failure. Use the key with pc_set_key().
+ */
+size_t pc_keyfile_size(void);
+int pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out);
+int pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, uint8_t key[32]);
+
 /** Largest object pc_chunk_seal() can produce for len input bytes. */
 size_t pc_chunk_seal_bound(size_t len);
 
