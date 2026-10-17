@@ -181,6 +181,10 @@ void MatchFinder_Construct(CMatchFinder *p)
   p->bufferBase = 0;
   p->directInput = 0;
   p->hash = 0;
+  /* Read by MatchFinder_Create() before it sets them (as in later SDKs). */
+  p->blockSize = 0;
+  p->hashSizeSum = 0;
+  p->numSons = 0;
   MatchFinder_SetDefaultSettings(p);
 
   for (i = 0; i < 256; i++)
