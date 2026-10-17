@@ -193,12 +193,6 @@ is 16 or 32 bytes, 0 for 32.
 The password, used by the next job; all of it feeds the key derivation
 (scrypt).
 It is copied; the caller's buffer is not changed.
-(The
-.Xr pcompress 1
-prompt and
-.Fl w
-file read at most 16 bytes, so a longer password set here must also be
-given here to decrypt.)
 .El
 .Ss Jobs
 .Fn pc_compress_fd
@@ -326,7 +320,14 @@ or
 a wrong key with
 .Dv PC_ERR_VERIFY ,
 a missing key with
-.Dv PC_ERR_CRYPTO .
+.Dv PC_ERR_CRYPTO ,
+and an unencrypted object while a key is set with
+.Dv PC_ERR_VERIFY .
+An object does not record which chunk it is: whoever controls the storage
+can put a valid object under another one's name.
+After opening, compare
+.Fn pc_chunk_id
+of the result with the name the object was fetched by.
 .Fn pc_chunk_open_size
 reads the plaintext size from the header (unverified) to size the buffer.
 .It Fn pc_keyfile_create

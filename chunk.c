@@ -140,7 +140,7 @@ pc_chunker_finish(pc_chunker_t *c, size_t *lens, int nlens)
 int DLL_EXPORT
 pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t id[32])
 {
-	if ((buf == NULL && len > 0) || id == NULL || keylen > 64 || (key == NULL && keylen > 0))
+	if ((buf == NULL && len > 0) || id == NULL || keylen > 64 || (key == NULL) != (keylen == 0))
 		return (-1);
 	return (blake2b_keyed2(id, 32, key, (int)keylen, buf, len, NULL, 0));
 }
@@ -195,6 +195,8 @@ size_t DLL_EXPORT
 pc_chunk_seal_bound(size_t len)
 {
 	/* Raw is always possible, so the bound is raw plus framing. */
+	if (len > SIZE_MAX - PCK_HDR - PCK_TAG)
+		return (SIZE_MAX);	/* no buffer is that big: seal then refuses */
 	return (len + PCK_HDR + PCK_TAG);
 }
 
@@ -347,7 +349,8 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 
 	if (in == NULL && len > 0)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: NULL input"));
-	if (outp == NULL || outlen == NULL || *outlen < pc_chunk_seal_bound(len))
+	if (outp == NULL || outlen == NULL || len > SIZE_MAX - PCK_HDR - PCK_TAG ||
+	    *outlen < pc_chunk_seal_bound(len))
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: output buffer too small"));
 	if (id < 0)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: algorithm has no object id"));
@@ -440,7 +443,8 @@ pc_chunk_open_size(const void *obj, size_t len)
 {
 	int64_t n = (obj == NULL) ? -1 : check_header((const uchar_t *)obj, len);
 
-	return (n < 0 ? (size_t)-1 : (size_t)n);
+	/* (size_t)-1 is the error value; on 32-bit, 4 GB does not fit either. */
+	return (n < 0 || (uint64_t)n >= SIZE_MAX ? (size_t)-1 : (size_t)n);
 }
 
 static int
@@ -591,9 +595,12 @@ kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
 {
 	uint32_t logn = hdr[7], r = get_le32(hdr + 8), p = get_le32(hdr + 12);
 
+	/* scrypt needs 128 * r * N bytes and p times the work: cap at 512 MB
+	 * (2^22 * 128) and 16 such passes, before any work is done. */
 	if (hdr[6] != PCK_KF_SCRYPT || logn < 10 || logn > 22 || r < 1 || r > 32 ||
-	    p < 1 || p > 16)
-		return (-1);	/* unknown KDF or parameters beyond 512 MB / sane work */
+	    p < 1 || p > 16 || ((uint64_t)r << logn) > ((uint64_t)1 << 22) ||
+	    ((uint64_t)r * p << logn) > ((uint64_t)1 << 26))
+		return (-1);
 	return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << logn, r, p, dk, 64));
 }
 
@@ -748,7 +755,7 @@ pci_insert(pc_index_t *x, const uint8_t id[32])
 		return (0);
 	if (x->n == x->cap) {
 		size_t nc = x->cap ? x->cap * 2 : 1024;
-		void *p = realloc(x->ids, nc * 32);
+		void *p = nc > SIZE_MAX / 32 ? NULL : realloc(x->ids, nc * 32);
 
 		if (p == NULL)
 			return (-1);
@@ -763,8 +770,17 @@ pci_insert(pc_index_t *x, const uint8_t id[32])
 static int
 pci_flush(pc_index_t *x)
 {
-	if (x->buflen > 0 && Write(x->fd, x->buf, x->buflen) != (int64_t)x->buflen)
+	off_t end;
+
+	if (x->buflen == 0)
+		return (0);
+	if ((end = lseek(x->fd, 0, SEEK_END)) < 0)
 		return (-1);
+	if (Write(x->fd, x->buf, x->buflen) != (int64_t)x->buflen) {
+		/* Undo a short write so later records stay aligned; keep the buffer. */
+		(void) ftruncate(x->fd, end);
+		return (-1);
+	}
 	x->buflen = 0;
 	return (0);
 }
@@ -831,10 +847,11 @@ pc_index_add(pc_index_t *x, const uint8_t id[32])
 
 	if (x == NULL || id == NULL)
 		return (-1);
-	if ((r = pci_insert(x, id)) != 1)
-		return (r);
+	/* Make room first: a failed add must leave nothing half done. */
 	if (x->buflen + 32 > PCI_BUF && pci_flush(x) != 0)
 		return (-1);
+	if ((r = pci_insert(x, id)) != 1)
+		return (r);
 	memcpy(x->buf + x->buflen, id, 32);
 	x->buflen += 32;
 	return (1);

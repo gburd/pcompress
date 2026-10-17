@@ -347,6 +347,11 @@ MU_TEST(test_keyfile)
 	memcpy(kf2, kf, n);
 	kf2[7] = 40;
 	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 40 accepted");
+	/* Each in range, together 16 GB (128 * r * N): refused before scrypt. */
+	kf2[7] = 22;
+	kf2[8] = 32; kf2[9] = kf2[10] = kf2[11] = 0;
+	kf2[12] = 16; kf2[13] = kf2[14] = kf2[15] = 0;
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "16 GB scrypt accepted");
 	/* Two key files: different keys and salts. */
 	mu_assert_int_eq(0, pc_keyfile_create(pw, strlen(pw), back, kf2));
 	mu_assert(memcmp(key, back, 32) != 0 && memcmp(kf, kf2, n) != 0, "key files repeat");

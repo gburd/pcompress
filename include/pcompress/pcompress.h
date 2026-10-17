@@ -136,8 +136,7 @@ int pc_set_encryption(pc_ctx_t *ctx, const char *alg, int keylen);
 /**
  * Password for encryption or decryption; every byte feeds the key
  * derivation. The library copies it and wipes the copy when done; the
- * caller's buffer is not changed. (The pcompress program's prompt and -w
- * file read at most 16 bytes.)
+ * caller's buffer is not changed.
  */
 int pc_set_password(pc_ctx_t *ctx, const void *pw, size_t len);
 
@@ -180,8 +179,8 @@ int pc_chunker_finish(pc_chunker_t *c, size_t *lens, int nlens);
 
 /**
  * Chunk identity: BLAKE2b-256 of the bytes, keyed if key != NULL (keylen
- * 1-64). With a secret key the id does not reveal the content's hash to
- * whoever stores the objects. 0 or -1.
+ * 1-64; key NULL with keylen 0 for unkeyed). With a secret key the id does
+ * not reveal the content's hash to whoever stores the objects. 0 or -1.
  */
 int pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t id[32]);
 
@@ -222,6 +221,13 @@ int pc_index_add(pc_index_t *idx, const uint8_t id[32]);
 size_t pc_index_count(pc_index_t *idx);
 int pc_index_sync(pc_index_t *idx);
 int pc_index_close(pc_index_t *idx);
+
+/**
+ * An object does not say which chunk it is: whoever controls the storage
+ * can put a valid object under another one's name. After pc_chunk_open(),
+ * check pc_chunk_id() of the result against the name it was fetched by
+ * (examples/pzstore.c does).
+ */
 
 /** Largest object pc_chunk_seal() can produce for len input bytes. */
 size_t pc_chunk_seal_bound(size_t len);
