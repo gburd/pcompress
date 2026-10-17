@@ -12,3 +12,8 @@ Files:
   reference_input.dat       - Original uncompressed data
   reference_input.sha256    - SHA-256 checksum of reference_input.dat
   ref_<algo>_L6_64k.pz     - Compressed with <algo>, level 6, chunk 64k
+  ref_zstd_<ALG>_pw<N>.pz  - zstd -l3 -s 64k, encrypted with <ALG> by the
+                             4.1.0 release from a -w file holding an N-byte
+                             password (see run_backward_compat.sh). 4.1.0
+                             used only 15 bytes of a file over 16 bytes;
+                             later releases must still open these.

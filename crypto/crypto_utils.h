@@ -46,7 +46,14 @@
 extern "C" {
 #endif
 
-#define	MAX_PW_LEN	16          /**< Maximum password length in characters. */
+/*
+ * 4.1.0 and earlier used at most 15 bytes of a -w file over 16 bytes (see
+ * read_pw_file()), and the prompt refused passwords over 14 bytes. Now the
+ * whole password is used, up to PC_PW_MAX; decryption also tries the old
+ * truncation, so files written then still open.
+ */
+#define	MAX_PW_LEN	16          /**< The old cap. */
+#define	PC_PW_MAX	4096        /**< Longest password read from a prompt or file. */
 #define	CKSUM_MASK		0x700   /**< Bitmask for checksum type in file flags. */
 #define	CKSUM_MAX_BYTES		64  /**< Maximum checksum size in bytes. */
 #define	DEFAULT_CKSUM		"BLAKE256" /**< Default checksum algorithm name. */
@@ -176,13 +183,23 @@ void cleanup_crypto(crypto_ctx_t *cctx);
 /** Clean up all resources in a crypto context. */
 
 /**
- * Prompt the user for a password.
- * @param pw     Output buffer (MAX_PW_LEN bytes).
+ * Prompt the user for a password (no echo).
+ * @param pw     Output buffer (PC_PW_MAX + 1 bytes).
  * @param prompt Prompt string.
  * @param twice  If non-zero, prompt twice for confirmation.
- * @return Password length on success, -1 on failure.
+ * @return Password length (without the newline) on success, -1 on failure.
  */
-int get_pw_string(uchar_t pw[MAX_PW_LEN], const char *prompt, int twice);
+int get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice);
+
+/**
+ * Read a password from a file and then zero and truncate the file.
+ * One trailing whitespace byte is dropped. pw needs PC_PW_MAX + 1 bytes.
+ * If legacy is not NULL it gets the length 4.1.0 and earlier used for the
+ * same file: those read at most 15 bytes of a file over 16 bytes long,
+ * then dropped one trailing whitespace byte.
+ * @return Password length, or -1 (unreadable, empty or over PC_PW_MAX).
+ */
+int read_pw_file(const char *path, uchar_t pw[PC_PW_MAX + 1], int *legacy);
 
 /**
  * Get a crypto algorithm enum value from its name.

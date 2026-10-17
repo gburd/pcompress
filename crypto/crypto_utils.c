@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <errno.h>
+#include <ctype.h>
 
 /*
  * Include OpenSSL compatibility layer BEFORE any OpenSSL headers.
@@ -832,7 +833,13 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 				return (-1);
 			}
 			cctx->salt = (uchar_t *)malloc(saltlen);
+			if (cctx->salt == NULL) {
+				free(actx);
+				free(sctx);
+				return (-1);
+			}
 			memcpy(cctx->salt, salt, saltlen);
+			cctx->saltlen = saltlen;	/* so cleanup_crypto() wipes it */
 
 			if (crypto_alg == CRYPTO_ALG_AES) {
 				uint64_t n64;
@@ -980,13 +987,19 @@ err0:
  * Input password string from terminal without echoing.
  */
 int
-get_pw_string(uchar_t pw[MAX_PW_LEN], const char *prompt, int twice)
+get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 {
-	int fd, len;
+	int fd, len, rv = -1;
 	FILE *input, *strm;
 	struct termios oldt, newt;
-	char pw1[MAX_PW_LEN], pw2[MAX_PW_LEN], *s;
+	char *pw1, *pw2, *s;
+	/* +2: the newline and the NUL, so PC_PW_MAX bytes fit. */
+	size_t sz = PC_PW_MAX + 2;
 
+	if ((pw1 = calloc(1, sz)) == NULL || (pw2 = calloc(1, sz)) == NULL) {
+		free(pw1);
+		return (-1);
+	}
 	// Try TTY first
 	fd = open("/dev/tty", O_RDWR | O_NOCTTY);
 	if (fd != -1) {
@@ -1005,32 +1018,31 @@ get_pw_string(uchar_t pw[MAX_PW_LEN], const char *prompt, int twice)
 
 	fprintf(stderr, "%s: ", prompt);
 	fflush(stderr);
-	s = fgets(pw1, MAX_PW_LEN, input);
+	s = fgets(pw1, sz, input);
 	fputs("\n", stderr);
-
-	if (s == NULL || strlen(s) < 2) {
+	len = s ? (int)strlen(pw1) : 0;
+	if (s == NULL || len < 2 || pw1[len - 1] != '\n') {
+		/* Empty, EOF, or longer than PC_PW_MAX (no newline read). */
+		if (s != NULL && len > 0 && pw1[len - 1] != '\n')
+			fprintf(stderr, "Password longer than %d bytes.\n", PC_PW_MAX);
 		tcsetattr(fd, TCSANOW, &oldt);
 		fflush(strm);
-		return (-1);
+		goto out;
 	}
 
 	if (twice) {
 		fprintf(stderr, "%s (once more): ", prompt);
 		fflush(stderr);
-		s = fgets(pw2, MAX_PW_LEN, input);
+		s = fgets(pw2, sz, input);
 		tcsetattr(fd, TCSANOW, &oldt);
 		fflush(strm);
 		fputs("\n", stderr);
 
-		if (s == NULL) {
-			return (-1);
-		}
-
+		if (s == NULL)
+			goto out;
 		if (strcmp(pw1, pw2) != 0) {
 			fprintf(stderr, "Passwords do not match!\n");
-			memset(pw1, 0, MAX_PW_LEN);
-			memset(pw2, 0, MAX_PW_LEN);
-			return (-1);
+			goto out;
 		}
 	} else {
 		tcsetattr(fd, TCSANOW, &oldt);
@@ -1038,12 +1050,57 @@ get_pw_string(uchar_t pw[MAX_PW_LEN], const char *prompt, int twice)
 		fputs("\n", stderr);
 	}
 
-	len = strlen(pw1);
-	pw1[len-1] = '\0';
-	strcpy((char *)pw, (const char *)pw1);
-	memset(pw1, 0, MAX_PW_LEN);
-	memset(pw2, 0, MAX_PW_LEN);
-	return (len);
+	pw1[len - 1] = '\0';
+	memcpy(pw, pw1, len);	/* len - 1 bytes and the NUL */
+	rv = len - 1;
+out:
+	memset(pw1, 0, sz);
+	memset(pw2, 0, sz);
+	free(pw1);
+	free(pw2);
+	if (input != stdin)
+		fclose(input);
+	return (rv);
+}
+
+int
+read_pw_file(const char *path, uchar_t pw[PC_PW_MAX + 1], int *legacy)
+{
+	uchar_t zero[512];
+	off_t sz;
+	int fd, len, rv = -1;
+
+	if ((fd = open(path, O_RDWR)) == -1)
+		return (-1);
+	sz = lseek(fd, 0, SEEK_END);
+	/* A trailing newline may take the file one byte past PC_PW_MAX. */
+	if (sz > 0 && sz <= PC_PW_MAX + 1 && lseek(fd, 0, SEEK_SET) == 0) {
+		len = (int)Read(fd, pw, sz);
+		if (len == sz) {
+			if (legacy != NULL) {
+				int l = len > MAX_PW_LEN ? MAX_PW_LEN - 1 : len;
+
+				*legacy = isspace(pw[l - 1]) ? l - 1 : l;
+			}
+			pw[len] = '\0';
+			if (isspace(pw[len - 1]))
+				pw[--len] = '\0';
+			if (len > 0 && len <= PC_PW_MAX)
+				rv = len;
+			/* Wipe the file: as before, the password is read once. */
+			memset(zero, 0, sizeof (zero));
+			lseek(fd, 0, SEEK_SET);
+			for (len = (int)sz; len > 0; len -= (int)sizeof (zero))
+				if (Write(fd, zero, len < (int)sizeof (zero) ? len : (int)sizeof (zero)) < 0)
+					break;
+			if (ftruncate(fd, 0) != 0)
+				rv = rv;	/* wiped; truncation is best effort */
+		}
+	}
+	close(fd);
+	if (rv == -1)
+		memset(pw, 0, PC_PW_MAX + 1);
+	return (rv);
 }
 
 /* Restore warnings after OpenSSL 3.x deprecated API usage */

@@ -97,6 +97,33 @@ for algo in lz4 zlib zstd; do
 	done
 done
 
+echo ""
+echo "--- Long passwords ---"
+# The whole password counts (4.1.0 used only 15 bytes of a longer -w file).
+LTF="${TMPDIR:-/tmp}/pc_longpw_$$"
+head -c 100000 /dev/urandom > "$LTF"
+long="a passphrase of considerably more than sixteen bytes"
+for alg in AES SALSA20; do
+	printf '%s\n' "$long" > "$PWFILE"
+	rm -f "$LTF.pz" "$LTF.out"
+	$PCOMPRESS -c zstd -l 3 -e $alg -w "$PWFILE" "$LTF" 2>/dev/null
+	printf '%s\n' "$long" > "$PWFILE"
+	if $PCOMPRESS -d -w "$PWFILE" "$LTF.pz" "$LTF.out" 2>/dev/null && cmp -s "$LTF" "$LTF.out"; then
+		log_pass "$alg: ${#long}-byte password round trip"
+	else
+		log_fail "$alg: ${#long}-byte password round trip"
+	fi
+	# Same first 15 bytes, different tail: must fail.
+	printf '%s\n' "a passphrase ofXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" > "$PWFILE"
+	rm -f "$LTF.out"
+	if $PCOMPRESS -d -w "$PWFILE" "$LTF.pz" "$LTF.out" 2>/dev/null; then
+		log_fail "$alg: password tail ignored"
+	else
+		log_pass "$alg: password tail matters"
+	fi
+done
+rm -f "$LTF" "$LTF.pz" "$LTF.out"
+
 rm -f "$PWFILE"
 
 echo ""

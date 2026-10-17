@@ -1310,9 +1310,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		int saltlen, noncelen;
 		uchar_t *salt1, *salt2;
 		uchar_t nonce[MAX_NONCE], n1[MAX_NONCE];
-		uchar_t pw[MAX_PW_LEN + 1];	/* + NUL: a MAX_PW_LEN-byte password file
-					 * wrote pw[MAX_PW_LEN] (stack overflow;
-					 * broke decryption with clang) */
+		uchar_t pw[PC_PW_MAX + 1];
 		int pw_len;
 		mac_ctx_t hdr_mac;
 		uchar_t hdr_hash1[pctx->mac_bytes], hdr_hash2[pctx->mac_bytes];
@@ -1407,125 +1405,102 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		}
 		deserialize_checksum(hdr_hash2, hdr_hash1, pctx->mac_bytes);
 
-		if (!pctx->pwd_file && !pctx->user_pw) {
-			pw_len = get_pw_string(pw,
-				"Please enter decryption password", 0);
-			if (pw_len == -1) {
-				memset(salt2, 0, saltlen);
-				free(salt2);
-				memset(salt1, 0, saltlen);
-				free(salt1);
-				log_error_code(PC_ERR_CRYPTO);
-				log_msg(LOG_ERR, 0, "Failed to get password.");
-				UNCOMP_BAIL;
-			}
-		} else if (!pctx->user_pw) {
-			int fd, len;
-			uchar_t zero[MAX_PW_LEN];
-
+		{
 			/*
-			 * Read password from a file and zero out the file after reading.
+			 * The whole password; for files written before 4.1.1 with
+			 * a -w file over 16 bytes, also the 15 bytes those used.
 			 */
-			memset(zero, 0, MAX_PW_LEN);
-			fd = open(pctx->pwd_file, O_RDWR);
-			if (fd != -1) {
-				pw_len = (int)lseek(fd, 0, SEEK_END);
-				if (pw_len != -1) {
-					if (pw_len > MAX_PW_LEN) pw_len = MAX_PW_LEN-1;
-					lseek(fd, 0, SEEK_SET);
-					len = (int)Read(fd, pw, pw_len);
-					if (len != -1 && len == pw_len) {
-						pw[pw_len] = '\0';
-						if (isspace(pw[pw_len - 1]))
-							pw[pw_len-1] = '\0';
-						lseek(fd, 0, SEEK_SET);
-						Write(fd, zero, pw_len);
-						len = ftruncate(fd, 0);
-						/*^^^ Make compiler happy. */
-					} else {
-						pw_len = -1;
-					}
+			uchar_t *upw = pctx->user_pw;
+			int upw_len = pctx->user_pw_len, legacy = -1, tries, t, ok = 0;
+
+			if (upw == NULL) {
+				if (!pctx->pwd_file) {
+					pw_len = get_pw_string(pw,
+					    "Please enter decryption password", 0);
+				} else {
+					pw_len = read_pw_file(pctx->pwd_file, pw, &legacy);
+					if (pw_len == -1)
+						log_msg(LOG_ERR, 1, "%s", pctx->pwd_file);
 				}
+				if (pw_len == -1) {
+					memset(salt2, 0, saltlen);
+					free(salt2);
+					memset(salt1, 0, saltlen);
+					free(salt1);
+					log_error_code(PC_ERR_CRYPTO);
+					log_msg(LOG_ERR, 0, "Failed to get password.");
+					UNCOMP_BAIL;
+				}
+				upw = pw;
+				upw_len = pw_len;
 			}
-			if (pw_len == -1) {
-				log_msg(LOG_ERR, 1, " ");
-				memset(salt2, 0, saltlen);
-				free(salt2);
-				memset(salt1, 0, saltlen);
-				free(salt1);
-				log_error_code(PC_ERR_CRYPTO);
-				log_msg(LOG_ERR, 0, "Failed to get password.");
-				UNCOMP_BAIL;
-			}
-			close(fd);
-		}
+			/* A prompt never took more than 14 bytes: no legacy form. */
+			tries = (legacy > 0 && legacy != upw_len) ? 2 : 1;
+			for (t = 0; t < tries && !ok; t++) {
+				int plen = t == 0 ? upw_len : legacy;
+				uchar_t ntry[MAX_NONCE];
 
-		if (pctx->user_pw) {
-			if (init_crypto(&(pctx->crypto_ctx), pctx->user_pw, pctx->user_pw_len,
-			    pctx->encrypt_type, salt2, saltlen, pctx->keylen, nonce,
-			    DECRYPT_FLAG) == -1) {
-				memset(salt2, 0, saltlen);
-				free(salt2);
-				memset(salt1, 0, saltlen);
-				free(salt1);
-				memset(pctx->user_pw, 0, pctx->user_pw_len);
-				log_msg(LOG_ERR, 0, "Failed to initialize crypto");
-				UNCOMP_BAIL;
-			}
-			memset(pctx->user_pw, 0, pctx->user_pw_len);
-			pctx->user_pw = NULL;
-			pctx->user_pw_len = 0;
-		} else {
-			if (init_crypto(&(pctx->crypto_ctx), pw, pw_len, pctx->encrypt_type, salt2,
-			    saltlen, pctx->keylen, nonce, DECRYPT_FLAG) == -1) {
-				memset(salt2, 0, saltlen);
-				free(salt2);
-				memset(salt1, 0, saltlen);
-				free(salt1);
-				memset(pw, 0, MAX_PW_LEN);
-				log_msg(LOG_ERR, 0, "Failed to initialize crypto");
-				UNCOMP_BAIL;
-			}
-			memset(pw, 0, MAX_PW_LEN);
-		}
-		memset(salt2, 0, saltlen);
-		free(salt2);
-		memset(nonce, 0, noncelen);
+				/* init_crypto() wipes the nonce it is given: one copy per try. */
+				memcpy(ntry, nonce, sizeof (ntry));
+				cleanup_crypto(&(pctx->crypto_ctx));
+				if (init_crypto(&(pctx->crypto_ctx), upw, plen, pctx->encrypt_type,
+				    salt2, saltlen, pctx->keylen, ntry, DECRYPT_FLAG) == -1) {
+					memset(salt2, 0, saltlen);
+					free(salt2);
+					memset(salt1, 0, saltlen);
+					free(salt1);
+					memset(upw, 0, upw_len);
+					log_msg(LOG_ERR, 0, "Failed to initialize crypto");
+					UNCOMP_BAIL;
+				}
 
-		/*
-		 * Verify file header HMAC.
-		 */
-		if (hmac_init(&hdr_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
-			log_msg(LOG_ERR, 0, "Cannot initialize header hmac.");
-			UNCOMP_BAIL;
-		}
-		hmac_update(&hdr_mac, (uchar_t *)pctx->algo, ALGO_SZ);
-		d1 = htons(version);
-		hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (version));
-		d1 = htons(flags);
-		hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (flags));
-		d3 = htonll(chunksize);
-		hmac_update(&hdr_mac, (uchar_t *)&d3, sizeof (chunksize));
-		d2 = htonl(level);
-		hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (level));
-		if (version > 6) {
-			d2 = htonl(saltlen);
-			hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (saltlen));
-			hmac_update(&hdr_mac, salt1, saltlen);
-			hmac_update(&hdr_mac, n1, noncelen);
-			d2 = htonl(pctx->keylen);
-			hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (pctx->keylen));
-		}
-		hmac_final(&hdr_mac, hdr_hash1, &hlen);
-		hmac_cleanup(&hdr_mac);
-		memset(salt1, 0, saltlen);
-		free(salt1);
-		memset(n1, 0, noncelen);
-		if (memcmp(hdr_hash2, hdr_hash1, pctx->mac_bytes) != 0) {
-			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Header verification failed! File "
-			    "tampered or wrong password.");
-			UNCOMP_BAIL;
+				/*
+				 * Verify file header HMAC: it also tells whether
+				 * this key is the right one.
+				 */
+				if (hmac_init(&hdr_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
+					memset(upw, 0, upw_len);
+					log_msg(LOG_ERR, 0, "Cannot initialize header hmac.");
+					UNCOMP_BAIL;
+				}
+				hmac_update(&hdr_mac, (uchar_t *)pctx->algo, ALGO_SZ);
+				d1 = htons(version);
+				hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (version));
+				d1 = htons(flags);
+				hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (flags));
+				d3 = htonll(chunksize);
+				hmac_update(&hdr_mac, (uchar_t *)&d3, sizeof (chunksize));
+				d2 = htonl(level);
+				hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (level));
+				if (version > 6) {
+					d2 = htonl(saltlen);
+					hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (saltlen));
+					hmac_update(&hdr_mac, salt1, saltlen);
+					hmac_update(&hdr_mac, n1, noncelen);
+					d2 = htonl(pctx->keylen);
+					hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (pctx->keylen));
+				}
+				hmac_final(&hdr_mac, hdr_hash1, &hlen);
+				hmac_cleanup(&hdr_mac);
+				ok = memcmp(hdr_hash2, hdr_hash1, pctx->mac_bytes) == 0;
+			}
+			memset(upw, 0, upw_len);
+			if (upw == pctx->user_pw) {
+				pctx->user_pw = NULL;
+				pctx->user_pw_len = 0;
+			}
+			memset(salt2, 0, saltlen);
+			free(salt2);
+			memset(nonce, 0, noncelen);
+			memset(salt1, 0, saltlen);
+			free(salt1);
+			memset(n1, 0, noncelen);
+			if (!ok) {
+				log_error_code(PC_ERR_VERIFY);
+				log_msg(LOG_ERR, 0, "Header verification failed! File "
+				    "tampered or wrong password.");
+				UNCOMP_BAIL;
+			}
 		}
 	} else if (version >= 5) {
 		uint32_t crc1, crc2;
@@ -2466,9 +2441,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	compressed_chunksize = 0;
 
 	if (pctx->encrypt_type) {
-		uchar_t pw[MAX_PW_LEN + 1];	/* + NUL: a MAX_PW_LEN-byte password file
-					 * wrote pw[MAX_PW_LEN] (stack overflow;
-					 * broke decryption with clang) */
+		uchar_t pw[PC_PW_MAX + 1];
 		int pw_len = -1;
 
 		compressed_chunksize += pctx->mac_bytes;
@@ -2481,37 +2454,11 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				return (1);
 			}
 		} else if (!pctx->user_pw) {
-			int fd, len;
-			uchar_t zero[MAX_PW_LEN];
-
-			/*
-			 * Read password from a file and zero out the file after reading.
-			 */
-			memset(zero, 0, MAX_PW_LEN);
-			fd = open(pctx->pwd_file, O_RDWR);
-			if (fd != -1) {
-				pw_len = (int)lseek(fd, 0, SEEK_END);
-				if (pw_len != -1) {
-					if (pw_len > MAX_PW_LEN) pw_len = MAX_PW_LEN-1;
-					lseek(fd, 0, SEEK_SET);
-					len = (int)Read(fd, pw, pw_len);
-					if (len != -1 && len == pw_len) {
-						pw[pw_len] = '\0';
-						if (isspace(pw[pw_len - 1]))
-							pw[pw_len-1] = '\0';
-						lseek(fd, 0, SEEK_SET);
-						Write(fd, zero, pw_len);
-					} else {
-						pw_len = -1;
-					}
-				}
-			}
-			if (pw_len == -1) {
+			if ((pw_len = read_pw_file(pctx->pwd_file, pw, NULL)) == -1) {
 				log_error_code(PC_ERR_CRYPTO);
 				log_msg(LOG_ERR, 1, "Failed to get password.");
 				return (1);
 			}
-			close(fd);
 		}
 		if (pctx->user_pw) {
 			if (init_crypto(&(pctx->crypto_ctx), pctx->user_pw, pctx->user_pw_len,
@@ -2526,11 +2473,11 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		} else {
 			if (init_crypto(&(pctx->crypto_ctx), pw, pw_len, pctx->encrypt_type, NULL,
 			    0, pctx->keylen, 0, ENCRYPT_FLAG) == -1) {
-				memset(pw, 0, MAX_PW_LEN);
+				memset(pw, 0, sizeof (pw));
 				log_msg(LOG_ERR, 0, "Failed to initialize crypto.");
 				return (1);
 			}
-			memset(pw, 0, MAX_PW_LEN);
+			memset(pw, 0, sizeof (pw));
 		}
 	}
 

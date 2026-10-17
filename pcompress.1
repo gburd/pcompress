@@ -283,6 +283,14 @@ Block hash for global deduplication:
 or
 .Cm SKEIN512 .
 .El
+.Sh PASSWORDS
+The whole password is used, up to 4096 bytes, whether typed or read from
+.Fl w .
+Releases up to 4.1.0 read at most 15 bytes of a password file longer than
+16 bytes and refused typed passwords longer than 14; files they wrote still
+decrypt with the same password file.
+A file encrypted from a password longer than 16 bytes cannot be read by
+4.1.0 or earlier.
 .Sh EXIT STATUS
 .Ex -std
 Status 2 means a usage error.

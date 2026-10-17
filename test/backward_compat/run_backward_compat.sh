@@ -548,7 +548,22 @@ if [ "$VERIFY_REFERENCE" -eq 1 ]; then
                 ref_out="${WORKDIR}/ref_verify.out"
                 rm -f "$ref_out"
 
-                if ! LD_LIBRARY_PATH="${PROJECT_DIR}" "$PCOMPRESS" -d "$ref_pz" "$ref_out" >/dev/null 2>&1; then
+                # Encrypted references (made by 4.1.0): the password is
+                # named in the file. 4.1.0 used at most 15 bytes of a -w
+                # file over 16 bytes; these must still open with the file.
+                pwopt=""
+                case "$bn" in
+                    *_pw8.pz)  pw="s3cret12" ;;
+                    *_pw16.pz) pw="0123456789abcdef" ;;
+                    *_pw20.pz) pw="0123456789abcdefTAIL" ;;
+                    *_pw40.pz) pw="a fairly long passphrase of forty bytes" ;;
+                    *)         pw="" ;;
+                esac
+                if [ -n "$pw" ]; then
+                    printf '%s\n' "$pw" > "${WORKDIR}/ref_pw"
+                    pwopt="-w ${WORKDIR}/ref_pw"
+                fi
+                if ! LD_LIBRARY_PATH="${PROJECT_DIR}" "$PCOMPRESS" -d $pwopt "$ref_pz" "$ref_out" >/dev/null 2>&1; then
                     log_fail "$label (decompression failed)"
                     rm -f "$ref_out"
                     continue
