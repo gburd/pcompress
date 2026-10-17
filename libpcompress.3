@@ -19,6 +19,14 @@
 .Nm pc_last_error_code ,
 .Nm pc_strerror ,
 .Nm pc_cleanup_tempfiles ,
+.Nm pc_chunker_new ,
+.Nm pc_chunker_feed ,
+.Nm pc_chunker_finish ,
+.Nm pc_chunker_free ,
+.Nm pc_chunk_id ,
+.Nm pc_set_key ,
+.Nm pc_chunk_seal ,
+.Nm pc_chunk_open ,
 .Nm pc_version
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
@@ -62,6 +70,26 @@ libpcompress
 .Fn pc_cleanup_tempfiles "void"
 .Ft const char *
 .Fn pc_version "void"
+.Ft pc_chunker_t *
+.Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
+.Ft int
+.Fn pc_chunker_feed "pc_chunker_t *c" "const void *buf" "size_t len" "size_t *lens" "int nlens"
+.Ft int
+.Fn pc_chunker_finish "pc_chunker_t *c" "size_t *lens" "int nlens"
+.Ft void
+.Fn pc_chunker_free "pc_chunker_t *c"
+.Ft int
+.Fn pc_chunk_id "const void *buf" "size_t len" "const void *key" "size_t keylen" "uint8_t id[32]"
+.Ft int
+.Fn pc_set_key "pc_ctx_t *ctx" "const void *key" "size_t keylen"
+.Ft size_t
+.Fn pc_chunk_seal_bound "size_t len"
+.Ft int
+.Fn pc_chunk_seal "pc_ctx_t *ctx" "const void *in" "size_t len" "void *out" "size_t *outlen"
+.Ft int
+.Fn pc_chunk_open "pc_ctx_t *ctx" "const void *in" "size_t len" "void *out" "size_t *outlen"
+.Ft size_t
+.Fn pc_chunk_open_size "const void *obj" "size_t len"
 .Sh DESCRIPTION
 The library behind
 .Xr pcompress 1 .
@@ -229,6 +257,64 @@ names a class.
 removes the temporary files of all running jobs.
 It is async-signal-safe, for use in a program's own signal handler
 before it exits.
+.Ss Chunks
+Building blocks for a backup tool that stores deduplicated, encrypted
+objects:
+.Bl -tag -width Ds
+.It Fn pc_chunker_new
+A content-defined chunker: boundaries come from a rolling hash of the
+data, so equal data gives equal chunks wherever it occurs, and an edit
+changes only the chunks around it.
+.Fa avg
+(rounded down to a power of two),
+.Fa min
+and
+.Fa max
+are in bytes; 0 picks 64 KB, avg/4 and avg*4.
+.It Fn pc_chunker_feed
+Takes any amount of input and appends the length of each chunk that ends
+in it to
+.Fa lens ,
+returning how many.
+The result does not depend on how the input is split across calls.
+Size
+.Fa lens
+as len / min + 1.
+.Fn pc_chunker_finish
+returns the last chunk.
+.It Fn pc_chunk_id
+BLAKE2b-256 of a chunk, keyed when
+.Fa key
+is given, so that object names do not reveal content hashes.
+.It Fn pc_set_key
+A raw 32-byte key for sealed objects.
+.It Fn pc_chunk_seal
+Compresses one chunk with the context's algorithm and level, stores it
+raw if it does not shrink, and with a key encrypts it (XSalsa20, random
+nonce) and authenticates header and payload (keyed BLAKE2b-256).
+Without a key the object has an unkeyed BLAKE2b-256 checksum.
+The output buffer needs
+.Fn pc_chunk_seal_bound len
+bytes.
+.It Fn pc_chunk_open
+Checks the tag before decrypting or decompressing, then restores the
+chunk.
+A changed or truncated object fails with
+.Dv PC_ERR_VERIFY
+or
+.Dv PC_ERR_CORRUPT ,
+a wrong key with
+.Dv PC_ERR_VERIFY ,
+a missing key with
+.Dv PC_ERR_CRYPTO .
+.Fn pc_chunk_open_size
+reads the plaintext size from the header (unverified) to size the buffer.
+.El
+.Pp
+The object format is described in
+.Pa DESIGN.md .
+.Pa examples/pzstore.c
+is a small deduplicating store built on these calls.
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -269,7 +355,9 @@ Build with
 .Dl cc $(pkg-config --cflags libpcompress) x.c $(pkg-config --libs libpcompress)
 .Pp
 .Pa examples/pzcat.c
-in the source tree is a complete filter.
+in the source tree is a complete filter;
+.Pa examples/pzstore.c
+a deduplicating, encrypted chunk store.
 .Sh SEE ALSO
 .Xr pcompress 1
 .Sh HISTORY

@@ -1,3 +1,12 @@
+== Unreleased ==
+Library: chunk-level building blocks for backup tools (libpcompress(3),
+  "Chunks"): a streaming content-defined chunker (pc_chunker_*), keyed
+  BLAKE2b-256 chunk ids (pc_chunk_id), and sealed chunk objects
+  (pc_chunk_seal/pc_chunk_open: compressed, optionally XSalsa20-encrypted
+  and BLAKE2b-authenticated, self-describing; pc_set_key takes a raw
+  256-bit key). examples/pzstore.c is a small deduplicating store on them.
+  Additions only: the 4.1.0 ABI is unchanged.
+
 == 4.1.0 Release ==
 Library:
 libpcompress is now a library other programs can use: an installed header

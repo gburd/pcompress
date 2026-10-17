@@ -186,6 +186,41 @@ safe with several contexts in one process and measured no faster than
 `malloc` (within 2.5% on a 192-core Graviton4, within noise on a
 16-vCPU c7i for every algorithm at 1 MB to 256 MB chunks).
 
+## Chunk objects
+
+`chunk.c` gives backup tools three building blocks; none of them touches
+the `.pz` format.
+
+- **Chunker.** The Rabin rolling hash of the dedupe code (16-byte window,
+  the same polynomial tables), restarted at every boundary. A boundary
+  follows byte *i* once the chunk has `min` bytes and
+  `(roll ^ ir[out]) & (avg - 1) == 0`, or at `max`. Since state resets at
+  each boundary, the boundaries depend only on the data, never on how it
+  was split across `pc_chunker_feed()` calls.
+- **Ids.** BLAKE2b-256, optionally keyed.
+- **Objects** (`pc_chunk_seal`/`pc_chunk_open`), little-endian:
+
+| offset | size | field |
+|--------|------|-------|
+| 0  | 4  | magic `PCK1` |
+| 4  | 1  | version (1) |
+| 5  | 1  | flags: 1 encrypted, 2 stored raw |
+| 6  | 1  | algorithm id (stable table in `chunk.c`; 0 when raw) |
+| 7  | 1  | level (low 4 bits), adaptive sub-algorithm (high 4) |
+| 8  | 8  | plaintext length |
+| 16 | 24 | nonce (random when encrypted, else 0) |
+| 40 | n  | payload |
+| 40+n | 32 | tag: BLAKE2b-256 over bytes [0, 40+n) |
+
+With a key, the payload is XSalsa20-encrypted and the tag is keyed
+(encrypt-then-MAC); the encryption and MAC keys are BLAKE2b-256 of the
+caller's key with distinct labels. `pc_chunk_open()` checks magic,
+version, flags, algorithm id and the declared length (at most 4 GB, and
+for raw objects exactly the payload length) before anything else, then
+the tag in constant time, and only then decrypts and decompresses into
+exactly the declared length. The algorithm ids never change meaning:
+add new ones at the end.
+
 ## Archive mode
 
 The archiver thread walks the paths with libarchive, sorts members by

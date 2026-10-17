@@ -25,7 +25,7 @@ scheduling and storage backends belong in the consuming program.
 | P4 | No public headers | `make install` ships `libpcompress.so.1` and no headers. `pcompress.h` exposes `pc_ctx_t` internals. Bundled zstd, lz4, libbsc and libarchive symbols are exported and would clash with another copy in the same program. | Fixed in 4.1.0 |
 | P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. | Fixed in 4.1.0 |
 | P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Open (Phase 5) |
-| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Open (Phase 3) |
+| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed after 4.1.0 (Phase 3) |
 | P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Open (Phase 6) |
 | P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Partly: `pc_set_password()` uses every byte; CLI cap and raw keys open (Phase 4) |
 | P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
@@ -127,6 +127,25 @@ Not done, deliberately:
   does not reveal content hashes to the storage provider.
 - **Done when:** property tests show open(seal(x)) == x for every
   algorithm, level and key, and every corrupt object is rejected.
+
+**Status: done (unreleased).**
+- `pc_chunker_new/feed/finish/free`, `pc_chunk_id`, `pc_set_key`, and
+  `pc_chunk_seal/open/open_size/seal_bound` are in place. The object
+  format is described in `DESIGN.md`.
+- `test/unit/test_chunk.c`:
+  - open(seal(x)) == x for all 12 algorithms × levels 1/6/9 × 5 sizes
+    × with and without a key × 3 kinds of data;
+  - every bit-flip and truncation of a sealed object is rejected (with
+    and without a key, compressed and raw);
+  - wrong and missing keys are rejected;
+  - chunk boundaries don't depend on how the input is split;
+  - min and max sizes are respected;
+  - an insertion moves only nearby boundaries;
+  - the BLAKE2b-256 known answer matches.
+- `test_reentrant` seals and opens chunks from 4 threads; ASan and TSan
+  are clean.
+- `examples/pzstore.c` is a dedupe-and-encrypt chunk store built on the
+  API. A second `put` of the same file stores nothing.
 
 ### Phase 4: Keys (fixes P9)
 
