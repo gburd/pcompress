@@ -98,7 +98,8 @@ GCC 13). Archives are byte-order independent: a file written on one
 architecture decompresses on any other. libbsc is not available on
 big-endian hosts (upstream libbsc does not round-trip there). The core
 compressors also build with MSVC on Windows ARM64, but a full Windows port
-(POSIX semaphores, mmap, fork-free I/O) has not been done.
+(POSIX semaphores, mmap, fork-free I/O) has not been done. The supported
+matrix and the release gate are in `docs/PLATFORMS.md`.
 
 Documentation: `pcompress(1)` (`man ./pcompress.1`) for usage, and
 `DESIGN.md` for the stream format, threading model and invariants.
@@ -121,7 +122,8 @@ each with its own `pc_ctx_t`:
 
 Only that API is exported; the bundled zstd, lz4, libbsc and libarchive
 stay internal, so a program can use its own copies. See `libpcompress(3)`
-and `examples/pzcat.c`. `make abi-check` compares the library's ABI with
+and `examples/pzcat.c`; `docs/BACKUP.md` for building a backup tool on
+the chunk API (`examples/backup/pcbackup.c`). `make abi-check` compares the library's ABI with
 `abi/libpcompress.abi`.
 
 LICENSING

@@ -1,4 +1,4 @@
-== Unreleased ==
+== 4.2.0 Release ==
 Library: chunk-level building blocks for backup tools (libpcompress(3),
   "Chunks"): a streaming content-defined chunker (pc_chunker_*), keyed
   BLAKE2b-256 chunk ids (pc_chunk_id), and sealed chunk objects
@@ -21,7 +21,17 @@ Passwords: the whole password is used, up to 4096 bytes. 4.1.0 used only
   passwords over 14 bytes. Files written then still decrypt (the old form
   is tried too); files encrypted now with passwords over 16 bytes cannot be
   read by 4.1.0 or earlier.
-make check also runs the backward-compatibility suite.
+Security: pc_chunk_open() no longer hands crafted chunk headers to
+  decompressors that overflow (lz4 level 2, lzma, ppmd level 15, adapt);
+  found by review and a new mutation fuzz test, none reachable from .pz.
+Dependencies: libarchive 3.8.10 (from 3.7.9: thirteen releases, mostly
+  security fixes), zstd, lz4, libbsc and WavPack at upstream's newest
+  commits; flake.lock refreshed. Release tarballs ship libarchive's
+  generated configure, so building one needs no autotools (RHEL 9's
+  autoconf is too old for libarchive 3.8).
+make check also runs the backward-compatibility suite and the example
+  backup tool. CI adds Fedora and Rocky Linux 9 (x86_64, arm64).
+docs/PLATFORMS.md: the supported-platform matrix and what gates a release.
 
 == 4.1.0 Release ==
 Library:

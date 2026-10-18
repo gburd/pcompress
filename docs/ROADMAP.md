@@ -24,10 +24,10 @@ scheduling and storage backends belong in the consuming program.
 | P3 | The API is the command line | `init_pc_context_argstr("pcompress -c zstd …")`, then `start_pcompress()`. Inputs and outputs are file paths. The library opens files, picks names, writes a temp file and renames it. No buffer or callback I/O. | Fixed in 4.1.0 (fd I/O; no callback I/O) |
 | P4 | No public headers | `make install` ships `libpcompress.so.1` and no headers. `pcompress.h` exposes `pc_ctx_t` internals. Bundled zstd, lz4, libbsc and libarchive symbols are exported and would clash with another copy in the same program. | Fixed in 4.1.0 |
 | P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. | Fixed in 4.1.0 |
-| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Fixed for chunk stores after 4.1.0 (Phase 5); `.pz` global dedupe stays per file |
-| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed after 4.1.0 (Phase 3) |
-| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Fixed for chunk stores after 4.1.0 (Phases 6-7); a seekable `.pz` container is not done |
-| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed after 4.1.0 (Phase 4); raw keys for `.pz` wait for a new format version |
+| P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Fixed for chunk stores in 4.2.0 (Phase 5); `.pz` global dedupe stays per file |
+| P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed in 4.2.0 (Phase 3) |
+| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Fixed for chunk stores in 4.2.0 (Phases 6-7); a seekable `.pz` container is not done |
+| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed in 4.2.0 (Phase 4); raw keys for `.pz` wait for a new format version |
 | P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
 
 ## Phases
@@ -128,7 +128,7 @@ Not done, deliberately:
 - **Done when:** property tests show open(seal(x)) == x for every
   algorithm, level and key, and every corrupt object is rejected.
 
-**Status: done (unreleased).**
+**Status: done (4.2.0).**
 - `pc_chunker_new/feed/finish/free`, `pc_chunk_id`, `pc_set_key`, and
   `pc_chunk_seal/open/open_size/seal_bound` are in place. The object
   format is described in `DESIGN.md`.
@@ -159,7 +159,7 @@ Not done, deliberately:
 - **Done when:** existing encrypted `.pz` files still decrypt, and new
   key files round-trip and reject a wrong password.
 
-**Status: done (unreleased).**
+**Status: done (4.2.0).**
 - Raw keys: `pc_set_key()` for chunk objects (Phase 3).
 - Key files: `pc_keyfile_create/open`, with scrypt-wrapped,
   versioned KDF parameters.
@@ -184,7 +184,7 @@ Not done:
   unchanged.
 - **Done when:** a second backup of an unchanged tree stores no new chunks.
 
-**Status: done (unreleased), narrowed.**
+**Status: done (4.2.0), narrowed.**
 - `pc_index_*`: a persistent, append-only set of chunk ids.
   `examples/pzstore` uses it, so a second `put` of unchanged data
   stores nothing and asks the store nothing. CI checks this.
@@ -208,14 +208,15 @@ Not done:
 - **Done when:** extracting one file from a large archive reads
   O(file size) bytes; v10 archives are unchanged.
 
-**Status: half done (unreleased).**
+**Status: half done (4.2.0).**
 - Done: the manifest format, `pc_manifest_*`. It is canonical and its
   decoder treats input as hostile. In a chunk store, restoring one file
   reads that file's chunks and nothing else: the "done when" holds for
   `examples/backup`.
 - Not done: the seekable `.pz` container. It is a new on-disk format
   for the CLI, and nobody has asked for it yet. The chunk store covers
-  the Arq-like use. Decide before starting it.
+  the Arq-like use (`docs/BACKUP.md` compares the two). Decide before
+  starting it.
 
 ### Phase 7: Example consumer
 
@@ -228,7 +229,7 @@ Not done:
 - This is a test of the API, not a product. S3/B2 backends and
   scheduling stay out of scope.
 
-**Status: done (unreleased).** `examples/backup/pcbackup.c` has
+**Status: done (4.2.0).** `examples/backup/pcbackup.c` has
 init, backup, list, restore (all or one file), forget and prune. It
 uses the public header only. `examples/backup/test.sh` runs in
 `make check` and CI. It covers:
