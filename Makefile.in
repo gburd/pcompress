@@ -568,6 +568,15 @@ abi-update: $(LIB)
 
 # What packagers run: fast, no network, no root. Sequential: under make -j
 # the two would relink/rebuild the library while the other is running it.
+# The example backup tool, end to end, against the library just built.
+buildtmp/pcbackup: examples/backup/pcbackup.c include/pcompress/pcompress.h $(LIB)
+	mkdir -p buildtmp
+	$(COMPILE) $(GEN_OPT) -Iinclude examples/backup/pcbackup.c -o buildtmp/pcbackup.o
+	$(LINK.PROG) -o $@ buildtmp/pcbackup.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
+
+test-examples: buildtmp/pcbackup
+	sh examples/backup/test.sh "$$PWD/buildtmp/pcbackup"
+
 # Reference .pz files from earlier releases must keep decompressing.
 test-backward-compat: all
 	sh test/backward_compat/run_backward_compat.sh --verify-reference
@@ -576,6 +585,7 @@ check:
 	$(MAKE) test-unit
 	$(MAKE) test-integration
 	$(MAKE) test-backward-compat
+	$(MAKE) test-examples
 
 test-all: all test-unit-build
 	(cd test; sh run_all_tests.sh all)

@@ -124,6 +124,12 @@ jobs:
           ./pzstore put st key in > m1 && ./pzstore put st key in > m2 2> second.log
           cmp m1 m2 && grep -q '^pzstore: 0 chunks stored' second.log
           ./pzstore get st key < m1 | cmp - in
+      - name: examples/backup (snapshots, manifests, key file, prune, single-file restore)
+        run: |
+          export PKG_CONFIG_SYSROOT_DIR="$PWD/inst" PKG_CONFIG_LIBDIR="$PWD/inst/usr/lib/pkgconfig"
+          cc -Wall -Wextra $(pkg-config --cflags libpcompress) examples/backup/pcbackup.c -o pcbackup \
+            $(pkg-config --libs libpcompress) -Wl,-rpath,"$PWD/inst/usr/lib"
+          sh examples/backup/test.sh "$PWD/pcbackup"
 
   nix:
     name: "Nix package (${{ matrix.runner }})"

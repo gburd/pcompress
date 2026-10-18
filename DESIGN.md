@@ -249,6 +249,13 @@ before allocating, every path (relative, no empty, `.` or `..`
 component, no NUL), strict order, no entry below a symlink entry, and
 that a file's chunk lengths add up to its size.
 
+`examples/backup/pcbackup.c` puts the pieces together: a key file holds
+the repository key, chunks and manifests are sealed objects named by
+their keyed id, the index makes an unchanged backup cost no store
+lookups, and prune deletes objects no snapshot names and rebuilds the
+index. Restore checks every object against its name and only writes
+below a directory it created.
+
 **Passwords for `.pz`.** The whole password is used. Up to 4.1.0 a `-w`
 file over 16 bytes was read as its first 15 bytes; decryption tries that
 form too when the two differ, and the header HMAC decides.

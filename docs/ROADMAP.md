@@ -26,7 +26,7 @@ scheduling and storage backends belong in the consuming program.
 | P5 | Errors are log text | Results are 0/1/2; reasons go only to stderr or a log callback. `abort()` in the allocator. | Fixed in 4.1.0 |
 | P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Fixed for chunk stores after 4.1.0 (Phase 5); `.pz` global dedupe stays per file |
 | P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed after 4.1.0 (Phase 3) |
-| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Fixed for chunk stores after 4.1.0 (Phase 6); a seekable `.pz` container is not done |
+| P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Fixed for chunk stores after 4.1.0 (Phases 6-7); a seekable `.pz` container is not done |
 | P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed after 4.1.0 (Phase 4); raw keys for `.pz` wait for a new format version |
 | P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
 
@@ -211,7 +211,8 @@ Not done:
 **Status: half done (unreleased).**
 - Done: the manifest format, `pc_manifest_*`. It is canonical and its
   decoder treats input as hostile. In a chunk store, restoring one file
-  reads that file's chunks and nothing else.
+  reads that file's chunks and nothing else: the "done when" holds for
+  `examples/backup`.
 - Not done: the seekable `.pz` container. It is a new on-disk format
   for the CLI, and nobody has asked for it yet. The chunk store covers
   the Arq-like use. Decide before starting it.
@@ -226,6 +227,21 @@ Not done:
   - Prune unreferenced objects.
 - This is a test of the API, not a product. S3/B2 backends and
   scheduling stay out of scope.
+
+**Status: done (unreleased).** `examples/backup/pcbackup.c` has
+init, backup, list, restore (all or one file), forget and prune. It
+uses the public header only. `examples/backup/test.sh` runs in
+`make check` and CI. It covers:
+- unchanged backups store nothing;
+- a small change stores one chunk;
+- prune and restore after prune;
+- a wrong password;
+- swapped and modified objects;
+- a hostile snapshot name.
+
+Not done:
+- Owners, hard links and special files.
+- Locking.
 
 ## Non-goals
 

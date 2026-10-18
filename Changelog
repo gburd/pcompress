@@ -11,6 +11,8 @@ Library: chunk-level building blocks for backup tools (libpcompress(3),
   examples/pzstore uses it.
   Manifests (pc_manifest_*): a canonical encoding of one snapshot's
   entries and their chunk ids; the decoder treats its input as hostile.
+  examples/backup/pcbackup.c: a snapshot backup tool on the public API
+  (backup, list, restore all or one file, forget, prune), run by make check.
   Additions only: the 4.1.0 ABI is unchanged.
   (Sealed objects written by development snapshots before this fix do not
   open: their subkeys could be learned from a chunk id; see git log.)

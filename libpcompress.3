@@ -413,7 +413,10 @@ Seal the encoded manifest like any chunk to encrypt and authenticate it.
 The object format is described in
 .Pa DESIGN.md .
 .Pa examples/pzstore.c
-is a small deduplicating store built on these calls.
+is a small deduplicating store built on these calls;
+.Pa examples/backup/pcbackup.c
+a snapshot backup tool (backup, list, restore of everything or one file,
+forget, prune).
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -456,7 +459,9 @@ Build with
 .Pa examples/pzcat.c
 in the source tree is a complete filter;
 .Pa examples/pzstore.c
-a deduplicating, encrypted chunk store.
+a deduplicating, encrypted chunk store;
+.Pa examples/backup/pcbackup.c
+a snapshot backup tool.
 .Sh SEE ALSO
 .Xr pcompress 1
 .Sh HISTORY
