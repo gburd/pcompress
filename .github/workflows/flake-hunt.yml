@@ -19,8 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04, cc: gcc }
-          - { runner: ubuntu-24.04-arm, cc: clang }
+          - { runner: ubuntu-24.04, cc: gcc, cxx: g++ }
+          - { runner: ubuntu-24.04-arm, cc: clang, cxx: clang++ }
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive, ref: "${{ inputs.ref }}" }
@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends build-essential clang libomp-dev \
             libssl-dev zlib1g-dev libbz2-dev autoconf automake libtool pkg-config
-      - env: { CC: "${{ matrix.cc }}" }
+      - env: { CC: "${{ matrix.cc }}", CXX: "${{ matrix.cxx }}" }
         run: ./config --disable-wavpack && make -j"$(nproc)"
       - name: Repeat archive -j -x
         run: |
