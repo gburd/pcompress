@@ -1335,7 +1335,7 @@ echo "*************** Running configure in libarchive ****************"
  fi
  # libarchive runs on our threads: it needs the thread-safe errno etc.
  # (illumos/Solaris use a global errno without -D_REENTRANT).
- CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT" ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
+ CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT" ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-iconv --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
  [ $? -ne 0 ] && exit $?
  sed '
 s@$(BUILT_SOURCES)@@
