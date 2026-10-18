@@ -46,6 +46,45 @@ jobs:
         env: { CC: "${{ matrix.cc }}", CXX: "${{ matrix.cxx }}" }
         run: sh ci/build-test.sh full
 
+  dist:
+    name: "Release tarball"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: sudo apt-get install -yq autoconf automake libtool
+      - run: sh ci/make-dist.sh HEAD .
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: pcompress-HEAD.tar.gz }
+
+  rpm:
+    # RPM family, from the release tarball (as packagers build it). RHEL 9's
+    # autoconf 2.69 is older than libarchive 3.8 wants; the tarball ships
+    # configure, so no autotools are installed here.
+    name: "RPM ${{ matrix.image }} ${{ matrix.arch }}"
+    needs: dist
+    runs-on: ${{ matrix.runner }}
+    container: { image: "${{ matrix.image }}" }
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x86_64, image: "fedora:latest" }
+          - { runner: ubuntu-24.04-arm, arch: arm64, image: "fedora:latest" }
+          - { runner: ubuntu-24.04, arch: x86_64, image: "rockylinux:9" }
+          - { runner: ubuntu-24.04-arm, arch: arm64, image: "rockylinux:9" }
+    steps:
+      - name: Dependencies
+        run: |
+          dnf -y install gcc gcc-c++ make libtool pkgconf-pkg-config openssl-devel \
+            zlib-devel bzip2-devel perl which diffutils findutils file patch tar gzip
+      - uses: actions/download-artifact@v4
+        with: { name: dist }
+      - name: Build and test
+        run: |
+          tar xzf pcompress-HEAD.tar.gz && cd pcompress-HEAD
+          sh ci/build-test.sh full
+
   macos:
     name: "macOS ${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
