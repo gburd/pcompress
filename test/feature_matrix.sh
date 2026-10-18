@@ -119,8 +119,21 @@ if timeout 600 "$PC" -a -c zstd -l6 -j -x tree a >c.log 2>&1 && "$PC" -i a.pz >d
 bsc_arc="-c libbsc -l9 -j"; [ -n "$BE" ] && bsc_arc="-c ppmd -l9 -j"
 for opt in "-c adapt2 -l14" "-c lzma -l6 -j -x" "-c zstd -l6 -j -x -T" "-c zstd -l6 -n -v" "$bsc_arc" "-c adapt -l11 -G"; do
 	rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
-	if timeout 600 "$PC" -a $opt tree a >c.log 2>&1 && timeout 600 "$PC" -d -m a.pz ax >d.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
-		pass=$((pass+1)); echo "PASS archive $opt"; else fail=$((fail+1)); echo "FAIL archive $opt"; tail -n 3 c.log d.log; diff -r tree ax/tree 2>&1 | head -3; fi
+	timeout 600 "$PC" -a $opt tree a >c.log 2>&1; crc=$?
+	timeout 600 "$PC" -d -m a.pz ax >d.log 2>&1; drc=$?
+	if [ $crc -eq 0 ] && [ $drc -eq 0 ] && diff -r tree ax/tree >/dev/null 2>&1; then
+		pass=$((pass+1)); echo "PASS archive $opt"
+	else
+		fail=$((fail+1)); echo "FAIL archive $opt (compress rc=$crc, extract rc=$drc)"
+		cat c.log; head -n 20 d.log; diff -r tree ax/tree 2>&1 | head -3
+		# A bad archive, or an unlucky extraction? Extract the same file again.
+		find ax -delete 2>/dev/null; mkdir ax
+		if "$PC" -d -m a.pz ax >d2.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
+			echo "  re-extracting the same archive succeeds: extraction-side race"
+		else
+			echo "  re-extracting also fails: the archive itself is bad"; head -n 5 d2.log
+		fi
+	fi
 done
 # -K: do not overwrite newer files on extraction.
 rm -f a.pz; find ax -delete 2>/dev/null; mkdir -p ax/tree

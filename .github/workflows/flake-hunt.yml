@@ -1,58 +1,52 @@
 name: Flake hunt
 
-# Manual: repeat the archive -j -x feature-matrix cases on hosted runners to
-# measure an intermittent "Truncated tar archive" extraction failure.
+# Manual: repeat the whole feature matrix on hosted runners to measure the
+# intermittent "Truncated tar archive" extraction failure (docs/PLATFORMS.md).
+# libarchive=old builds with the 4.1.0 libarchive (3.7.9) and its patch.
 on:
   workflow_dispatch:
     inputs:
       ref: { description: "commit or tag to test", required: true, default: "master" }
-      rounds: { description: "rounds per job", required: true, default: "60" }
+      rounds: { description: "feature-matrix runs per job", required: true, default: "15" }
+      libarchive: { description: "new (as pinned) or old (3.7.9)", required: true, default: "new" }
 
 permissions:
   contents: read
 
 jobs:
   hunt:
-    name: "${{ matrix.runner }} ${{ matrix.cc }}"
+    name: "${{ matrix.runner }} ${{ matrix.cc }} #${{ matrix.shard }} (libarchive ${{ inputs.libarchive }})"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: ubuntu-24.04, cc: gcc, cxx: g++ }
-          - { runner: ubuntu-24.04-arm, cc: clang, cxx: clang++ }
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        cc: [gcc]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive, ref: "${{ inputs.ref }}" }
+        with: { submodules: recursive, ref: "${{ inputs.ref }}", fetch-depth: 0 }
+      - name: Use libarchive 3.7.9
+        if: ${{ inputs.libarchive == 'old' }}
+        run: |
+          git -C archive/libarchive fetch -q origin 8a7a9cc527fd1d6d8664315d3bed47c4259479cc
+          git -C archive/libarchive checkout -q 8a7a9cc527fd1d6d8664315d3bed47c4259479cc
+          git show v4.1.0:archive/patches/pcompress_libarchive.patch > archive/patches/pcompress_libarchive.patch
       - run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends build-essential clang libomp-dev \
-            libssl-dev zlib1g-dev libbz2-dev autoconf automake libtool pkg-config
-      - env: { CC: "${{ matrix.cc }}", CXX: "${{ matrix.cxx }}" }
-        run: ./config --disable-wavpack && make -j"$(nproc)"
-      - name: Repeat archive -j -x
+          sudo apt-get install -yq --no-install-recommends build-essential libssl-dev \
+            zlib1g-dev libbz2-dev autoconf automake libtool pkg-config
+      - run: ./config --disable-wavpack && make -j"$(nproc)"
+      - name: Repeat the feature matrix
         run: |
           set +e
-          W=$(mktemp -d); SRC=$PWD; PC=$PWD/pcompress; cd "$W"
-          ( cd "$SRC" && find . -type f -size -4096 | LC_ALL=C sort | head -3000 | xargs cat 2>/dev/null ) | head -c 24000000 > mixed.dat
-          awk 'BEGIN{for(i=0;i<300000;i++) printf "%d,%d,%d\n", i, i*3, i*7}' > num.dat
-          mkdir -p tree/sub/deep tree/emptydir; cp num.dat tree/; : > tree/empty.dat; printf x > tree/one.dat
-          cp mixed.dat tree/sub/; ln -sf ../num.dat tree/sub/link; cp "$SRC/test/res/jpg/screen.jpg" tree/
-          awk 'BEGIN{printf "P6\n256 256\n255\n"; for(i=0;i<65536;i++) printf "%c%c%c", i%251, (i/256)%251, (i*7)%251}' > tree/img.ppm
-          awk 'BEGIN{printf "P5\n256 256\n255\n"; for(i=0;i<65536;i++) printf "%c", (i%256+i/256)%256}' > tree/img.pgm
-          cp -L /bin/sh tree/prog.elf
-          f=0; n=0
+          f=0
           for i in $(seq 1 ${{ inputs.rounds }}); do
-            for opt in "-c lzma -l6 -j -x" "-c zstd -l6 -j -x -T"; do
-              n=$((n+1)); rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
-              if ! { "$PC" -a $opt tree a >c.log 2>&1 && "$PC" -d -m a.pz ax >d.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; }; then
-                f=$((f+1)); echo "FAIL round $i: $opt"; tail -n 2 d.log
-                # Is the archive bad, or was extraction unlucky? Extract it again.
-                find ax -delete; mkdir ax
-                if "$PC" -d -m a.pz ax >d2.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
-                  echo "  same archive extracts fine the second time: extraction race"
-                else echo "  second extraction also fails: the archive is bad"; tail -n 2 d2.log; fi
-              fi
-            done
+            sh test/feature_matrix.sh "$PWD/pcompress" "/tmp/fm$i" > "/tmp/fm$i.log" 2>&1
+            tail -n 1 "/tmp/fm$i.log"
+            if grep -q '^FAIL' "/tmp/fm$i.log"; then
+              f=$((f+1)); grep -A30 '^FAIL' "/tmp/fm$i.log" | head -60
+            fi
           done
-          echo "failures: $f of $n"
+          echo "runs with a failure: $f of ${{ inputs.rounds }}"
