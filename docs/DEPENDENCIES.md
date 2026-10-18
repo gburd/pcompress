@@ -8,35 +8,43 @@ Pcompress uses a mix of git submodules and vendored code for its dependencies. T
 
 ## Git Submodules (5 dependencies)
 
+All five are pinned to upstream's newest commit or release as of
+pcompress 4.2.0; `nix/package.nix` pins the same revisions. To update:
+check out the new commit in the submodule, make sure
+`archive/patches/pcompress_libarchive.patch` still applies (`./config`
+applies it file by file), refresh the hashes in `nix/package.nix`
+(`nix-prefetch-url --unpack`), and run `make check` and
+`test/feature_matrix.sh`.
+
 ### 1. **libarchive** (archive/libarchive/)
 - **Repository**: https://github.com/libarchive/libarchive
-- **Version**: v3.7.9 (updated from v3.1.2 in 2024)
+- **Version**: v3.8.10
 - **Purpose**: PAX archive format support for creating `.pz` archives
 - **Custom patches**: Metadata streaming and extended attribute management
 - **Why submodule**: Active upstream, well-maintained, clear update path
 
 ### 2. **LZ4** (lz4/)
 - **Repository**: https://github.com/lz4/lz4
-- **Version**: Latest stable
+- **Version**: `dev` branch after v1.10.0 (pinned commit; see `git submodule status`)
 - **Purpose**: Fast compression algorithm (fastest option in pcompress)
 - **Why submodule**: Active development, stable API, easy to update
 
 ### 3. **libbsc** (bsc/)
 - **Repository**: https://github.com/IlyaGrebnov/libbsc
-- **Version**: v3.3.12
+- **Version**: `master` after v3.3.12 (pinned commit)
 - **Purpose**: Block-sorting compression (good for text files)
 - **Why submodule**: Active maintenance, stable releases
 
 ### 4. **Zstandard** (zstd/)
 - **Repository**: https://github.com/facebook/zstd
-- **Version**: Latest stable
+- **Version**: `dev` branch after v1.5.7 (pinned commit)
 - **Purpose**: Modern compression algorithm (20-30% better ratio than LZ4 at similar speed)
 - **Why submodule**: Industry standard, actively developed by Meta/Facebook
 - **Added**: Part of 2024 modernization effort
 
 ### 5. **WavPack** (wavpack/)
 - **Repository**: https://github.com/dbry/WavPack
-- **Version**: Latest stable
+- **Version**: `master` after 5.9.0 (pinned commit)
 - **Purpose**: Audio filter for lossless WAV file compression
 - **Why submodule**: Active upstream, clear git history, easy updates
 - **Optional**: Can be disabled with `--disable-wavpack`

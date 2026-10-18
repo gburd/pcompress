@@ -1,8 +1,8 @@
 diff --git a/libarchive/archive.h b/libarchive/archive.h
-index ddbf66c1..17e2d04a 100644
+index 19b316a4..7042c16a 100644
 --- a/libarchive/archive.h
 +++ b/libarchive/archive.h
-@@ -644,6 +644,19 @@ __LA_DECL int archive_read_add_passphrase(struct archive *, const char *);
+@@ -688,6 +688,19 @@ __LA_DECL int archive_read_add_passphrase(struct archive *, const char *);
  __LA_DECL int archive_read_set_passphrase_callback(struct archive *,
  			    void *client_data, archive_passphrase_callback *);
  
@@ -23,10 +23,10 @@ index ddbf66c1..17e2d04a 100644
  /*-
   * Convenience function to recreate the current entry (whose header
 diff --git a/libarchive/archive_entry.h b/libarchive/archive_entry.h
-index eff8a769..be8f8c9a 100644
+index 50e10a1e..78d3f86b 100644
 --- a/libarchive/archive_entry.h
 +++ b/libarchive/archive_entry.h
-@@ -616,6 +616,15 @@ __LA_DECL void	 archive_entry_xattr_add_entry(struct archive_entry *,
+@@ -647,6 +647,15 @@ __LA_DECL void	 archive_entry_xattr_add_entry(struct archive_entry *,
  	    const char * /* name */, const void * /* value */,
  	    size_t /* size */);
  
@@ -43,7 +43,7 @@ index eff8a769..be8f8c9a 100644
   * To retrieve the xattr list, first "reset", then repeatedly ask for the
   * "next" entry.
 diff --git a/libarchive/archive_entry_xattr.c b/libarchive/archive_entry_xattr.c
-index b92e1878..e05974c7 100644
+index 7a78f0c3..b489ea9d 100644
 --- a/libarchive/archive_entry_xattr.c
 +++ b/libarchive/archive_entry_xattr.c
 @@ -106,6 +106,62 @@ archive_entry_xattr_add_entry(struct archive_entry *entry,
@@ -110,10 +110,10 @@ index b92e1878..e05974c7 100644
  /*
   * returns number of the extended attribute entries
 diff --git a/libarchive/archive_private.h b/libarchive/archive_private.h
-index 050fc63c..e9587c20 100644
+index ca1bad94..dd9515bf 100644
 --- a/libarchive/archive_private.h
 +++ b/libarchive/archive_private.h
-@@ -142,6 +142,23 @@ struct archive {
+@@ -170,6 +170,23 @@ struct archive {
  	 */
  	char		  read_data_is_posix_read;
  	size_t		  read_data_requested;
@@ -138,10 +138,10 @@ index 050fc63c..e9587c20 100644
  
  /* Check magic value and state; return(ARCHIVE_FATAL) if it isn't valid. */
 diff --git a/libarchive/archive_read.c b/libarchive/archive_read.c
-index 822c534b..a4971c57 100644
+index 2f006fb9..b4e7caac 100644
 --- a/libarchive/archive_read.c
 +++ b/libarchive/archive_read.c
-@@ -467,6 +467,8 @@ archive_read_open1(struct archive *_a)
+@@ -461,6 +461,8 @@ archive_read_open1(struct archive *_a)
  	    "archive_read_open");
  	archive_clear_error(&a->archive);
  
@@ -150,21 +150,22 @@ index 822c534b..a4971c57 100644
  	if (a->client.reader == NULL) {
  		archive_set_error(&a->archive, EINVAL,
  		    "No reader function provided to archive_read_open");
-@@ -496,6 +498,10 @@ archive_read_open1(struct archive *_a)
- 	filter->code = ARCHIVE_FILTER_NONE;
- 	filter->can_skip = 1;
- 	filter->can_seek = 1;
-+	if (__archive_read_filter_add_shadow(a, filter) != ARCHIVE_OK) {
-+		free(filter);
+@@ -484,6 +486,11 @@ archive_read_open1(struct archive *_a)
+ 	f->code = ARCHIVE_FILTER_NONE;
+ 	f->can_skip = a->client.skipper != NULL;
+ 	f->can_seek = a->client.seeker != NULL;
++	if (__archive_read_filter_add_shadow(a, f) != ARCHIVE_OK) {
++		free(f);
++		a->archive.state = ARCHIVE_STATE_FATAL;
 +		return (ARCHIVE_FATAL);
 +	}
  
- 	a->client.dataset[0].begin_position = 0;
- 	if (!a->filter || !a->bypass_filter_bidding)
-@@ -532,9 +538,31 @@ archive_read_open1(struct archive *_a)
+ 	/* Open data source. */
+ 	if (a->client.opener != NULL) {
+@@ -543,9 +550,31 @@ archive_read_open1(struct archive *_a)
  
  	/* Ensure libarchive starts from the first node in a multivolume set */
- 	client_switch_proxy(a->filter, 0);
+ 	client_switch_proxy(f, 0);
 +	if (_a->is_metadata_streaming)
 +		_a->cb_is_metadata = 0;
  	return (e);
@@ -193,17 +194,17 @@ index 822c534b..a4971c57 100644
  /*
   * Allow each registered stream transform to bid on whether
   * it wants to handle this stream.  Repeat until we've finished
-@@ -590,7 +618,8 @@ choose_filters(struct archive_read *a)
- 		filter->upstream = a->filter;
- 		a->filter = filter;
+@@ -600,7 +629,8 @@ choose_filters(struct archive_read *a)
+ 		f->upstream = a->filter;
+ 		a->filter = f;
  		r = (best_bidder->vtable->init)(a->filter);
 -		if (r != ARCHIVE_OK) {
 +		if (r != ARCHIVE_OK ||
-+		    __archive_read_filter_add_shadow(a, filter) != ARCHIVE_OK) {
++		    __archive_read_filter_add_shadow(a, a->filter) != ARCHIVE_OK) {
  			__archive_read_free_filters(a);
  			return (ARCHIVE_FATAL);
  		}
-@@ -1002,6 +1031,10 @@ close_filters(struct archive_read *a)
+@@ -1063,6 +1093,10 @@ close_filters(struct archive_read *a)
  		}
  		free(f->buffer);
  		f->buffer = NULL;
@@ -214,7 +215,7 @@ index 822c534b..a4971c57 100644
  		f = t;
  	}
  	return r;
-@@ -1015,6 +1048,7 @@ __archive_read_free_filters(struct archive_read *a)
+@@ -1076,6 +1110,7 @@ __archive_read_free_filters(struct archive_read *a)
  
  	while (a->filter != NULL) {
  		struct archive_read_filter *t = a->filter->upstream;
@@ -222,21 +223,21 @@ index 822c534b..a4971c57 100644
  		free(a->filter);
  		a->filter = t;
  	}
-@@ -1334,6 +1368,13 @@ __archive_read_filter_ahead(struct archive_read_filter *filter,
- 		return (NULL);
- 	}
+@@ -1427,6 +1462,13 @@ __archive_read_filter_ahead(struct archive_read_filter *f,
+ 	/* request == 0 is perfectly well-defined.*/
+ 	min = request == 0 ? 1 : request;
  
 +	/*
 +	 * Pcompress: metadata reads go through the shadow filter when
 +	 * metadata streaming is enabled.
 +	 */
-+	if (filter->shadow != NULL && filter->archive->archive.cb_is_metadata)
-+		filter = filter->shadow;
++	if (f->shadow != NULL && f->archive->archive.cb_is_metadata)
++		f = f->shadow;
 +
  	/*
  	 * Keep pulling more data until we can satisfy the request.
  	 */
-@@ -1512,6 +1553,13 @@ __archive_read_filter_consume(struct archive_read_filter * filter,
+@@ -1577,6 +1619,13 @@ __archive_read_filter_consume(struct archive_read_filter *f,
  	if (request == 0)
  		return 0;
  
@@ -244,49 +245,49 @@ index 822c534b..a4971c57 100644
 +	 * Pcompress: metadata reads go through the shadow filter when
 +	 * metadata streaming is enabled.
 +	 */
-+	if (filter->shadow != NULL && filter->archive->archive.cb_is_metadata)
-+		filter = filter->shadow;
++	if (f->shadow != NULL && f->archive->archive.cb_is_metadata)
++		f = f->shadow;
 +
- 	skipped = advance_file_pointer(filter, request);
+ 	skipped = advance_file_pointer(f, request);
  	if (skipped == request)
  		return (skipped);
-@@ -1636,6 +1684,9 @@ __archive_read_filter_seek(struct archive_read_filter *filter, int64_t offset,
+@@ -1714,6 +1763,9 @@ __archive_read_filter_seek(struct archive_read_filter *f, int64_t offset,
  		return (ARCHIVE_FATAL);
- 	if (filter->can_seek == 0)
+ 	if (f->can_seek == 0)
  		return (ARCHIVE_FAILED);
 +	/* Pcompress: no seeking when metadata streams are enabled. */
-+	if (filter->archive->archive.is_metadata_streaming)
++	if (f->archive->archive.is_metadata_streaming)
 +		return (ARCHIVE_FAILED);
  
- 	client = &(filter->archive->client);
- 	switch (whence) {
+ 	client = &(f->archive->client);
+ 	old_cursor = client->cursor;
 diff --git a/libarchive/archive_read_append_filter.c b/libarchive/archive_read_append_filter.c
-index cd88df11..beb17474 100644
+index 5cc8ff55..0bfc9268 100644
 --- a/libarchive/archive_read_append_filter.c
 +++ b/libarchive/archive_read_append_filter.c
-@@ -138,6 +138,8 @@ archive_read_append_filter(struct archive *_a, int code)
-     filter->upstream = a->filter;
-     a->filter = filter;
-     r2 = (bidder->vtable->init)(a->filter);
+@@ -129,6 +129,8 @@ archive_read_append_filter(struct archive *_a, int code)
+     f->upstream = a->filter;
+     a->filter = f;
+     r2 = (b->vtable->init)(a->filter);
 +    if (r2 == ARCHIVE_OK)
-+      r2 = __archive_read_filter_add_shadow(a, filter);
++      r2 = __archive_read_filter_add_shadow(a, a->filter);
      if (r2 != ARCHIVE_OK) {
        __archive_read_free_filters(a);
        return (ARCHIVE_FATAL);
-@@ -194,6 +196,8 @@ archive_read_append_filter_program_signature(struct archive *_a,
-   filter->upstream = a->filter;
-   a->filter = filter;
-   r = (bidder->vtable->init)(a->filter);
+@@ -170,6 +172,8 @@ archive_read_append_filter_program_signature(struct archive *_a,
+   f->upstream = a->filter;
+   a->filter = f;
+   r = (b->vtable->init)(a->filter);
 +  if (r == ARCHIVE_OK)
-+    r = __archive_read_filter_add_shadow(a, filter);
++    r = __archive_read_filter_add_shadow(a, a->filter);
    if (r != ARCHIVE_OK) {
      __archive_read_free_filters(a);
      return (ARCHIVE_FATAL);
 diff --git a/libarchive/archive_read_private.h b/libarchive/archive_read_private.h
-index 0c374f48..68703e2f 100644
+index 43b7f853..35c330fb 100644
 --- a/libarchive/archive_read_private.h
 +++ b/libarchive/archive_read_private.h
-@@ -93,6 +93,11 @@ struct archive_read_filter {
+@@ -91,6 +91,11 @@ struct archive_read_filter {
  	 * just declare them here. */
  	struct archive_read_filter_bidder *bidder; /* My bidder. */
  	struct archive_read_filter *upstream; /* Who I read from. */
@@ -298,7 +299,7 @@ index 0c374f48..68703e2f 100644
  	struct archive_read *archive; /* Associated archive. */
  	const struct archive_read_filter_vtable *vtable;
  	/* My private data. */
-@@ -254,6 +259,7 @@ int64_t	__archive_read_filter_consume(struct archive_read_filter *, int64_t);
+@@ -256,6 +261,7 @@ int64_t	__archive_read_filter_consume(struct archive_read_filter *, int64_t);
  int __archive_read_header(struct archive_read *, struct archive_entry *);
  int __archive_read_program(struct archive_read_filter *, const char *);
  void __archive_read_free_filters(struct archive_read *);
@@ -394,50 +395,3 @@ index 97e0b8a0..8b6b77b2 100644
 +	a->is_metadata_streaming = flag;
 +	return (0);
 +}
-diff --git a/libarchive/archive_read_support_format_tar.c b/libarchive/archive_read_support_format_tar.c
---- a/libarchive/archive_read_support_format_tar.c
-+++ b/libarchive/archive_read_support_format_tar.c
-@@ -153,6 +153,8 @@
- 	int			 compat_2x;
- 	int			 process_mac_extensions;
- 	int			 read_concatenated_archives;
-+	int			 default_inode;
-+	int			 default_dev;
- };
- 
- /* Track which size fields were present in the headers */
-@@ -518,26 +520,22 @@
- 	 * probably not worthwhile just to support the relatively
- 	 * obscure tar->cpio conversion case.
- 	 */
--	/* TODO: Move this into `struct tar` to avoid conflicts
--	 * when reading multiple archives */
--	static int default_inode;
--	static int default_dev;
- 	struct tar *tar;
- 	const char *p;
- 	const wchar_t *wp;
- 	int r;
- 	size_t l, unconsumed = 0;
- 
--	/* Assign default device/inode values. */
--	archive_entry_set_dev(entry, 1 + default_dev); /* Don't use zero. */
--	archive_entry_set_ino(entry, ++default_inode); /* Don't use zero. */
-+	tar = (struct tar *)(a->format->data);
-+
-+	/* Assign default device/inode values (per archive, as upstream). */
-+	archive_entry_set_dev(entry, 1 + tar->default_dev); /* Don't use zero. */
-+	archive_entry_set_ino(entry, ++tar->default_inode); /* Don't use zero. */
- 	/* Limit generated st_ino number to 16 bits. */
--	if (default_inode >= 0xffff) {
--		++default_dev;
--		default_inode = 0;
-+	if (tar->default_inode >= 0xffff) {
-+		++tar->default_dev;
-+		tar->default_inode = 0;
- 	}
--
--	tar = (struct tar *)(a->format->data);
- 	tar->entry_offset = 0;
- 	gnu_clear_sparse_list(tar);
- 	tar->size_fields = 0; /* We don't have any size info yet */

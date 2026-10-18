@@ -116,7 +116,7 @@ git submodule update --remote
 - `bsc/` - libbsc block-sorting compression (github:IlyaGrebnov/libbsc)
 - `zstd/` - Zstandard compression (github:facebook/zstd)
 - `wavpack/` - WavPack audio filter (github:dbry/WavPack)
-- `archive/libarchive/` - Archive format support (github:libarchive/libarchive v3.7.9)
+- `archive/libarchive/` - Archive format support (github:libarchive/libarchive v3.8.10)
 
 ### LZMA SDK (Vendored)
 

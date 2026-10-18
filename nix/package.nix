@@ -22,26 +22,26 @@ let
   lz4-src = fetchFromGitHub {
     owner = "lz4";
     repo = "lz4";
-    rev = "5c4c1fb2354133e1f3b087a341576985f8114bd5";
-    hash = "sha256-GaQdKGyySUUDqF30jYIbVKugF7Ui/LaCzUNKt7DHUi4=";
+    rev = "e7c36223415219c0a18ea75e3fe2eb5d267ee667";
+    hash = "sha256-ApkSJCBB7s1zm6AU4/LD7HvbivQEQEkEq5UXlV4Le9w=";
   };
   libbsc-src = fetchFromGitHub {
     owner = "IlyaGrebnov";
     repo = "libbsc";
-    rev = "baffa62c70b6ebbecc9af14ce550e965ea247680";
-    hash = "sha256-WKSNSWvN7oDnteSEVnPoXAvNOOvrLU4OOQhKULxgxvU=";
+    rev = "4178579ff11d878863ea0d2758c125a0987d7b9b";
+    hash = "sha256-fcG7PStI9V4EhyW5USwIVn+FkHFTcuToKIFYXudDLHo=";
   };
   zstd-src = fetchFromGitHub {
     owner = "facebook";
     repo = "zstd";
-    rev = "6e1e545916eff6457e4b264f8813a7417510a57e";
-    hash = "sha256-AQRxHHSeWa4BNmNn+LnIcYVnmC62y6XtHmv68ENK0ig=";
+    rev = "49cf51799ea051457f57243527aa2058f999f005";
+    hash = "sha256-FuW9d91JdfbP+YtPBVyjmtlhkJDre/DKGhiVdU5UWKs=";
   };
   libarchive-src = fetchFromGitHub {
     owner = "libarchive";
     repo = "libarchive";
-    rev = "8a7a9cc527fd1d6d8664315d3bed47c4259479cc"; # v3.7.9
-    hash = "sha256-N1PzkkM6k35GuteKijsJZw5Og0DiM70VihN6qlLqGfU=";
+    rev = "0c48412be2d94afe1859a807ea7896a18d8900bd"; # v3.8.10
+    hash = "sha256-B2leEyMwSy7YSEMKSTsgfeBbKo4kOQPU0ME0XWuZMik=";
   };
 in
 stdenv.mkDerivation (finalAttrs: {
