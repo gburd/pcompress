@@ -26,7 +26,7 @@ cp "$S/docs/text.txt" "$S/docs/deep/er/copy.txt"
 : > "$S/zero-length"
 ln -s docs/text.txt "$S/link"
 chmod 640 "$S/docs/text.txt"
-chmod 4755 "$S/zero-length"
+chmod 4755 "$S/zero-length" 2>/dev/null	# refused in some sandboxes (Nix)
 
 $B init "$R" || { echo "init failed"; exit 1; }
 check "init refuses an existing repository" "! $B init '$R' 2>/dev/null"
@@ -41,7 +41,11 @@ check "list shows entries" "$B list '$R' '$s1' | grep -q 'docs/deep/er/copy.txt'
 $B restore "$R" "$s1" "$T/out1"; rc=$?
 check "full restore matches" "[ $rc -eq 0 ] && same '$S' '$T/out1'"
 check "file mode restored" "[ \"\$(ls -l '$T/out1/docs/text.txt' | cut -c1-10)\" = '-rw-r-----' ]"
-check "setuid bit not restored (owners are not)" "[ \"\$(ls -l '$T/out1/zero-length' | cut -c1-10)\" = '-rwxr-xr-x' ]"
+if [ -u "$S/zero-length" ]; then
+	check "setuid bit not restored (owners are not)" "[ \"\$(ls -l '$T/out1/zero-length' | cut -c1-10)\" = '-rwxr-xr-x' ]"
+else
+	echo "  SKIP: setuid bit (cannot set one here)"
+fi
 chmod 755 "$S/zero-length"
 check "restore into an existing directory refused" "! $B restore '$R' '$s1' '$T/out1' 2>/dev/null"
 $B restore "$R" "$s1" "$T/one" docs/deep/er/copy.txt; rc=$?
