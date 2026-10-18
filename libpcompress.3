@@ -110,6 +110,18 @@ libpcompress
 .Fn pc_index_sync "pc_index_t *idx"
 .Ft int
 .Fn pc_index_close "pc_index_t *idx"
+.Ft pc_manifest_t *
+.Fn pc_manifest_new "void"
+.Ft int
+.Fn pc_manifest_add "pc_manifest_t *m" "const pc_entry_t *e"
+.Ft int
+.Fn pc_manifest_get "pc_manifest_t *m" "size_t i" "pc_entry_t *e"
+.Ft int64_t
+.Fn pc_manifest_find "pc_manifest_t *m" "const char *path" "pc_entry_t *e"
+.Ft int
+.Fn pc_manifest_encode "pc_manifest_t *m" "void *buf" "size_t *len"
+.Ft pc_manifest_t *
+.Fn pc_manifest_decode "const void *buf" "size_t len"
 .Sh DESCRIPTION
 The library behind
 .Xr pcompress 1 .
@@ -368,6 +380,34 @@ next open.
 The ids are held in memory, about 45 bytes each.
 Callers with their own catalogue need not use it: look ids up there
 instead.
+.It Fn pc_manifest_new
+A snapshot manifest: entries
+.Pq Vt pc_entry_t
+holding a relative path, type
+.Pq Dv PC_ENTRY_FILE , PC_ENTRY_DIR , PC_ENTRY_SYMLINK ,
+mode, owner, modification time, size, a symlink's target, and a file's
+chunk ids and lengths in order.
+.Fn pc_manifest_add
+copies an entry, refusing absolute paths, empty, "." and ".."
+components, and chunk lengths that do not add up to the size.
+Entries are kept sorted by path;
+.Fn pc_manifest_get
+and
+.Fn pc_manifest_find
+return pointers into the manifest, valid until
+.Fn pc_manifest_free .
+.Fn pc_manifest_encode
+writes the bytes to store (with
+.Fa buf
+NULL it only sets
+.Fa *len )
+and fails on duplicate paths or an entry under a symlink entry.
+.Fn pc_manifest_decode
+treats its input as hostile and also refuses unsorted entries and
+trailing bytes, so a restore that follows a decoded manifest cannot be
+steered outside its target directory through ".." or a symlink it just
+created.
+Seal the encoded manifest like any chunk to encrypt and authenticate it.
 .El
 .Pp
 The object format is described in
@@ -421,7 +461,7 @@ a deduplicating, encrypted chunk store.
 .Xr pcompress 1
 .Sh HISTORY
 The descriptor API, per-context logging and error classes appeared in
-pcompress 4.1.
+pcompress 4.1; chunks, key files, the chunk index and manifests after it.
 The command-line style API dates from 2.x.
 .Sh CAVEATS
 Only the symbols declared in

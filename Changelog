@@ -9,6 +9,8 @@ Library: chunk-level building blocks for backup tools (libpcompress(3),
   of any length (scrypt).
   Chunk index (pc_index_*): a persistent, append-only set of chunk ids;
   examples/pzstore uses it.
+  Manifests (pc_manifest_*): a canonical encoding of one snapshot's
+  entries and their chunk ids; the decoder treats its input as hostile.
   Additions only: the 4.1.0 ABI is unchanged.
   (Sealed objects written by development snapshots before this fix do not
   open: their subkeys could be learned from a chunk id; see git log.)

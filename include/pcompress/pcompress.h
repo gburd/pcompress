@@ -229,6 +229,45 @@ int pc_index_close(pc_index_t *idx);
  * (examples/pzstore.c does).
  */
 
+/**
+ * Snapshot manifests: the entries of one backup (path, metadata and, for
+ * files, the ids and lengths of their chunks in order), encoded to bytes
+ * the caller stores as an object of its own (seal it to encrypt it).
+ * Paths are relative and '/'-separated; entries are kept sorted by path.
+ * pc_manifest_decode() treats its input as hostile: it refuses absolute
+ * paths, "." and ".." components, duplicates, entries under a symlink
+ * entry, chunk lengths that do not add up to the size, and trailing bytes.
+ * A pc_entry_t from get/find points into the manifest: valid until it is
+ * freed. One thread at a time per manifest.
+ */
+enum { PC_ENTRY_FILE = 1, PC_ENTRY_DIR = 2, PC_ENTRY_SYMLINK = 3 };
+typedef struct {
+	const char *path;
+	int type;		/* PC_ENTRY_* */
+	uint32_t mode, uid, gid;
+	int64_t mtime;
+	uint32_t mtime_nsec;
+	uint64_t size;		/* files: sum of lens[]; else 0 */
+	const char *target;	/* symlinks: the link text; else NULL */
+	size_t nchunks;
+	const uint8_t *ids;	/* nchunks * 32 bytes */
+	const uint32_t *lens;	/* nchunks lengths, each > 0 */
+} pc_entry_t;
+typedef struct pc_manifest pc_manifest_t;
+pc_manifest_t *pc_manifest_new(void);
+void pc_manifest_free(pc_manifest_t *m);
+/** Copies the entry. -1 if it is invalid (see above) or out of memory. */
+int pc_manifest_add(pc_manifest_t *m, const pc_entry_t *e);
+size_t pc_manifest_count(pc_manifest_t *m);
+/** i-th entry in path order. 0 or -1. */
+int pc_manifest_get(pc_manifest_t *m, size_t i, pc_entry_t *e);
+/** Index of path, filling e if not NULL; -1 if absent. */
+int64_t pc_manifest_find(pc_manifest_t *m, const char *path, pc_entry_t *e);
+/** buf NULL: set *len to the size needed. -1 on duplicates or an entry
+ *  under a symlink, or if *len is too small. */
+int pc_manifest_encode(pc_manifest_t *m, void *buf, size_t *len);
+pc_manifest_t *pc_manifest_decode(const void *buf, size_t len);
+
 /** Largest object pc_chunk_seal() can produce for len input bytes. */
 size_t pc_chunk_seal_bound(size_t len);
 

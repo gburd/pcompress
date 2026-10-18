@@ -238,6 +238,17 @@ open, and a torn last record is cut off. The `.pz` global-dedupe index
 (`rabin/global/index.c`) is separate and still per file: making it
 persistent would make one `.pz` depend on others.
 
+**Manifests** (`pc_manifest_*`): `PCMF1`, three zero bytes, a u64 entry
+count, then the entries sorted by path bytes, each: u16 path length and
+path, u8 type, u32 mode, uid, gid, i64 mtime, u32 nanoseconds, u64 size,
+u16 target length and target, u32 chunk count, and per chunk a 32-byte id
+and a u32 length. Little-endian throughout. The encoding of a manifest is
+canonical (sorted, no choices), so equal snapshots give equal bytes and
+the same object id. The decoder checks every length against what is left
+before allocating, every path (relative, no empty, `.` or `..`
+component, no NUL), strict order, no entry below a symlink entry, and
+that a file's chunk lengths add up to its size.
+
 **Passwords for `.pz`.** The whole password is used. Up to 4.1.0 a `-w`
 file over 16 bytes was read as its first 15 bytes; decryption tries that
 form too when the two differ, and the header HMAC decides.

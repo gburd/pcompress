@@ -17,6 +17,8 @@ PCOMPRESS_1 {
 		pc_keyfile_size; pc_keyfile_create; pc_keyfile_open;
 		pc_index_open; pc_index_has; pc_index_add; pc_index_count;
 		pc_index_sync; pc_index_close;
+		pc_manifest_new; pc_manifest_free; pc_manifest_add; pc_manifest_count;
+		pc_manifest_get; pc_manifest_find; pc_manifest_encode; pc_manifest_decode;
 	local:
 		*;
 };

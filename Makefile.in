@@ -36,7 +36,7 @@ MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	utils/cpu_features.c utils/cpu_features_x86_64.c \
 	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
 	filters/analyzer/analyzer.c \
-	meta_stream.c pcompress.c chunk.c
+	meta_stream.c pcompress.c chunk.c manifest.c
 MAINHDRS = include/pcompress/pcompress.h allocator.h  pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
 	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
 	filters/dispack/dis.hpp \
@@ -540,7 +540,7 @@ test-unit-build: $(LIB)
 
 # Public-API test: only include/ on the include path, linked against the
 # shared library like any other program.
-PUBLIC_TESTS = test_public test_chunk
+PUBLIC_TESTS = test_public test_chunk test_manifest
 $(PUBLIC_TESTS:%=buildtmp/%): buildtmp/%: test/unit/%.c include/pcompress/pcompress.h $(LIB)
 	mkdir -p buildtmp
 	$(COMPILE) $(GEN_OPT) -Iinclude -I./test/unit test/unit/$*.c -o buildtmp/$*.o
