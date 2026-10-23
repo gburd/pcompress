@@ -23,8 +23,10 @@ jobs:
           sudo apt-get install -yq --no-install-recommends \
             build-essential libssl-dev zlib1g-dev libbz2-dev \
             autoconf automake libtool pkg-config yasm valgrind
+      # --portable: valgrind cannot run AVX-512, and some runners have it
+      # (a host-tuned build died with SIGILL on those, 2 nights in 5).
       - name: Build and quick tests
-        run: sh ci/build-test.sh quick
+        run: sh ci/build-test.sh quick --portable
       - name: Full feature matrix (every level)
         run: CORPUS="$PWD" sh test/feature_matrix.sh "$PWD/pcompress" /tmp/pc-matrix
       - name: Legacy t1-t9 suite
