@@ -638,6 +638,19 @@ gnu_as_flag=""
 # libsais evaluates '_BYTE_ORDER == _BIG_ENDIAN', which breaks where
 # _BIG_ENDIAN is defined empty (illumos). Tell it the byte order directly.
 bsc_endian_flag=""
+# libbsc is little-endian only: 3.3 did not round-trip on big-endian hosts
+# (pcompress refused it at run time) and 3.4 will not compile there. Leave
+# it out of the build; libbsc_compress.c is not compiled either.
+if echo '__BYTE_ORDER__' | ${GCC} -E -P - 2>/dev/null | grep -q 4321; then
+	if [ -n "${libbsc_lib}" ]; then
+		echo "  Big-endian host: building without libbsc (little-endian only)"
+	fi
+	libbsc_lib=""
+	libbsclflags=""
+	libbscwrapobj=""
+	libbscgenopt=""
+	libbsccppflags=""
+fi
 # libbsc assumes unaligned loads are legal unless told otherwise.
 [ $is_x86 -eq 0 ] && [ $is_arm -eq 0 ] && bsc_endian_flag="-DLIBBSC_NO_UNALIGNED_ACCESS"
 if [ "$OS" = "SunOS" ]; then

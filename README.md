@@ -96,7 +96,8 @@ Tested on x86-64 (GCC, Clang, both with LTO), AArch64 (Graviton4,
 192 cores / 2 NUMA nodes), RISC-V 64 and big-endian SPARC64 (illumos,
 GCC 13). Archives are byte-order independent: a file written on one
 architecture decompresses on any other. libbsc is not available on
-big-endian hosts (upstream libbsc does not round-trip there). The core
+big-endian hosts (upstream libbsc is little-endian only, and is left out
+of the build there). The core
 compressors also build with MSVC on Windows ARM64, but a full Windows port
 (POSIX semaphores, mmap, fork-free I/O) has not been done. The supported
 matrix and the release gate are in `docs/PLATFORMS.md`.

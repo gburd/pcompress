@@ -1,3 +1,12 @@
+== Unreleased ==
+Dependencies: libbsc 3.4.0 (fixes data corruption in libbsc's multithreaded
+  compression, present since 3.1.0; not reproduced through pcompress, whose
+  output is unchanged), lz4 and WavPack at upstream's newest commits.
+  libarchive (3.8.10) and zstd were already current.
+Big-endian hosts: ./config builds without libbsc (it is little-endian only
+  and 3.4 does not compile there); pcompress already refused it at run time.
+Nightly CI builds with --portable so valgrind does not meet AVX-512.
+
 == 4.2.0 Release ==
 Library: chunk-level building blocks for backup tools (libpcompress(3),
   "Chunks"): a streaming content-defined chunker (pc_chunker_*), keyed

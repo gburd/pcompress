@@ -8,8 +8,8 @@ Pcompress uses a mix of git submodules and vendored code for its dependencies. T
 
 ## Git Submodules (5 dependencies)
 
-All five are pinned to upstream's newest commit or release as of
-pcompress 4.2.0; `nix/package.nix` pins the same revisions. To update:
+All five are pinned to upstream's newest commit or release (checked
+October 23, 2026); `nix/package.nix` pins the same revisions. To update:
 check out the new commit in the submodule, make sure
 `archive/patches/pcompress_libarchive.patch` still applies (`./config`
 applies it file by file), refresh the hashes in `nix/package.nix`
@@ -31,7 +31,8 @@ applies it file by file), refresh the hashes in `nix/package.nix`
 
 ### 3. **libbsc** (bsc/)
 - **Repository**: https://github.com/IlyaGrebnov/libbsc
-- **Version**: `master` after v3.3.12 (pinned commit)
+- **Version**: v3.4.0. Little-endian only: on big-endian hosts `./config`
+  builds pcompress without it.
 - **Purpose**: Block-sorting compression (good for text files)
 - **Why submodule**: Active maintenance, stable releases
 

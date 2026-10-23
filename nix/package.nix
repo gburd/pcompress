@@ -22,14 +22,14 @@ let
   lz4-src = fetchFromGitHub {
     owner = "lz4";
     repo = "lz4";
-    rev = "e7c36223415219c0a18ea75e3fe2eb5d267ee667";
-    hash = "sha256-ApkSJCBB7s1zm6AU4/LD7HvbivQEQEkEq5UXlV4Le9w=";
+    rev = "9af9ec8f26715149c5e286b05943958ddb03d0e9";
+    hash = "sha256-FLsG4wyuynmMUA2BXws3MGVVxAdEMWV2k7WGAxmbF4g=";
   };
   libbsc-src = fetchFromGitHub {
     owner = "IlyaGrebnov";
     repo = "libbsc";
-    rev = "4178579ff11d878863ea0d2758c125a0987d7b9b";
-    hash = "sha256-fcG7PStI9V4EhyW5USwIVn+FkHFTcuToKIFYXudDLHo=";
+    rev = "4d823bc57ca1ae6d39a74b244646ee545ff0dcea"; # v3.4.0
+    hash = "sha256-wVAKgCgxGiRYZWWvzoFRzngnorq6usuNYuNHq+tH5dY=";
   };
   zstd-src = fetchFromGitHub {
     owner = "facebook";
