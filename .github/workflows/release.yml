@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive, ref: "${{ env.TAG }}", fetch-depth: 0 }
+      # ci/make-dist.sh generates libarchive's configure; do not rely on
+      # the runner image happening to ship autotools.
+      - run: sudo apt-get install -yq --no-install-recommends autoconf automake libtool pkg-config
       - name: Create tarball with submodules
         run: sh ci/make-dist.sh "$TAG" . < /dev/null
       - uses: actions/upload-artifact@v4
