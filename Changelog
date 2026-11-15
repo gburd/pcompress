@@ -1,4 +1,4 @@
-== Unreleased ==
+== 4.2.1 Release ==
 Data corruption: archives made with -x, or at -l9 and above (which turn
   -x on), could hold a chunk that does not decode, depending on the bytes
   of executables in them. Compression reported success; extraction stops
@@ -7,12 +7,34 @@ Data corruption: archives made with -x, or at -l9 and above (which turn
   decoder is unchanged, so archives written now also extract with older
   releases. Archives already affected stay unreadable in that chunk; the
   checksum reports it. This was the intermittent archive failure in CI.
+libbsc: built with LIBBSC_NO_UNALIGNED_ACCESS on every host. GCC 16 at
+  -O3 vectorised libbsc's LZP match loop into aligned loads on unaligned
+  data, and -c libbsc at -l1 or -l3 (and adapt2, which may pick it)
+  crashed on some text. Speed is unchanged.
+Large files: the build passed -D_FILE_OFFSET_BITS=64 misspelled, so 32-bit
+  builds had a 32-bit off_t; a build now fails if off_t is not 64 bits.
+Signals: an interrupted semaphore wait is retried instead of returning
+  early, which could end an archive extraction as if the stream were done.
+Hang: decompressing a damaged file could hang instead of failing (about
+  1 in 25 runs on 4 CPUs). A worker left its loop when any chunk had
+  failed, stranding the chunk it had just been handed.
+Archive extraction names the real error when a chunk fails, instead of
+  only "Truncated tar archive", and no longer can leave the writer
+  waiting after the extractor closes.
+Library: pc_set_algorithm() copies the name; it kept the caller's pointer.
+Build: the bundled libarchive is configured without optional libraries
+  (zstd, lz4, libb2, lzo2, mbedtls, nettle, libmd, cng), so it never links
+  a system copy of them; CI checks this.
 Dependencies: libbsc 3.4.0 (fixes data corruption in libbsc's multithreaded
   compression, present since 3.1.0; not reproduced through pcompress, whose
   output is unchanged), lz4 and WavPack at upstream's newest commits.
   libarchive (3.8.10) and zstd were already current.
 Big-endian hosts: ./config builds without libbsc (it is little-endian only
   and 3.4 does not compile there); pcompress already refused it at run time.
+Release gate: ci/gate.sh, ci/remote-gate.sh, ci/xcompat.sh and
+  ci/pwcompat.sh (docs/PLATFORMS.md). Unit tests in CI run under a
+  watchdog that prints backtraces if one hangs; CI jobs time out at 60
+  minutes.
 Nightly CI builds with --portable so valgrind does not meet AVX-512.
 
 == 4.2.0 Release ==
