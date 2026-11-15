@@ -944,6 +944,13 @@ extern "C" {
  *    to the presumed address results in a zero result. This avoids a bunch of
  *    false positives.
  * 2) Store transformed values in big-endian format. This improves compression.
+ *
+ * Inverse_E89() has never visited byte 0, and it cannot tell an offset the
+ * forward pass skipped because it would wrap to zero from a converted one.
+ * So the forward pass starts at byte 1 and gives up on a buffer containing
+ * such an offset: that keeps every buffer it transforms decodable by the
+ * inverse in all releases.  Callers transform a copy, so giving up midway
+ * is safe.
  */
 int
 Forward_E89(uint8_t *src, uint64_t sz)
@@ -956,7 +963,7 @@ Forward_E89(uint8_t *src, uint64_t sz)
 	}
 
 	size = sz;
-	i = 0;
+	i = 1;
 	conversions = 0;
 	while (i < size-4) {
 		if ((src[i] & 0xfe) == 0xe8 &&
@@ -968,12 +975,12 @@ Forward_E89(uint8_t *src, uint64_t sz)
 			if (off > 0) {
 				off += i;
 				off &= 0xffffff;
-				if (off > 0) {
-					src[i+1] = (uint8_t)(off >> 16);
-					src[i+2] = (uint8_t)(off >> 8);
-					src[i+3] = (uint8_t)off;
-					conversions++;
-				}
+				if (off == 0)
+					return (-1);
+				src[i+1] = (uint8_t)(off >> 16);
+				src[i+2] = (uint8_t)(off >> 8);
+				src[i+3] = (uint8_t)off;
+				conversions++;
 			}
 		}
 		i++;
@@ -989,12 +996,13 @@ Inverse_E89(uint8_t *src, uint64_t sz)
 	uint32_t i;
 	uint32_t size;
 
-	if (sz > UINT32_MAX) {
+	/* Untrusted length: below 5 the start index wraps around. */
+	if (sz > UINT32_MAX || sz < 5) {
 		return (-1);
 	}
 
 	size = sz;
-	i = size-5;;
+	i = size-5;
 	while (i > 0) {
 		if ((src[i] & 0xfe) == 0xe8 &&
 		    (src[i+4] == 0 || src[i+4] == 0xff))

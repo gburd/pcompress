@@ -1,5 +1,5 @@
 /*
- * Unit tests for the LZP and DICT pre-filters: round trips, and that
+ * Unit tests for the LZP, DICT and E8E9 pre-filters: round trips, and that
  * corrupt or truncated encoded data is rejected without writing past
  * the output buffer (run under ASan to catch overruns).
  */
@@ -12,6 +12,7 @@
 #include <allocator.h>
 #include "lzp.h"
 #include "DictFilter.h"
+#include "filters/dispack/dis.hpp"
 #include "minunit.h"
 
 #define N	(256 * 1024)
@@ -95,12 +96,52 @@ MU_TEST(test_dict_roundtrip_and_corrupt)
 	mu_assert(dict_decode(enc, dl, dec, &ol) == -1, "dict_decode short dst must fail");
 }
 
+/* Put a CALL rel32 whose displacement is disp at b[i]. */
+static void
+put_call(unsigned char *b, uint32_t i, uint32_t disp)
+{
+	b[i] = 0xe8;
+	b[i + 1] = disp & 0xff;
+	b[i + 2] = (disp >> 8) & 0xff;
+	b[i + 3] = (disp >> 16) & 0xff;
+	b[i + 4] = 0;
+}
+
+/*
+ * Every buffer Forward_E89() transforms must come back from Inverse_E89().
+ * The two cases that did not: a call at byte 0 (the inverse never looks
+ * there), and a call whose offset wraps to zero (left unconverted by the
+ * forward pass, but rewritten by the inverse).
+ */
+MU_TEST(test_e8e9_roundtrip)
+{
+	unsigned char b[4096], orig[4096];
+	uint32_t i;
+
+	memset(b, 0x90, sizeof (b));
+	for (i = 64; i < 4000; i += 97)
+		put_call(b, i, 0x1234 + i);
+	put_call(b, 0, 0x4321);
+	memcpy(orig, b, sizeof (b));
+	mu_assert(Forward_E89(b, sizeof (b)) == 0, "E8E9 should transform calls");
+	mu_assert(Inverse_E89(b, sizeof (b)) == 0, "Inverse_E89");
+	mu_assert_mem_eq(orig, b, sizeof (b));
+
+	/* Offset 0x800 + 0xfff800 wraps to 0: the buffer is left alone. */
+	put_call(b, 0x800, 0xfff800);
+	mu_assert(Forward_E89(b, sizeof (b)) == -1, "wrapping offset must refuse");
+
+	/* Lengths the forward pass never produces are refused, not overrun. */
+	mu_assert(Inverse_E89(b, 4) == -1, "Inverse_E89 on 4 bytes");
+}
+
 MU_TEST_SUITE(suite_filters)
 {
 	MU_RUN_TEST(test_lzp_roundtrip);
 	MU_RUN_TEST(test_lzp_rejects_small_output);
 	MU_RUN_TEST(test_lzp_corrupt_never_overruns);
 	MU_RUN_TEST(test_dict_roundtrip_and_corrupt);
+	MU_RUN_TEST(test_e8e9_roundtrip);
 }
 
 int
