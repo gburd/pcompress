@@ -57,6 +57,13 @@
 extern "C" {
 #endif
 
+/*
+ * Archives and files over 2 GB need a 64-bit off_t. The build defines
+ * _FILE_OFFSET_BITS=64 for that (it was misspelled, without the leading
+ * underscore, until 4.2.1, which only mattered on 32-bit hosts).
+ */
+typedef char pc_off_t_is_64_bit[(sizeof (off_t) == 8) ? 1 : -1];
+
 #define	DATA_TEXT	1
 #define	DATA_BINARY	2
 #define	EIGHTM		(8UL * 1024UL * 1024UL)

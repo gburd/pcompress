@@ -269,7 +269,7 @@ BAKFILES = *~ lzma/*~ lzfx/*~ lz4/lib/*~ rabin/*~ bsdiff/*~ filters/lzp/*~ utils
 RM = rm -f
 RM_RF = rm -rf
 BASE_CPPFLAGS = -I. -I./include -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I./rabin -I./bsdiff -DNODEFAULT_PROPS \
-	-DFILE_OFFSET_BITS=64 -D_REENTRANT @SSE_INTRIN_FLAG@ -D_LZMA_PROB32 @ZSTD_CPPFLAGS@ \
+	-D_FILE_OFFSET_BITS=64 -D_REENTRANT @SSE_INTRIN_FLAG@ -D_LZMA_PROB32 @ZSTD_CPPFLAGS@ \
 	-I./filters/lzp @LIBBSCCPPFLAGS@ -I./crypto/skein -I./utils -I./crypto/sha2 \
 	-I./crypto/scrypt -I./crypto/aes -I./crypto @KEYLEN@ -I./rabin/global \
 	-I./crypto/keccak -I./filters/transpose -I./crypto/blake2 $(EXTRA_CPPFLAGS) \
