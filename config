@@ -651,8 +651,12 @@ if echo '__BYTE_ORDER__' | ${GCC} -E -P - 2>/dev/null | grep -q 4321; then
 	libbscgenopt=""
 	libbsccppflags=""
 fi
-# libbsc assumes unaligned loads are legal unless told otherwise.
-[ $is_x86 -eq 0 ] && [ $is_arm -eq 0 ] && bsc_endian_flag="-DLIBBSC_NO_UNALIGNED_ACCESS"
+# libbsc reads unaligned 8-byte words through plain pointer casts unless
+# told not to. That is undefined behaviour, and GCC 16 at -O3 turns one such
+# loop (the LZP match extension) into aligned 16-byte vector loads, which
+# fault on ordinary x86_64 input (pcompress -c libbsc -l3 on source text).
+# Its memcpy path is just as fast with current compilers: use it everywhere.
+bsc_endian_flag="-DLIBBSC_NO_UNALIGNED_ACCESS"
 if [ "$OS" = "SunOS" ]; then
 	if echo '__BYTE_ORDER__' | ${GCC} -E -P - 2>/dev/null | grep -q 4321; then
 		bsc_endian_flag="${bsc_endian_flag} -D__BIG_ENDIAN__"

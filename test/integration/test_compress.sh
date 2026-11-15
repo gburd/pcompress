@@ -111,6 +111,29 @@ for algo in lzfx lz4 zlib bzip2 lzma ppmd libbsc zstd none; do
 	done
 done
 
+# Real text through libbsc's LZP stage at the levels that use its small hash
+# tables (-l1 and -l3). Repetitive synthetic text never reaches the match
+# extension code; C source does. GCC 16 miscompiled that code (aligned
+# vector loads on unaligned data) until 4.2.1, and this segfaulted.
+if algo_available libbsc; then
+	src=$(cd "$(dirname "$0")/../.." && pwd)
+	srctxt=datafiles/source.dat
+	find "$src" -maxdepth 1 -name '*.c' -size -400k | LC_ALL=C sort | xargs cat > "$srctxt" 2>/dev/null
+	while [ "$(wc -c < "$srctxt")" -lt 4000000 ]; do cat "$srctxt" "$srctxt" > "$srctxt.2" && mv "$srctxt.2" "$srctxt"; done
+	for level in 1 3; do
+		label="libbsc/source-text/l${level}"
+		rm -f "$srctxt.pz" "$srctxt.out"
+		if $PCOMPRESS -c libbsc -l ${level} -t 1 -s 256k "$srctxt" 2>/dev/null &&
+		    $PCOMPRESS -d "$srctxt.pz" "$srctxt.out" 2>/dev/null && cmp -s "$srctxt" "$srctxt.out"; then
+			log_pass "$label"
+		else
+			log_fail "$label: round trip failed (status $?)"
+		fi
+		rm -f "$srctxt.pz" "$srctxt.out"
+	done
+	rm -f "$srctxt"
+fi
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"
