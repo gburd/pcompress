@@ -546,8 +546,9 @@ $(PUBLIC_TESTS:%=buildtmp/%): buildtmp/%: test/unit/%.c include/pcompress/pcompr
 	$(COMPILE) $(GEN_OPT) -Iinclude -I./test/unit test/unit/$*.c -o buildtmp/$*.o
 	$(LINK.PROG) -o $@ buildtmp/$*.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
 
+# TEST_WRAPPER runs each unit test, e.g. "sh ci/watchdog.sh 600" in CI.
 test-unit: test-unit-build $(PUBLIC_TESTS:%=buildtmp/%)
-	@for t in $(UNIT_TESTS) $(PUBLIC_TESTS); do buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
+	@for t in $(UNIT_TESTS) $(PUBLIC_TESTS); do $(TEST_WRAPPER) buildtmp/$$t || { echo "FAILED: buildtmp/$$t (exit $$?)"; exit 1; }; done
 
 test-integration: all
 	(cd test; sh run_all_tests.sh integration)

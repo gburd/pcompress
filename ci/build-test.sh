@@ -77,7 +77,7 @@ if [ "${PCOMPRESS_SANITIZE:-0}" = 1 ]; then
 fi
 
 say "unit tests"
-$MAKE test-unit
+$MAKE test-unit TEST_WRAPPER="sh $root/ci/watchdog.sh 600"
 
 say "integration tests"
 (cd test && sh run_all_tests.sh integration)

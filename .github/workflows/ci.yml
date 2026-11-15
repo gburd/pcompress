@@ -24,6 +24,7 @@ jobs:
   linux:
     name: "Linux ${{ matrix.arch }} / ${{ matrix.cc }}"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +42,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
             build-essential clang libomp-dev libssl-dev zlib1g-dev libbz2-dev \
-            autoconf automake libtool pkg-config yasm
+            autoconf automake libtool pkg-config yasm gdb
       - name: Build and test
         env: { CC: "${{ matrix.cc }}", CXX: "${{ matrix.cxx }}" }
         run: sh ci/build-test.sh full
@@ -64,6 +65,7 @@ jobs:
     name: "RPM ${{ matrix.image }} ${{ matrix.arch }}"
     needs: dist
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     container: { image: "${{ matrix.image }}" }
     strategy:
       fail-fast: false
@@ -88,6 +90,7 @@ jobs:
   macos:
     name: "macOS ${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -110,6 +113,7 @@ jobs:
   sanitizers:
     name: "ASan + UBSan"
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -173,6 +177,7 @@ jobs:
   nix:
     name: "Nix package (${{ matrix.runner }})"
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
