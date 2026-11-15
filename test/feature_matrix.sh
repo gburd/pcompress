@@ -109,8 +109,21 @@ done
 # Archive mode
 for l in 1 6 9 14; do
 	rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
-	if timeout 600 "$PC" -a -l$l tree a >c.log 2>&1 && timeout 600 "$PC" -d a.pz ax >d.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
-		pass=$((pass+1)); echo "PASS archive-l$l"; else fail=$((fail+1)); echo "FAIL archive-l$l"; tail -n 3 c.log d.log; fi
+	timeout 600 "$PC" -a -l$l tree a >c.log 2>&1; crc=$?
+	timeout 600 "$PC" -d a.pz ax >d.log 2>&1; drc=$?
+	if [ $crc -eq 0 ] && [ $drc -eq 0 ] && diff -r tree ax/tree >/dev/null 2>&1; then
+		pass=$((pass+1)); echo "PASS archive-l$l"
+	else
+		fail=$((fail+1)); echo "FAIL archive-l$l (compress rc=$crc, extract rc=$drc)"
+		cat c.log; head -n 20 d.log; diff -r tree ax/tree 2>&1 | head -3
+		# A bad archive, or an unlucky extraction? Extract the same file again.
+		find ax -delete 2>/dev/null; mkdir ax
+		if "$PC" -d a.pz ax >d2.log 2>&1 && diff -r tree ax/tree >/dev/null 2>&1; then
+			echo "  re-extracting the same archive succeeds: extraction-side race"
+		else
+			echo "  re-extracting also fails: the archive itself is bad"; head -n 5 d2.log
+		fi
+	fi
 done
 rm -f a.pz; find ax -delete 2>/dev/null; mkdir ax
 if timeout 600 "$PC" -a -c zstd -l6 -j -x tree a >c.log 2>&1 && "$PC" -i a.pz >d.log 2>&1 && grep -q num.dat d.log; then
