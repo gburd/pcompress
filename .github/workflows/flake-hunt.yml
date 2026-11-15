@@ -1,13 +1,19 @@
 name: Flake hunt
 
-# Manual: repeat the whole feature matrix on hosted runners to measure the
-# intermittent "Truncated tar archive" extraction failure (docs/PLATFORMS.md).
-# libarchive=old builds with the 4.1.0 libarchive (3.7.9) and its patch.
+# Manual: repeat a test many times on hosted runners to catch a rare
+# failure. test=feature-matrix repeats test/feature_matrix.sh (a failing
+# archive is re-extracted to tell a bad archive from a bad extraction).
+# Any other value names a unit test in buildtmp/, run under
+# ci/watchdog.sh so a hang prints every thread's backtrace (the rare
+# test_api hang in clang jobs). libarchive=old builds with the 4.1.0
+# libarchive (3.7.9) and its patch.
 on:
   workflow_dispatch:
     inputs:
       ref: { description: "commit or tag to test", required: true, default: "master" }
-      rounds: { description: "feature-matrix runs per job", required: true, default: "15" }
+      rounds: { description: "runs per job", required: true, default: "15" }
+      test: { description: "feature-matrix, or a unit test (e.g. test_api)", required: true, default: "feature-matrix" }
+      cc: { description: "gcc or clang", required: true, default: "gcc" }
       libarchive: { description: "new (as pinned) or old (3.7.9)", required: true, default: "new" }
 
 permissions:
@@ -15,14 +21,13 @@ permissions:
 
 jobs:
   hunt:
-    name: "${{ matrix.runner }} ${{ matrix.cc }} #${{ matrix.shard }} (libarchive ${{ inputs.libarchive }})"
+    name: "${{ matrix.runner }} ${{ inputs.cc }} ${{ inputs.test }} #${{ matrix.shard }} (libarchive ${{ inputs.libarchive }})"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
-        cc: [gcc]
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
@@ -35,18 +40,39 @@ jobs:
           git show v4.1.0:archive/patches/pcompress_libarchive.patch > archive/patches/pcompress_libarchive.patch
       - run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends build-essential libssl-dev \
-            zlib1g-dev libbz2-dev autoconf automake libtool pkg-config
-      - run: ./config --disable-wavpack && make -j"$(nproc)"
+          sudo apt-get install -yq --no-install-recommends build-essential clang libomp-dev \
+            libssl-dev zlib1g-dev libbz2-dev autoconf automake libtool pkg-config gdb
+      - name: Build
+        env:
+          CC: ${{ inputs.cc }}
+          CXX: ${{ inputs.cc == 'clang' && 'clang++' || 'g++' }}
+        run: ./config --disable-wavpack && make -j"$(nproc)" && make test-unit-build
       - name: Repeat the feature matrix
+        if: ${{ inputs.test == 'feature-matrix' }}
+        env: { N: "${{ inputs.rounds }}" }
         run: |
           set +e
           f=0
-          for i in $(seq 1 ${{ inputs.rounds }}); do
+          for i in $(seq 1 "$N"); do
             sh test/feature_matrix.sh "$PWD/pcompress" "/tmp/fm$i" > "/tmp/fm$i.log" 2>&1
             tail -n 1 "/tmp/fm$i.log"
             if grep -q '^FAIL' "/tmp/fm$i.log"; then
               f=$((f+1)); grep -A30 '^FAIL' "/tmp/fm$i.log" | head -60
             fi
           done
-          echo "runs with a failure: $f of ${{ inputs.rounds }}"
+          echo "runs with a failure: $f of $N"
+      - name: Repeat the unit test under the watchdog
+        if: ${{ inputs.test != 'feature-matrix' }}
+        env: { T: "${{ inputs.test }}", N: "${{ inputs.rounds }}" }
+        run: |
+          set +e
+          h=0
+          for i in $(seq 1 "$N"); do
+            sh ci/watchdog.sh 120 "buildtmp/$T" > /tmp/run.log 2>&1
+            rc=$?
+            if [ "$rc" != 0 ]; then
+              h=$((h+1)); echo "run $i: exit $rc"; tail -n 150 /tmp/run.log
+            fi
+          done
+          echo "runs that failed or hung: $h of $N"
+          [ "$h" = 0 ]
