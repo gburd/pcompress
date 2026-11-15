@@ -50,6 +50,20 @@ say "build (-j$JOBS)"
 $MAKE -j"$JOBS"
 ./pcompress -V
 
+# zstd, lz4 and libbsc are bundled; a dependency on a system copy means
+# the bundled libarchive picked one up from the build host.
+say "bundled libraries stay bundled"
+lib=$(ls libpcompress.so.1 libpcompress.1.dylib libpcompress.dylib 2>/dev/null | head -1 || true)
+if [ -n "$lib" ]; then
+	if command -v otool >/dev/null 2>&1; then deps=$(otool -L "$lib"); else deps=$(ldd "$lib" 2>/dev/null || true); fi
+	if echo "$deps" | grep -E 'lib(zstd|lz4|bsc|b2|lzo2|nettle|mbedcrypto|md)\.' >/dev/null; then
+		echo "$lib links a system copy of a bundled or unused library:" >&2
+		echo "$deps" | grep -E 'lib(zstd|lz4|bsc|b2|lzo2|nettle|mbedcrypto|md)\.' >&2
+		exit 1
+	fi
+	echo "ok: $lib"
+fi
+
 if [ "${PCOMPRESS_SANITIZE:-0}" = 1 ]; then
 	export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:halt_on_error=1
 	export LSAN_OPTIONS=suppressions=$root/ci/lsan.supp:print_suppressions=0

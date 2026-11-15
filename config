@@ -1348,7 +1348,7 @@ echo "*************** Running configure in libarchive ****************"
  fi
  # libarchive runs on our threads: it needs the thread-safe errno etc.
  # (illumos/Solaris use a global errno without -D_REENTRANT).
- CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT" ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-iconv --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
+ CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT" ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-iconv --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --without-zstd --without-lz4 --without-libb2 --without-lzo2 --without-cng --without-mbedtls --without-nettle --without-md --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
  [ $? -ne 0 ] && exit $?
  sed '
 s@$(BUILT_SOURCES)@@
@@ -1362,8 +1362,12 @@ then
 	echo "********* Configure in internal libarchive failed!"
 	exit 1
 fi
-# libarchive's configure links whatever optional libs it finds (libacl,
-# libzstd, liblz4, libmd ...); the static archive needs them on our link line.
+# pcompress only reads and writes uncompressed PAX streams, so every
+# compression, hash and crypto library libarchive can use is switched off
+# above: otherwise it links whatever the build host happens to have (the
+# 4.2.0 build on Debian pulled in the system libzstd). What remains
+# (libacl, libattr where present) is needed for ACL/xattr support, and the
+# static archive needs it on our link line.
 la_libs=$(sed -n 's/^LIBS = //p' $libarchive_dir/Makefile)
 extra_ld_flags="${extra_ld_flags} ${la_libs}"
 echo "*************** Finished configure in libarchive ****************"
