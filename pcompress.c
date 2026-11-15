@@ -741,6 +741,7 @@ redo:
 			log_msg(LOG_ERR, 0, "Chunk %d, Decryption failed", tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->cmp_done_sem);
 			return (NULL);
 		}
@@ -965,9 +966,15 @@ redo:
 
 cont:
 	Sem_Post(&tdat->cmp_done_sem);
-	if (!__atomic_load_n(&pctx->t_errored, __ATOMIC_RELAXED))
-		goto redo;
-	return (NULL);
+	/*
+	 * Do not leave on another chunk's error (t_errored). Between the post
+	 * above and this point the writer may write this chunk and the main
+	 * thread hand this worker the next one, C; if a later chunk fails
+	 * meanwhile, leaving strands C, and the writer (in order) waits for it
+	 * forever. That hung about 1 in 40 test_api runs on 4-CPU runners.
+	 * The cancel check after start_sem ends this loop instead.
+	 */
+	goto redo;
 }
 
 /*
