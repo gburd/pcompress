@@ -1,4 +1,12 @@
 == Unreleased ==
+Data corruption: archives made with -x, or at -l9 and above (which turn
+  -x on), could hold a chunk that does not decode, depending on the bytes
+  of executables in them. Compression reported success; extraction stops
+  with "Chunk N, checksums do not match". The E8E9 filter's encoder could
+  change bytes its decoder does not restore. It no longer does, and the
+  decoder is unchanged, so archives written now also extract with older
+  releases. Archives already affected stay unreadable in that chunk; the
+  checksum reports it. This was the intermittent archive failure in CI.
 Dependencies: libbsc 3.4.0 (fixes data corruption in libbsc's multithreaded
   compression, present since 3.1.0; not reproduced through pcompress, whose
   output is unchanged), lz4 and WavPack at upstream's newest commits.

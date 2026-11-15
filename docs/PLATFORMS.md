@@ -65,18 +65,3 @@ No build or test runs on a developer workstation.
 - **Windows hosts** are wina (Windows 11 ARM64, formerly santorini) and
   wini (Windows 11 x64). There is nothing to run on them until the port
   exists.
-
-## Known intermittent failure
-
-Two CI runs in the 4.2.0 cycle (`5fd4e2f` Linux arm64/clang, `debff08`
-Linux x86_64/gcc) each failed one feature-matrix case: extracting an
-archive made with `-j -x` ended with "End of file when extracting
-archive ... Truncated tar archive detected while reading data". The
-extractor saw end of stream early, which points at the writer/extractor
-handoff in `archive/pc_archive.c` (`archiver_write()` and
-`extract_read_callback()`). It has not reproduced in 3,800+ repeats:
-EC2, all five hardware hosts, and `.github/workflows/flake-hunt.yml` on
-hosted runners for both 4.2.0 and 4.1.0 (600 each). Whether 4.1.0 has it
-is therefore unknown. The flake-hunt workflow re-extracts a failing
-archive, to tell a bad archive from an extraction race, and should be
-run again if it recurs.
