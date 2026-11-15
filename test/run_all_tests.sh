@@ -47,11 +47,14 @@ run_section() {
 
 # --- Unit Tests ---
 run_unit_tests() {
-	for t in test_compress test_xxhash test_crc test_slab test_blake2 test_sha2 test_api test_filters test_crypto test_algos; do
+	# The list lives in one place, the Makefile (UNIT_TESTS, PUBLIC_TESTS).
+	_tests=$(sed -n 's/^\(UNIT\|PUBLIC\)_TESTS = //p' "${BUILD_DIR}/Makefile.in" | tr '\n' ' ')
+	[ -n "$_tests" ] || { echo "FAIL: no UNIT_TESTS in Makefile.in"; total_fail=$((total_fail + 1)); return; }
+	for t in $_tests; do
 		if [ -x "${BUILD_DIR}/buildtmp/$t" ]; then
 			run_section "Unit: $t" "${BUILD_DIR}/buildtmp/$t"
 		else
-			echo "FAIL: $t not built (run 'make test-unit-build')"
+			echo "FAIL: $t not built (run 'make test-unit')"
 			total_fail=$((total_fail + 1))
 		fi
 	done

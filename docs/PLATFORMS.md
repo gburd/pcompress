@@ -8,7 +8,7 @@ failure there stops the release.
 
 | OS | Family | x86_64 | aarch64 | riscv64 | sparcv9 |
 |----|--------|--------|---------|---------|---------|
-| Linux | Debian/Ubuntu | gated: CI (Ubuntu 22.04, 24.04; gcc, clang), Codeberg CI (Debian trixie), EC2 | gated: CI (Ubuntu 24.04 arm; gcc, clang) | gated: lixr (Bianbu), rv (Ubuntu 24.04) | n/a |
+| Linux | Debian/Ubuntu | gated: CI (Ubuntu 22.04, 24.04; gcc, clang), Codeberg CI (Debian trixie) | gated: CI (Ubuntu 24.04 arm; gcc, clang) | gated: lixr (Bianbu), rv (Ubuntu 24.04) | n/a |
 | Linux | RPM (Fedora, RHEL) | gated: CI (Fedora, Rocky 9) | gated: CI (Fedora, Rocky 9) | not tested | n/a |
 | Linux | NixOS / Nix | gated: CI `nix build` (gcc, clang), meh (NixOS) | gated: CI `nix build` | not tested | n/a |
 | macOS | | gated: CI (macos-15-intel) | gated: CI (macos-15) | n/a | n/a |
@@ -21,17 +21,30 @@ failure there stops the release.
 ## Release gate
 
 A tag is cut only when all of these pass on the release commit, from the
-release tarball (`ci/make-dist.sh`) where the host builds from source:
+release tarball (`ci/make-dist.sh`) where the host builds from source.
+Everything needed is in `ci/`:
 
-1. GitHub CI and Codeberg CI green (every row above marked CI).
-2. EC2 x86_64 gate: `make check`, the feature matrix (322 cases), ASan and
-   UBSan `make check`, TSan on the concurrency tests, `make abi-check`,
-   34 cross-version cases against the previous release, `nix build`.
-3. RISC-V (lixr and rv) and big-endian SPARC (sun): `make check`,
-   the feature matrix, and the installed-library examples
-   (`/tmp/remote_qual.sh`, kept by the maintainer).
-4. NixOS (meh): `nix build` of the flake with gcc and clang, and
+- `ci/gate.sh <tarball> [previous-release-tarball]` runs one host's gate:
+  `ci/build-test.sh full` (unit, integration, backward-compatibility
+  references, examples, feature matrix), the installed library with the
+  examples, ASan+UBSan and TSan where clang has them, `make abi-check`
+  where libabigail is installed, and `ci/xcompat.sh` and `ci/pwcompat.sh`
+  against the previous release. Its last line is `gate: PASS` or
+  `gate: FAIL (...)`.
+- `ci/remote-gate.sh <tarball> [previous-tarball] host...` runs that on
+  each host over ssh in a temporary `/scratch` directory, then removes it.
+
+Steps:
+
+1. GitHub CI and Codeberg CI green on the release commit (every row above
+   marked CI, including ASan+UBSan and the ABI check).
+2. `ci/remote-gate.sh` passes on rv and lixr (RISC-V), sun (big-endian
+   SPARC) and meh (x86_64, NixOS), with the previous release's tarball so
+   the cross-version checks run.
+3. NixOS (meh): `nix build` of the flake with gcc and clang, and
    `nix flake check`.
+
+No build or test runs on a developer workstation.
 
 ## Gaps
 
@@ -49,9 +62,9 @@ release tarball (`ci/make-dist.sh`) where the host builds from source:
 - **Only one SPARC host.** sun and icarus are the same machine (two
   names, one hostid), so big-endian coverage has a single point of
   failure.
-- **Windows host santorini** exists in the fleet but is not reachable
-  over SSH at the time of writing, and there is nothing to run on it
-  until the port exists.
+- **Windows hosts** are wina (Windows 11 ARM64, formerly santorini) and
+  wini (Windows 11 x64). There is nothing to run on them until the port
+  exists.
 
 ## Known intermittent failure
 
