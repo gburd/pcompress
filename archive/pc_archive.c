@@ -350,8 +350,20 @@ extract_read_callback(struct archive *arc, void *ctx, const void **buf)
 	}
 
 	if (pctx->arc_buf == NULL || pctx->arc_buf_size == 0) {
+		/*
+		 * Say which of the ways to get here this was. A closed stream is
+		 * the normal end (an error only if the tar reader still expected
+		 * data); a wake-up with nothing closed and nothing handed over is
+		 * a broken handoff between the writer and this thread.
+		 */
+		int closed = __atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED);
+
+		log_msg(LOG_ERR, 0, "End of file when extracting archive (%s; buffer %s, "
+		    "size %" PRIu64 ", %s).", closed ? "stream closed by the writer" :
+		    "woken with no data and the stream still open",
+		    pctx->arc_buf ? "set" : "NULL", pctx->arc_buf_size,
+		    pctx->arc_writing ? "after a buffer" : "before the first buffer");
 		pctx->arc_buf_size = 0;
-		log_msg(LOG_ERR, 0, "End of file when extracting archive.");
 		archive_set_error(arc, ARCHIVE_EOF, "End of file when extracting archive.");
 		return (-1);
 	}
