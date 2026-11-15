@@ -845,6 +845,10 @@ redo:
 		} else {
 			if (_chunksize > dedupe_data_sz_cmp) {	/* stored: sizes must agree */
 				tdat->len_cmp = 0;
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "ERROR: Chunk %d, stored data size %" PRIu64
+				    " exceeds its length %" PRIu64 ".", tdat->id, (uint64_t)_chunksize,
+				    (uint64_t)dedupe_data_sz_cmp);
 				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 				goto cont;
 			}
@@ -2013,8 +2017,12 @@ uncomp_done:
 			 * that will never come: signal end of stream first
 			 * (a no-op if the writer already did).
 			 */
-			if (err)
+			if (err) {
+				/* The extractor's "End of file" that follows is this, not its own fault. */
+				log_msg(LOG_ERR, 0, "Decompression failed (see above): "
+				    "ending archive extraction.");
 				archiver_close(pctx);
+			}
 			pthread_join(pctx->archive_thread, NULL);
 			pctx->archive_thread_started = 0;
 		} else if (pctx->archive_ctx) {

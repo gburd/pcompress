@@ -294,11 +294,16 @@ extract_close_callback(struct archive *arc, void *ctx)
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
 	__atomic_store_n(&pctx->arc_closed, 1, __ATOMIC_RELAXED);
-	if (pctx->arc_buf) {
-		Sem_Post(&(pctx->write_sem));
-	} else {
+	/*
+	 * Always release the writer. If it is past archiver_write()'s closed
+	 * check but has not published its buffer yet, arc_buf is still NULL
+	 * here; skipping the post then left it waiting on write_sem forever.
+	 * An extra post when nobody waits is harmless: archiver_write() sees
+	 * arc_closed on its next call and returns at once.
+	 */
+	if (pctx->arc_buf == NULL)
 		pctx->arc_buf_size = 0;
-	}
+	Sem_Post(&(pctx->write_sem));
 	return (ARCHIVE_OK);
 }
 
