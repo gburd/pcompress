@@ -49,7 +49,11 @@ for pw in s3cret12 abcdefghijklmn abcdefghijklmno abcdefghijklmnop \
 			enc "$NEW" "$c" "$pw" && dec "$OLD" "$pw" && ok "new->old $c len=$n" || no "new->old $c len=$n"
 		fi
 		enc "$NEW" "$c" "$pw"
-		if dec "$NEW" "${pw}x"; then no "wrong password accepted $c len=$n"; else ok "wrong password refused $c len=$n"; fi
+		# Differ in the first byte: an appended byte can land inside the
+		# 15-byte legacy reading (a 15-byte password plus one extra byte is
+		# a 17-byte file, read by the 4.1.0 rule as the first 15 bytes).
+		wrong="Z$(printf '%s' "$pw" | cut -c2-)"
+		if dec "$NEW" "$wrong"; then no "wrong password accepted $c len=$n"; else ok "wrong password refused $c len=$n"; fi
 		if [ "$n" -gt 16 ]; then
 			prefix=$(printf '%s' "$pw" | cut -c1-15)
 			if dec "$NEW" "${prefix}ZZZZZZZZ"; then no "15-byte prefix accepted $c len=$n"

@@ -65,7 +65,7 @@ inst() {
 	cd "$SRC" && $MAKE install DESTDIR="$W/inst" PREFIX=/usr/local &&
 	PKG_CONFIG_SYSROOT_DIR="$W/inst" PKG_CONFIG_LIBDIR="$W/inst/usr/local/lib/pkgconfig" &&
 	export PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_LIBDIR &&
-	cc=${CC:-cc} && rp="-Wl,-rpath,$W/inst/usr/local/lib" &&
+	cc=${CC:-$(command -v cc || command -v gcc || command -v clang)} && rp="-Wl,-rpath,$W/inst/usr/local/lib" &&
 	{ [ "$(uname -s)" != SunOS ] || rp="-Wl,-R,$W/inst/usr/local/lib"; } &&
 	$cc $(pkg-config --cflags libpcompress) examples/pzcat.c -o "$W/pzcat" $(pkg-config --libs libpcompress) $rp &&
 	"$W/pzcat" -c < README.md > "$W/r.pz" && "$W/pzcat" < "$W/r.pz" | cmp - README.md &&
@@ -82,10 +82,11 @@ inst() {
 step installed install.log inst
 
 # 3. Sanitizers, in their own copies of the tree.
-san_ok() {	# san_ok <flag>: can clang link a program with this sanitizer?
+san_ok() {	# san_ok <flag>: can clang build an OpenMP program with this sanitizer?
 	command -v clang > /dev/null 2>&1 || return 1
-	printf 'int main(void){return 0;}\n' > "$W/t.c"
-	clang -fsanitize="$1" "$W/t.c" -o "$W/t" > /dev/null 2>&1 && "$W/t"
+	# pcompress needs OpenMP; clang without libomp cannot build it at all.
+	printf '#include <omp.h>\nint main(void){return omp_get_max_threads() < 1;}\n' > "$W/t.c"
+	clang -fopenmp -fsanitize="$1" "$W/t.c" -o "$W/t" > /dev/null 2>&1 && "$W/t"
 }
 if san_ok address,undefined; then
 	asan() {
@@ -94,17 +95,20 @@ if san_ok address,undefined; then
 	}
 	step asan asan.log asan
 else
-	skip asan "no clang with ASan/UBSan here"
+	skip asan "no clang with ASan/UBSan and OpenMP here"
 fi
-if san_ok thread; then
+# OpenMP needs libarcher (LLVM's TSan annotations for libomp): without it
+# every parallel region reports races that are not there.
+archer=$(clang -print-file-name=libarcher.so 2>/dev/null || true)
+case $archer in /*) ;; *) archer="" ;; esac
+if [ -z "$archer" ]; then
+	skip tsan "no libarcher.so for clang (TSan cannot see OpenMP's synchronisation without it)"
+elif san_ok thread; then
 	tsan() {
 		d=$(unpack "$TB" "$W/tsan") && cd "$d" &&
 		CC=clang CXX=clang++ CFLAGS="-fsanitize=thread -g -O1" LDFLAGS="-fsanitize=thread" \
 		    ./config $CFG && $MAKE -j"$JOBS" && $MAKE test-unit-build buildtmp/test_public buildtmp/test_chunk || return 1
-		# OpenMP needs libarcher (LLVM's TSan annotations) or every
-		# parallel region reports races that are not there.
-		arch=$(clang -print-file-name=libarcher.so)
-		[ -f "$arch" ] && OMP_TOOL_LIBRARIES=$arch && export OMP_TOOL_LIBRARIES
+		OMP_TOOL_LIBRARIES=$archer; export OMP_TOOL_LIBRARIES
 		TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1"; export TSAN_OPTIONS
 		for t in test_reentrant test_api test_public test_chunk test_sem; do
 			echo "== $t"; buildtmp/$t || return 1
@@ -112,7 +116,7 @@ if san_ok thread; then
 	}
 	step tsan tsan.log tsan
 else
-	skip tsan "no clang with TSan here"
+	skip tsan "no clang with TSan and OpenMP here"
 fi
 
 # 4. ABI.

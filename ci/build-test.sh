@@ -50,15 +50,21 @@ say "build (-j$JOBS)"
 $MAKE -j"$JOBS"
 ./pcompress -V
 
-# zstd, lz4 and libbsc are bundled; a dependency on a system copy means
-# the bundled libarchive picked one up from the build host.
+# zstd, lz4 and libbsc are bundled; a direct dependency on a system copy
+# means the bundled libarchive picked one up from the build host. Only the
+# library's own NEEDED entries count: ldd also lists what its dependencies
+# need (Debian's libcrypto pulls in libzstd, illumos's libnsl libmd).
 say "bundled libraries stay bundled"
 lib=$(ls libpcompress.so.1 libpcompress.1.dylib libpcompress.dylib 2>/dev/null | head -1 || true)
 if [ -n "$lib" ]; then
-	if command -v otool >/dev/null 2>&1; then deps=$(otool -L "$lib"); else deps=$(ldd "$lib" 2>/dev/null || true); fi
-	if echo "$deps" | grep -E 'lib(zstd|lz4|bsc|b2|lzo2|nettle|mbedcrypto|md)\.' >/dev/null; then
+	if command -v otool >/dev/null 2>&1; then deps=$(otool -L "$lib")
+	elif command -v elfdump >/dev/null 2>&1; then deps=$(elfdump -d "$lib" | grep NEEDED)
+	elif command -v readelf >/dev/null 2>&1; then deps=$(readelf -d "$lib" | grep NEEDED)
+	else deps=$(objdump -p "$lib" 2>/dev/null | grep NEEDED || true); fi
+	bad=$(echo "$deps" | grep -E 'lib(zstd|lz4|bsc|b2|lzo2|nettle|mbedcrypto|md)\.' || true)
+	if [ -n "$bad" ]; then
 		echo "$lib links a system copy of a bundled or unused library:" >&2
-		echo "$deps" | grep -E 'lib(zstd|lz4|bsc|b2|lzo2|nettle|mbedcrypto|md)\.' >&2
+		echo "$bad" >&2
 		exit 1
 	fi
 	echo "ok: $lib"
