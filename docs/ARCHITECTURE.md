@@ -92,7 +92,7 @@ pcompress/
 |-- pcompress.h               Main public API and data structures
 |-- adaptive_compress.c       Adaptive mode: auto-select algo per chunk
 |-- meta_stream.c/h           Metadata stream handling (pathname metadata)
-|-- allocator.c/h             Slab allocator for repeated similar allocations
+|-- allocator.c/h             malloc/free wrappers (slab_alloc names kept)
 |
 |-- archive/
 |   |-- pc_archive.c/h        PAX archiving via libarchive

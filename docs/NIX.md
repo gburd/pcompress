@@ -58,7 +58,7 @@ The development shell includes:
 
 **Build Tools:**
 - GCC and Clang compilers
-- pkg-config, CMake, Make
+- pkg-config, Make
 - Yasm assembler
 - autotools (autoconf, automake)
 
