@@ -4240,7 +4240,9 @@ pc_set_algorithm(pc_ctx_t *ctx, const char *name)
 {
 	if (name == NULL || init_algo(ctx, name, 1) != 0)
 		return (bad_arg(ctx, "algorithm", name));
-	ctx->algo = name;	/* shortcut: kept by reference; callers pass literals */
+	/* Copied: the caller may free or reuse its string. Known names fit. */
+	snprintf(ctx->algo_name, sizeof (ctx->algo_name), "%s", name);
+	ctx->algo = ctx->algo_name;
 	return (0);
 }
 

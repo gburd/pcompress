@@ -89,6 +89,40 @@ roundtrip(const char *algo, int level, int dedupe, const char *enc, const char *
 	return (same(src, out) ? 0 : -3);
 }
 
+/*
+ * pc_set_algorithm() must copy the name: a caller that reads it from a
+ * config file frees its buffer. Here the buffer is scribbled over and
+ * freed before the job runs; it still has to compress with lz4 (and under
+ * ASan the old by-reference code is a use-after-free).
+ */
+MU_TEST(test_pub_algorithm_name_copied)
+{
+	pc_ctx_t *c = pc_new();
+	char *name = malloc(16);
+	unsigned char hdr[8];
+	int in, o, rv;
+	FILE *f;
+
+	mu_assert(c != NULL && name != NULL, "setup");
+	strcpy(name, "lz4");
+	mu_assert_int_eq(0, pc_set_algorithm(c, name));
+	memset(name, 'z', 15);
+	name[15] = '\0';
+	free(name);
+	in = open(src, O_RDONLY);
+	o = open(cmp_, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	rv = pc_compress_fd(c, in, o);
+	close(in);
+	close(o);
+	pc_free(c);
+	mu_assert_int_eq(0, rv);
+	/* The stream header starts with the algorithm name. */
+	f = fopen(cmp_, "rb");
+	mu_assert(f != NULL && fread(hdr, 1, sizeof (hdr), f) == sizeof (hdr), "read header");
+	fclose(f);
+	mu_assert(memcmp(hdr, "lz4", 4) == 0, "stream was not written with lz4");
+}
+
 MU_TEST(test_pub_version)
 {
 	mu_assert_int_eq(PC_API_VERSION, pc_api_version());
@@ -240,6 +274,7 @@ MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
 	MU_RUN_TEST(test_pub_roundtrips);
+	MU_RUN_TEST(test_pub_algorithm_name_copied);
 	MU_RUN_TEST(test_pub_password_not_wiped);
 	MU_RUN_TEST(test_pub_long_password);
 	MU_RUN_TEST(test_pub_wrong_password);

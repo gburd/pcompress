@@ -410,6 +410,7 @@ struct pc_ctx {
 	size_t pw_copy_len;
 	unsigned char chunk_key[32];	/* pc_set_key(): raw key for chunk objects */
 	int chunk_key_set;
+	char algo_name[ALGO_SZ + 1];	/* pc_set_algorithm() copy; algo points here */
 };
 
 /**

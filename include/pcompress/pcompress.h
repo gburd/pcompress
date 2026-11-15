@@ -97,6 +97,7 @@ void pc_free(pc_ctx_t *ctx);
 /**
  * Compression algorithm: "zstd", "lz4", "lzma", "lzmaMt", "bzip2", "zlib",
  * "ppmd", "lzfx", "libbsc", "adapt", "adapt2" or "none". Default "zstd".
+ * The name is copied; the caller's string need not outlive the call.
  * @return 0, or -1 (PC_ERR_ARGS) for an unknown name.
  */
 int pc_set_algorithm(pc_ctx_t *ctx, const char *name);
