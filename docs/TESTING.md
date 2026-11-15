@@ -52,6 +52,7 @@ use a minimal test framework (`test/unit/minunit.h`).
 | `test_xxhash`   | `test/unit/test_xxhash.c`   | xxHash KATs and dispatch           |
 | `test_crc`      | `test/unit/test_crc.c`      | CRC32/CRC64 correctness            |
 | `test_slab`     | `test/unit/test_slab.c`     | Allocation wrappers                |
+| `test_sem`      | `test/unit/test_sem.c`      | Sem_Wait keeps waiting through signals |
 | `test_blake2`   | `test/unit/test_blake2.c`   | BLAKE2b/BLAKE2bp RFC 7693 KATs     |
 | `test_sha2`     | `test/unit/test_sha2.c`     | SHA-512, SHA-512/256 KATs          |
 | `test_api`      | `test/unit/test_api.c`      | libpcompress public API contract   |

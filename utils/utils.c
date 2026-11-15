@@ -803,7 +803,12 @@ Sem_Post(Sem_t *sem)
 int
 Sem_Wait(Sem_t *sem)
 {
-	return (sem_wait(sem->sem1));
+	int rv;
+
+	/* A handled signal must not end the wait early (see the Linux variant). */
+	while ((rv = sem_wait(sem->sem1)) == -1 && errno == EINTR)
+		;
+	return (rv);
 }
 
 #else
@@ -829,7 +834,17 @@ Sem_Post(Sem_t *sem)
 int
 Sem_Wait(Sem_t *sem)
 {
-	return (sem_wait(&sem->sem));
+	int rv;
+
+	/*
+	 * sem_wait() returns EINTR when a handled signal arrives, even with
+	 * SA_RESTART. No caller checks the result, so an early return would
+	 * let a thread run on as if the other side had posted: for example
+	 * the archive extractor finding no buffer and ending the extraction.
+	 */
+	while ((rv = sem_wait(&sem->sem)) == -1 && errno == EINTR)
+		;
+	return (rv);
 }
 #endif
 
