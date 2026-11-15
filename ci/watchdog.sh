@@ -16,9 +16,14 @@ while kill -0 "$pid" 2> /dev/null; do
 	if [ "$t" -ge "$limit" ]; then
 		echo "watchdog: '$*' still running after ${limit}s; backtraces follow" >&2
 		if command -v gdb > /dev/null 2>&1; then
-			# Yama may forbid tracing a sibling; CI runners allow sudo.
-			gdb -batch -p "$pid" -ex 'thread apply all bt' 2>&1 ||
+			# Yama (ptrace_scope 1) stops a non-root gdb attaching to a
+			# process it did not start, and gdb still exits 0 then.
+			# CI runners have passwordless sudo; elsewhere try as is.
+			if sudo -n true 2> /dev/null; then
 				sudo -n gdb -batch -p "$pid" -ex 'thread apply all bt' 2>&1
+			else
+				gdb -batch -p "$pid" -ex 'thread apply all bt' 2>&1
+			fi
 		else
 			echo "watchdog: no gdb here" >&2
 		fi
