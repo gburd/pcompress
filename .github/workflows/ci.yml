@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   linux:
-    name: "Linux ${{ matrix.arch }} / ${{ matrix.cc }}"
+    name: "Linux ${{ matrix.arch }} / ${{ matrix.cc }}${{ matrix.opts && format(' {0}', matrix.opts) || '' }}"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -34,6 +34,8 @@ jobs:
           - { runner: ubuntu-22.04, arch: x86_64, cc: gcc, cxx: g++ }
           - { runner: ubuntu-24.04-arm, arch: arm64, cc: gcc, cxx: g++ }
           - { runner: ubuntu-24.04-arm, arch: arm64, cc: clang, cxx: clang++ }
+          - { runner: ubuntu-24.04, arch: x86_64, cc: gcc, cxx: g++, opts: --enable-lto }
+          - { runner: ubuntu-24.04, arch: x86_64, cc: clang, cxx: clang++, opts: --enable-lto }
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -42,10 +44,10 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
             build-essential clang libomp-dev libssl-dev zlib1g-dev libbz2-dev \
-            autoconf automake libtool pkg-config yasm gdb
+            autoconf automake libtool pkg-config yasm gdb lld
       - name: Build and test
         env: { CC: "${{ matrix.cc }}", CXX: "${{ matrix.cxx }}" }
-        run: sh ci/build-test.sh full
+        run: sh ci/build-test.sh full ${{ matrix.opts }}
 
   dist:
     name: "Release tarball"

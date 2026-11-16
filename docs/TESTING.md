@@ -234,8 +234,10 @@ sh test/run_all_tests.sh legacy
 ```
 
 `make coverage` runs the unit tests, the integration suite and the quick
-feature matrix under gcov, then writes `coverage.info` and an HTML report
-under `coverage/`. Third-party trees (lz4, zstd, libbsc, libarchive, the
+feature matrix under gcov, then writes `coverage.info` (lcov format; run
+`genhtml coverage.info -o coverage` for an HTML report) and prints the
+line, function and branch totals. The nightly workflow runs it ("Coverage
+(gcov)"). Third-party trees (lz4, zstd, libbsc, libarchive, the
 LZMA SDK, reference crypto code, packJPG/packPNM/dispack/dict) are
 excluded, so the figure covers pcompress's own code only. Re-run
 `./config` after `Makefile.in` changes so that new tests are included.
