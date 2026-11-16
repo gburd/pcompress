@@ -59,7 +59,7 @@ with the existing `.pz` file format.
   - pcompress(1) man page and DESIGN.md
 
   In Progress:
-  - macOS and FreeBSD validation; native Windows port
+  - FreeBSD validation; an MSVC build (MSYS2/MinGW-w64 builds work)
 
 See `docs/MIGRATION_v4.md` for upgrade details and `docs/ARCHITECTURE.md`
 for the system design overview.
@@ -95,6 +95,19 @@ library directory; then `make install LIBDIR=...`), `--enable-lto`,
 With Nix: `nix build` (runs the test suite in the sandbox) or
 `nix develop` for a shell with every tool; see `docs/NIX.md`.
 
+On Windows, build in an MSYS2 CLANG64 (x86_64) or CLANGARM64 (ARM64)
+shell. Install the toolchain and libraries, then build as above:
+
+    pacman -S make autotools patch diffutils perl
+    pacboy -S clang:p llvm-openmp:p openssl:p zlib:p bzip2:p pkgconf:p
+    CC=clang CXX=clang++ ./config --disable-wavpack
+    make -j && make check
+
+This gives `buildtmp/pcompress.exe` and `buildtmp/libpcompress-1.dll`,
+which must stay next to each other (or the DLL must be on `PATH`).
+Archives made on Windows do not keep symbolic links, owners or POSIX
+permissions; see `docs/PLATFORMS.md`.
+
 Platforms
 ---------
 
@@ -103,10 +116,10 @@ Tested on x86-64 (GCC, Clang, both with LTO), AArch64 (Graviton4,
 GCC 13). Archives are byte-order independent: a file written on one
 architecture decompresses on any other. libbsc is not available on
 big-endian hosts (upstream libbsc is little-endian only, and is left out
-of the build there). The core
-compressors also build with MSVC on Windows ARM64, but a full Windows port
-(POSIX semaphores, mmap, fork-free I/O) has not been done. The supported
-matrix and the release gate are in `docs/PLATFORMS.md`.
+of the build there). Windows 11 (x86_64 and ARM64) builds with MSYS2 and
+MinGW-w64; the core compressors also build with MSVC, the program and
+library do not yet. The supported matrix and the release gate are in
+`docs/PLATFORMS.md`.
 
 Documentation: `pcompress(1)` (`man ./pcompress.1`) for usage, and
 `DESIGN.md` for the stream format, threading model and invariants.

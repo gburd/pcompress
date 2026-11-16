@@ -1,4 +1,10 @@
 == Unreleased ==
+Windows: pcompress builds on Windows 11, x86_64 and ARM64, with MSYS2 and
+  the MinGW-w64 clang toolchain: pcompress.exe and libpcompress-1.dll (the
+  public API only), tested in CI. File I/O is binary throughout, archive
+  mode walks directories, the password prompt does not echo. Archives do
+  not keep symbolic links, owners or POSIX permissions there. No MSVC
+  build yet.
 Archives: on Linux, file types were not recognised from their contents
   (ELF and PE executables, BMP, COFF, DOS COM, TZif, PPMd, WavPack), only
   from their names, since 2013: pc_archive.c asks for strict X/Open, which
