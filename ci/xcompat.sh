@@ -41,6 +41,12 @@ one() {
 		if "$r" -d $dextra "$W/in.pz" "$W/out" > /dev/null 2>> "$W/err" &&
 		    cmp -s "$W/in" "$W/out"; then ok "$label"; return; fi
 	fi
+	# Releases before 4.3 cannot read encrypted files from 4.3 on (format
+	# version 11): from those, only a clean refusal counts as a pass.
+	if [ "$w" = "$NEW" ] && [ -n "$extra" ] &&
+	    grep -q 'Cannot handle newer archive version 11' "$W/err"; then
+		ok "$label (refused: older release)"; return
+	fi
 	no "$label"
 }
 

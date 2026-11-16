@@ -1106,10 +1106,10 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	/*
 	 * Check for ridiculous values (malicious tampering or otherwise).
 	 */
-	if (version > VERSION) {
+	if (version > VERSION_MAX) {
 		log_error_code(PC_ERR_FORMAT);
 		log_msg(LOG_ERR, 0, "Cannot handle newer archive version %d, capability %d",
-			version, VERSION);
+			version, VERSION_MAX);
 		err = 1;
 		goto uncomp_done;
 	}
@@ -1323,6 +1323,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		uchar_t nonce[MAX_NONCE], n1[MAX_NONCE];
 		uchar_t pw[PC_PW_MAX + 1];
 		int pw_len;
+		uint32_t kdf_raw[4];	/* version 11: KDF id, log2 N, r, p */
+		scrypt_params_t kdf;
 		mac_ctx_t hdr_mac;
 		uchar_t hdr_hash1[pctx->mac_bytes], hdr_hash2[pctx->mac_bytes];
 		unsigned int hlen;
@@ -1406,6 +1408,28 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			}
 		}
 
+		/* Version 11: the scrypt cost, checked before any work is done. */
+		memset(&kdf, 0, sizeof (kdf));
+		if (version >= VERSION_KDF) {
+			if (Read(compfd, kdf_raw, sizeof (kdf_raw)) < (int64_t)sizeof (kdf_raw)) {
+				memset(salt2, 0, saltlen); free(salt2);
+				memset(salt1, 0, saltlen); free(salt1);
+				log_msg(LOG_ERR, 1, "Read: ");
+				UNCOMP_BAIL;
+			}
+			kdf.logn = (int)ntohl(kdf_raw[1]);
+			kdf.r = ntohl(kdf_raw[2]);
+			kdf.p = ntohl(kdf_raw[3]);
+			if (ntohl(kdf_raw[0]) != KDF_SCRYPT || !scrypt_params_ok(&kdf)) {
+				memset(salt2, 0, saltlen); free(salt2);
+				memset(salt1, 0, saltlen); free(salt1);
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Invalid key derivation parameters. "
+				    "File corrupt ?");
+				UNCOMP_BAIL;
+			}
+		}
+
 		if (Read(compfd, hdr_hash1, pctx->mac_bytes) < pctx->mac_bytes) {
 			memset(salt2, 0, saltlen);
 			free(salt2);
@@ -1445,8 +1469,12 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				upw = pw;
 				upw_len = pw_len;
 			}
-			/* A prompt never took more than 14 bytes: no legacy form. */
-			tries = (legacy > 0 && legacy != upw_len) ? 2 : 1;
+			/*
+			 * A prompt never took more than 14 bytes: no legacy form.
+			 * Version 11 files were written with the whole password.
+			 */
+			tries = (legacy > 0 && legacy != upw_len &&
+			    version < VERSION_KDF) ? 2 : 1;
 			for (t = 0; t < tries && !ok; t++) {
 				int plen = t == 0 ? upw_len : legacy;
 				uchar_t ntry[MAX_NONCE];
@@ -1454,6 +1482,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 				/* init_crypto() wipes the nonce it is given: one copy per try. */
 				memcpy(ntry, nonce, sizeof (ntry));
 				cleanup_crypto(&(pctx->crypto_ctx));
+				pctx->crypto_ctx.kdf = kdf;
 				if (init_crypto(&(pctx->crypto_ctx), upw, plen, pctx->encrypt_type,
 				    salt2, saltlen, pctx->keylen, ntry, DECRYPT_FLAG) == -1) {
 					memset(salt2, 0, saltlen);
@@ -1491,6 +1520,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 					d2 = htonl(pctx->keylen);
 					hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (pctx->keylen));
 				}
+				if (version >= VERSION_KDF)
+					hmac_update(&hdr_mac, (uchar_t *)kdf_raw, sizeof (kdf_raw));
 				hmac_final(&hdr_mac, hdr_hash1, &hlen);
 				hmac_cleanup(&hdr_mac);
 				ok = memcmp(hdr_hash2, hdr_hash1, pctx->mac_bytes) == 0;
@@ -2904,7 +2935,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	flags |= pctx->cksum;
 	memset(cread_buf, 0, ALGO_SZ);
 	strncpy((char *)cread_buf, pctx->algo, ALGO_SZ);
-	version = htons(VERSION);
+	version = htons(pctx->encrypt_type ? VERSION_KDF : VERSION);
 	flags = htons(flags);
 	n_chunksize = htonll(chunksize);
 	level = htonl(level);
@@ -2938,6 +2969,11 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		}
 		I32_P(pos) = htonl(pctx->keylen);
 		pos += sizeof (int);
+		I32_P(pos) = htonl(KDF_SCRYPT);
+		I32_P(pos + 4) = htonl((uint32_t)pctx->crypto_ctx.kdf.logn);
+		I32_P(pos + 8) = htonl(pctx->crypto_ctx.kdf.r);
+		I32_P(pos + 12) = htonl(pctx->crypto_ctx.kdf.p);
+		pos += 16;
 	}
 	if (Write(compfd, cread_buf, pos - cread_buf) != pos - cread_buf) {
 		log_msg(LOG_ERR, 1, "Write ");

@@ -40,6 +40,15 @@ If Encryption Used
 X Bytes - Actual Salt bytes
 X Bytes - Nonce: 8 Bytes for AES and 24 Bytes for Salsa20
 4 Bytes - Key Length
+Format version 11 and later (all encrypted files written by 4.3 and later):
+4 Bytes - Key derivation function: 1 = scrypt
+4 Bytes - scrypt log2 N
+4 Bytes - scrypt r
+4 Bytes - scrypt p
+          (Version 10 and earlier recorded no cost: they used scrypt with
+          N = 2^11, r = 8, p = 1, from pickparams(). Readers refuse a cost
+          outside log2 N 10-22, r 1-32, p 1-16 or above 512 MB before any
+          work. Unencrypted files are still written as version 10.)
 ===========================================
 Header Checksum
 ===========================================

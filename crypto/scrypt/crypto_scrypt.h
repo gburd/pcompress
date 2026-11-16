@@ -73,6 +73,32 @@ int crypto_scrypt(const uint8_t *, size_t, const uint8_t *, size_t, uint64_t,
 
 void pickparams(int * logN, uint32_t * r, uint32_t * p);
 
+/*
+ * scrypt cost (N = 2^logn, r, p) for a key derivation. logn 0 means the
+ * fixed cost pickparams() chooses, which is what .pz files up to format
+ * version 10 used and did not record.
+ */
+typedef struct {
+	int logn;
+	uint32_t r, p;
+} scrypt_params_t;
+
+/* What new encrypted .pz files use: 128 MB, about 0.3 s. */
+#define	SCRYPT_PZ_LOGN	17
+#define	SCRYPT_PZ_R	8
+#define	SCRYPT_PZ_P	1
+
+/*
+ * Whether parameters read from a file are sane: logn 10-22, r 1-32, p
+ * 1-16, at most 512 MB (128 * r * N) and 16 such passes. Checked before
+ * any work, so a crafted file cannot make the KDF allocate gigabytes.
+ */
+int scrypt_params_ok(const scrypt_params_t *kp);
+
+/* scrypt with kp, or with pickparams() if kp is NULL or kp->logn is 0. */
+int scrypt_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
+    size_t saltlen, const scrypt_params_t *kp, uint8_t *key, size_t keylen);
+
 #define	HAVE_POSIX_MEMALIGN
 
 #endif /* !_CRYPTO_SCRYPT_H_ */

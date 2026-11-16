@@ -41,6 +41,7 @@
 #include <stdint.h>
 
 #include <utils.h>
+#include <crypto_scrypt.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -87,6 +88,12 @@ typedef struct {
 	uchar_t *pkey;      /**< Derived key material. */
 	int saltlen;        /**< Salt length in bytes. */
 	int keylen;         /**< Key length in bytes (16 or 32). */
+	/**
+	 * scrypt cost. Decryption: set by the caller before init_crypto()
+	 * from the file header (logn 0: the fixed pre-4.3 cost). Encryption:
+	 * init_crypto() sets the current default, for the header writer.
+	 */
+	scrypt_params_t kdf;
 } crypto_ctx_t;
 
 /** HMAC authentication context. */

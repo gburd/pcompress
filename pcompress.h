@@ -63,6 +63,15 @@ extern "C" {
 #define	ALGO_SZ		8       /**< Size of algorithm name field in file header. */
 #define	MIN_CHUNK	2048    /**< Minimum allowed chunk size in bytes. */
 #define	VERSION		10      /**< Current file format version number. */
+/**
+ * Encrypted files are written as version 11: the header also records the
+ * scrypt cost (a KDF id, log2 N, r and p after the key length). The chunk
+ * format is that of version 10; unencrypted files are still version 10,
+ * so releases before 4.3 read them.
+ */
+#define	VERSION_KDF	11
+#define	VERSION_MAX	VERSION_KDF	/**< Newest version this build reads. */
+#define	KDF_SCRYPT	1	/**< KDF id in a version 11 header. */
 #define	FLAG_DEDUP	1       /**< File flag: Rabin deduplication enabled. */
 #define	FLAG_DEDUP_FIXED	2 /**< File flag: fixed-block deduplication enabled. */
 #define	FLAG_SINGLE_CHUNK	4 /**< File flag: entire file in one chunk. */

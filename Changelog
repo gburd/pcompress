@@ -1,4 +1,10 @@
 == Unreleased ==
+Encryption: the key is derived with scrypt at N = 2^17 (128 MB, about
+  0.3 s), not 2^11: guessing a password costs 64 times more. The header
+  records the cost (format version 11), and a crafted cost is refused
+  before any work. Releases before 4.3 cannot read files encrypted by
+  4.3 ("Cannot handle newer archive version 11"); 4.3 reads theirs, and
+  unencrypted files are still version 10, readable by both.
 Library: pc_entry_t can grow. pc_manifest_add/get/find now pass the
   caller's sizeof (pc_entry_t) to new pc_manifest_*_sz functions, so
   programs built against a later or earlier header keep working; the

@@ -77,7 +77,7 @@ xsalsa20_xor(unsigned char *out, const unsigned char *in, unsigned long long len
 
 int
 salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len,
-	 uchar_t *nonce, int enc)
+	 uchar_t *nonce, int enc, const scrypt_params_t *kdf)
 {
 	struct timespec tp;
 	uint64_t tv;
@@ -86,17 +86,11 @@ salsa20_init(salsa20_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int p
 	uchar_t *key = ctx->pkey;
 
 #ifndef	_USE_PBK
-	int logN;
-	uint32_t r, p;
-	uint64_t N;
-
 	if (XSALSA20_CRYPTO_NONCEBYTES % 8) {
 		log_msg(LOG_ERR, 0, "XSALSA20_CRYPTO_NONCEBYTES is not a multiple of 8!\n");
 		return (-1);
 	}
-	pickparams(&logN, &r, &p);
-	N = (uint64_t)(1) << logN;
-	if (crypto_scrypt(pwd, pwd_len, salt, saltlen, N, r, p, key, ctx->keylen)) {
+	if (scrypt_derive(pwd, pwd_len, salt, saltlen, kdf, key, ctx->keylen)) {
 		log_msg(LOG_ERR, 0, "Scrypt failed\n");
 		return (-1);
 	}

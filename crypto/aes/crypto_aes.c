@@ -123,7 +123,7 @@ aes_module_init_once(void)
 
 int
 aes_init(aes_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len,
-	 uint64_t nonce, int enc)
+	 uint64_t nonce, int enc, const scrypt_params_t *kdf)
 {
 	struct timespec tp;
 	uint64_t tv;
@@ -132,13 +132,7 @@ aes_init(aes_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len,
 	uchar_t *key = ctx->pkey;
 
 #ifndef	_USE_PBK
-	int logN;
-	uint32_t r, p;
-	uint64_t N;
-
-	pickparams(&logN, &r, &p);
-	N = (uint64_t)(1) << logN;
-	if (crypto_scrypt(pwd, pwd_len, salt, saltlen, N, r, p, key, ctx->keylen)) {
+	if (scrypt_derive(pwd, pwd_len, salt, saltlen, kdf, key, ctx->keylen)) {
 		log_msg(LOG_ERR, 0, "Scrypt failed\n");
 		return (-1);
 	}

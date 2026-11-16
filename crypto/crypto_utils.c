@@ -773,6 +773,9 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 		cctx->keylen = keylen;
 
 		if (enc_dec) {
+			cctx->kdf.logn = SCRYPT_PZ_LOGN;
+			cctx->kdf.r = SCRYPT_PZ_R;
+			cctx->kdf.p = SCRYPT_PZ_P;
 			/*
 			 * Encryption init.
 			 */
@@ -811,12 +814,14 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 			 * Zero nonce (arg #6) since it will be generated.
 			 */
 			if (crypto_alg == CRYPTO_ALG_AES) {
-				if (aes_init(actx, salt, 32, pwd, pwd_len, 0, enc_dec) != 0) {
+				if (aes_init(actx, salt, 32, pwd, pwd_len, 0, enc_dec,
+				    &cctx->kdf) != 0) {
 					log_msg(LOG_ERR, 0, "Failed to initialize AES context\n");
 					return (-1);
 				}
 			} else {
-				if (salsa20_init(sctx, salt, 32, pwd, pwd_len, 0, enc_dec) != 0) {
+				if (salsa20_init(sctx, salt, 32, pwd, pwd_len, 0, enc_dec,
+				    &cctx->kdf) != 0) {
 					log_msg(LOG_ERR, 0, "Failed to initialize SALSA20 context\n");
 					return (-1);
 				}
@@ -847,12 +852,13 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 				/* Plain copy: GCC/aarch64 ICEs passing an aligned(1) value. */
 				memcpy(&n64, nonce, sizeof (n64));
 				if (aes_init(actx, cctx->salt, saltlen, pwd, pwd_len, n64,
-				    enc_dec) != 0) {
+				    enc_dec, &cctx->kdf) != 0) {
 					log_msg(LOG_ERR, 0, "Failed to initialize AES context\n");
 					return (-1);
 				}
 			} else {
-				if (salsa20_init(sctx, salt, 32, pwd, pwd_len, nonce, enc_dec) != 0) {
+				if (salsa20_init(sctx, salt, 32, pwd, pwd_len, nonce, enc_dec,
+				    &cctx->kdf) != 0) {
 					log_msg(LOG_ERR, 0, "Failed to initialize SALSA20 context\n");
 					return (-1);
 				}

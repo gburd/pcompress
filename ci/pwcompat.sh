@@ -34,8 +34,11 @@ enc() {	# enc <bin> <cipher> <password>: in -> in.pz
 }
 dec() {	# dec <bin> <password>: in.pz -> out, then compare
 	rm -f "$W/out"
-	"$1" -d -w "$(pwf "$2")" "$W/in.pz" "$W/out" > /dev/null 2>&1 && cmp -s "$W/in" "$W/out"
+	"$1" -d -w "$(pwf "$2")" "$W/in.pz" "$W/out" > /dev/null 2> "$W/err" && cmp -s "$W/in" "$W/out"
 }
+# A release before 4.3 refuses encrypted files from 4.3 on (format version
+# 11) up front; that is the expected result, not a password failure.
+refused_newer() { grep -q 'Cannot handle newer archive version 11' "$W/err"; }
 
 # Lengths 8, 14, 15, 16 (the old cap), 17, 20 and 40 bytes.
 for pw in s3cret12 abcdefghijklmn abcdefghijklmno abcdefghijklmnop \
@@ -46,7 +49,9 @@ for pw in s3cret12 abcdefghijklmn abcdefghijklmno abcdefghijklmnop \
 		enc "$OLD" "$c" "$pw" && dec "$NEW" "$pw" && ok "old->new $c len=$n" || no "old->new $c len=$n"
 		enc "$NEW" "$c" "$pw" && dec "$NEW" "$pw" && ok "new->new $c len=$n" || no "new->new $c len=$n"
 		if [ "$n" -le 16 ]; then
-			enc "$NEW" "$c" "$pw" && dec "$OLD" "$pw" && ok "new->old $c len=$n" || no "new->old $c len=$n"
+			if enc "$NEW" "$c" "$pw" && dec "$OLD" "$pw"; then ok "new->old $c len=$n"
+			elif refused_newer; then ok "new->old $c len=$n (refused: older release)"
+			else no "new->old $c len=$n"; fi
 		fi
 		enc "$NEW" "$c" "$pw"
 		# Differ in the first byte: an appended byte can land inside the

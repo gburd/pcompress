@@ -279,7 +279,7 @@ The `.pz` file format is documented in `compressed_file_format.txt`. In summary:
 
 ```
 [File Header: algo(8) + version(2) + flags(2) + chunksize(8) + level(4)]
-[Optional: encryption salt + nonce + keylen]
+[Optional: encryption salt + nonce + keylen (+ KDF cost, version 11)]
 [Header checksum: CRC32 or HMAC]
 [Metadata chunks]  (if archive mode, pathname data)
 [Data chunks]*     (compressed segments with individual headers)

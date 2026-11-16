@@ -104,6 +104,8 @@ crypto_pair(int alg, int keylen)
 	    keylen, NULL, ENCRYPT_FLAG) == 0, "init_crypto encrypt");
 	/* As pcompress does: pass a copy (decrypt init wipes the nonce buffer). */
 	memcpy(nonce, crypto_nonce(&cc_enc), MAX_NONCE);
+	/* The scrypt cost travels in the file header. */
+	cc_dec.kdf = cc_enc.kdf;
 	mu_assert(init_crypto(&cc_dec, pw2, (int)strlen((char *)pw2), alg,
 	    cc_enc.salt, cc_enc.saltlen, keylen, nonce,
 	    DECRYPT_FLAG) == 0, "init_crypto decrypt");
@@ -191,6 +193,38 @@ MU_TEST(test_urandom)
 	mu_assert(memcmp(a, b, 64) != 0, "urandom repeated");
 }
 
+/*
+ * The scrypt cost a .pz header records (version 11): new files use the
+ * stored cost, old ones the fixed pickparams() one, and values outside
+ * the bounds are refused before any work (a crafted header must not make
+ * the KDF allocate gigabytes or run for minutes).
+ */
+MU_TEST(test_kdf_params)
+{
+	static const uchar_t pw[] = "pw", salt[32] = { 7 };
+	scrypt_params_t ok = { SCRYPT_PZ_LOGN, SCRYPT_PZ_R, SCRYPT_PZ_P };
+	scrypt_params_t legacy = { 0, 0, 0 }, low = { 10, 1, 1 };
+	scrypt_params_t bad[] = { { 9, 8, 1 }, { 23, 1, 1 }, { 40, 8, 1 },
+	    { 17, 0, 1 }, { 17, 33, 1 }, { 17, 8, 0 }, { 17, 8, 17 },
+	    { 20, 8, 1 }, { 22, 2, 1 } };
+	uchar_t k1[32], k2[32];
+	size_t i;
+
+	mu_assert(scrypt_params_ok(&ok), "default cost refused");
+	mu_assert(scrypt_params_ok(&low), "lowest cost refused");
+	for (i = 0; i < sizeof (bad) / sizeof (bad[0]); i++) {
+		mu_assert(!scrypt_params_ok(&bad[i]), "out-of-bounds cost accepted");
+		mu_assert(scrypt_derive(pw, 2, salt, 32, &bad[i], k1, 32) == -1,
+		    "derive with an out-of-bounds cost");
+	}
+	/* The stored cost is used: another cost gives another key. */
+	mu_assert(scrypt_derive(pw, 2, salt, 32, &low, k1, 32) == 0, "derive low");
+	mu_assert(scrypt_derive(pw, 2, salt, 32, &legacy, k2, 32) == 0, "derive legacy");
+	mu_assert(memcmp(k1, k2, 32) != 0, "stored cost ignored");
+	mu_assert(scrypt_derive(pw, 2, salt, 32, NULL, k1, 32) == 0 &&
+	    memcmp(k1, k2, 32) == 0, "NULL is the legacy cost");
+}
+
 MU_TEST_SUITE(suite_crypto)
 {
 	MU_RUN_TEST(test_checksum_props);
@@ -199,6 +233,7 @@ MU_TEST_SUITE(suite_crypto)
 	MU_RUN_TEST(test_hmac_all);
 	MU_RUN_TEST(test_ciphers);
 	MU_RUN_TEST(test_urandom);
+	MU_RUN_TEST(test_kdf_params);
 }
 
 int

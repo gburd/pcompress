@@ -116,6 +116,38 @@ pickparams(int * logN, uint32_t * r, uint32_t * p)
 	}
 }
 
+int
+scrypt_params_ok(const scrypt_params_t *kp)
+{
+	uint64_t rn;
+
+	if (kp->logn < 10 || kp->logn > 22 || kp->r < 1 || kp->r > 32 ||
+	    kp->p < 1 || kp->p > 16)
+		return (0);
+	rn = (uint64_t)kp->r << kp->logn;
+	return (rn <= ((uint64_t)1 << 22) && rn * kp->p <= ((uint64_t)1 << 26));
+}
+
+int
+scrypt_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
+    size_t saltlen, const scrypt_params_t *kp, uint8_t *key, size_t keylen)
+{
+	int logn;
+	uint32_t r, p;
+
+	if (kp == NULL || kp->logn == 0) {
+		pickparams(&logn, &r, &p);
+	} else {
+		if (!scrypt_params_ok(kp))
+			return (-1);
+		logn = kp->logn;
+		r = kp->r;
+		p = kp->p;
+	}
+	return (crypto_scrypt(pw, pwlen, salt, saltlen, (uint64_t)1 << logn, r, p,
+	    key, keylen));
+}
+
 static void
 blkcpy(void * dest, void * src, size_t len)
 {

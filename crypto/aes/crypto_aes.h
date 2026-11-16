@@ -34,6 +34,7 @@
 #endif
 #include <openssl/opensslv.h>
 #include <crypto_utils.h>
+#include <crypto_scrypt.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -47,7 +48,7 @@ typedef struct {
 } aes_ctx_t;
 
 int aes_init(aes_ctx_t *ctx, uchar_t *salt, int saltlen, uchar_t *pwd, int pwd_len,
-	     uint64_t nonce, int enc);
+	     uint64_t nonce, int enc, const scrypt_params_t *kdf);
 int aes_encrypt(aes_ctx_t *ctx, uchar_t *plaintext, uchar_t *ciphertext, uint64_t len, uint64_t id);
 int aes_decrypt(aes_ctx_t *ctx, uchar_t *ciphertext, uchar_t *plaintext, uint64_t len, uint64_t id);
 uchar_t *aes_nonce(aes_ctx_t *ctx);

@@ -291,6 +291,13 @@ Releases up to 4.1.0 read at most 15 bytes of a password file longer than
 decrypt with the same password file.
 A file encrypted from a password longer than 16 bytes cannot be read by
 4.1.0 or earlier.
+.Pp
+The key is derived with scrypt at a cost of about 128 MB and 0.3 seconds
+(N = 2^17, r = 8, p = 1); the file header records the cost.
+Releases before 4.3 used N = 2^11, 64 times cheaper for someone guessing
+passwords, and cannot read files encrypted by 4.3 or later; 4.3 reads
+theirs.
+Unencrypted files are unaffected.
 .Sh EXIT STATUS
 .Ex -std
 Status 2 means a usage error.

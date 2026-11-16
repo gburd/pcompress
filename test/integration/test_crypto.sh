@@ -124,6 +124,57 @@ for alg in AES SALSA20; do
 done
 rm -f "$LTF" "$LTF.pz" "$LTF.out"
 
+echo ""
+echo "--- Key derivation cost in the header ---"
+# Encrypted files are format version 11 and record the scrypt cost; plain
+# files stay version 10. AES header: algorithm 8, version 2, flags 2, chunk
+# size 8, level 4, salt length 4, salt 32, nonce 8, key length 4, then KDF
+# id, log2 N, r and p (4 bytes each, big-endian), so log2 N ends at byte 79.
+byte_at() { od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' '; }
+KTF="${TMPDIR:-/tmp}/pc_kdf_$$"
+head -c 50000 /dev/urandom > "$KTF"
+printf 'kdf-test-password\n' > "$PWFILE"
+rm -f "$KTF.pz"
+$PCOMPRESS -c zstd -l 3 -e AES -w "$PWFILE" "$KTF" 2>/dev/null
+if [ "$(byte_at "$KTF.pz" 9)" = 11 ] && [ "$(byte_at "$KTF.pz" 79)" = 17 ]; then
+	log_pass "encrypted file: version 11, log2 N 17 recorded"
+else
+	log_fail "encrypted file: version $(byte_at "$KTF.pz" 9), log2 N $(byte_at "$KTF.pz" 79)"
+fi
+cp "$KTF.pz" "$KTF.good"
+rm -f "$KTF.pz"
+$PCOMPRESS -c zstd -l 3 "$KTF" 2>/dev/null
+if [ "$(byte_at "$KTF.pz" 9)" = 10 ]; then
+	log_pass "plain file: still version 10"
+else
+	log_fail "plain file: version $(byte_at "$KTF.pz" 9)"
+fi
+# log2 N 40 (2^40 * 1 KB of memory): refused before any work, not attempted.
+cp "$KTF.good" "$KTF.pz"
+printf '\050' | dd of="$KTF.pz" bs=1 seek=79 conv=notrunc 2>/dev/null
+printf 'kdf-test-password\n' > "$PWFILE"
+rm -f "$KTF.out"
+if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
+	log_fail "hostile KDF cost accepted"
+elif echo "$msg" | grep -q 'Invalid key derivation parameters'; then
+	log_pass "hostile KDF cost refused"
+else
+	log_fail "hostile KDF cost: $msg"
+fi
+# A valid but changed cost is covered by the header HMAC.
+cp "$KTF.good" "$KTF.pz"
+printf '\020' | dd of="$KTF.pz" bs=1 seek=79 conv=notrunc 2>/dev/null
+printf 'kdf-test-password\n' > "$PWFILE"
+rm -f "$KTF.out"
+if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
+	log_fail "changed KDF cost accepted"
+elif echo "$msg" | grep -q 'Header verification failed'; then
+	log_pass "changed KDF cost fails the header HMAC"
+else
+	log_fail "changed KDF cost: $msg"
+fi
+rm -f "$KTF" "$KTF.pz" "$KTF.good" "$KTF.out"
+
 rm -f "$PWFILE"
 
 echo ""

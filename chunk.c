@@ -594,12 +594,13 @@ static int
 kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
 {
 	uint32_t logn = hdr[7], r = get_le32(hdr + 8), p = get_le32(hdr + 12);
+	scrypt_params_t kp;
 
-	/* scrypt needs 128 * r * N bytes and p times the work: cap at 512 MB
-	 * (2^22 * 128) and 16 such passes, before any work is done. */
-	if (hdr[6] != PCK_KF_SCRYPT || logn < 10 || logn > 22 || r < 1 || r > 32 ||
-	    p < 1 || p > 16 || ((uint64_t)r << logn) > ((uint64_t)1 << 22) ||
-	    ((uint64_t)r * p << logn) > ((uint64_t)1 << 26))
+	/* Bounds checked before any work (scrypt_params_ok(): at most 512 MB). */
+	kp.logn = (int)logn;
+	kp.r = r;
+	kp.p = p;
+	if (hdr[6] != PCK_KF_SCRYPT || !scrypt_params_ok(&kp))
 		return (-1);
 	return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << logn, r, p, dk, 64));
 }

@@ -24,7 +24,7 @@ diagrams. Read this before changing `pcompress.c`, `rabin/` or
 
 ```
 file header   algo[8] version[2] flags[2] chunksize[8] level[4]
-              [salt, nonce, keylen if encrypted]  CRC32 or HMAC
+              [salt, nonce, keylen, KDF cost if encrypted]  CRC32 or HMAC
 chunk*        len_cmp[8] digest[n] mac[m] flags[1] payload [orig_size[8]]
 trailer       0[8]
 ```
@@ -42,9 +42,11 @@ header has `FLAG_META_STREAM`. Do not add another sentinel in the length
 field; extend the flags instead.
 
 **Versioning.** `VERSION` in `pcompress.h` is the format version (10).
-The reader accepts `VERSION-4` and newer; older-version quirks are
-handled inline (look for `version <`). Bump it only when the format
-changes, never for a release.
+Encrypted files are written as `VERSION_KDF` (11): the same chunks, with
+the scrypt cost added to the header. Keeping plain files at 10 lets older
+releases still read them. The reader accepts `VERSION-4` up to
+`VERSION_MAX`; older-version quirks are handled inline (look for
+`version <`). Bump it only when the format changes, never for a release.
 
 ## Pipeline
 
@@ -284,8 +286,11 @@ an entry the stored bytes are written unchanged and the path is listed in
 
 ## Encryption
 
-A key is derived from the password and a random salt with scrypt.
-Chunks are encrypted in place with AES-CTR or XSalsa20, using the chunk
+A key is derived from the password and a random salt with scrypt, at
+N = 2^17, r = 8, p = 1 (128 MB, about 0.3 s) since 4.3; the header
+records the cost, and the reader checks its bounds before any work.
+Files up to format version 10 used a fixed N = 2^11 and did not record
+it. Chunks are encrypted in place with AES-CTR or XSalsa20, using the chunk
 number in the nonce, and authenticated with HMAC over the header and
 ciphertext. The HMAC is checked before decryption. Passwords and key
 material are zeroed after use.
