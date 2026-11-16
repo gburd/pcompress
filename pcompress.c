@@ -1031,9 +1031,9 @@ struct dec_hdr {
 
 /*
  * Open the compressed input (a file, or the job's input stream in pipe
- * mode) and stat it. Returns 1 if the file cannot be opened or is empty
- * (the caller returns at once, as before any setup), 0 on success, -1 if
- * the input stream is missing.
+ * mode) and stat it. Returns 1, with nothing left open, if the file cannot
+ * be opened or is empty (the caller returns at once, before any setup), 0
+ * on success, -1 if the input stream is missing.
  */
 static int
 dec_open_input(pc_ctx_t *pctx, const char *filename, int *compfd, struct stat *sbuf)
@@ -1045,9 +1045,16 @@ dec_open_input(pc_ctx_t *pctx, const char *filename, int *compfd, struct stat *s
 		}
 		if (fstat(*compfd, sbuf) == -1) {
 			log_msg(LOG_ERR, 1, "Cannot stat: %s", filename);
+			close(*compfd);
+			*compfd = -1;
 			return (1);
 		}
-		return (sbuf->st_size == 0 ? 1 : 0);
+		if (sbuf->st_size == 0) {
+			close(*compfd);
+			*compfd = -1;
+			return (1);
+		}
+		return (0);
 	}
 	if (!pctx->pipe_mode) {
 		pctx->pipe_mode = 1;
@@ -2040,7 +2047,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	struct dec_job job;
 	int compfd = -1, compfd2 = -1, uncompfd = -1, own_uncompfd = 0, err = 0;
 	int thread = 0, dedupe_flag, rv;
-	uint32_t nprocs = 1, i, np = 0;
+	uint32_t nprocs = 1, i, np = 0, started = 0;
 	int64_t compressed_chunksize;
 	struct cmp_data **dary = NULL;
 	pthread_t writer_thr;
@@ -2124,6 +2131,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	job.props = &props;
 	job.to_filename = to_filename;
 	dary = (struct cmp_data **)slab_calloc(NULL, nprocs, sizeof (struct cmp_data *));
+	/* From here the teardown stops and joins the first `started` workers. */
+	thread = 1;
 	for (i = 0; i < nprocs; i++) {
 		dary[i] = (struct cmp_data *)slab_alloc(NULL, sizeof (struct cmp_data));
 		if (!dary[i]) {
@@ -2136,8 +2145,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		if (dec_start_worker(pctx, dary[i], &job) != 0) {
 			UNCOMP_BAIL;
 		}
+		started++;
 	}
-	thread = 1;
 
 	if (pctx->enable_rabin_global) {
 		for (i = 0; i < nprocs; i++)
@@ -2177,8 +2186,13 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		}
 	}
 uncomp_done:
+	/*
+	 * Stop and join the workers that started. A later worker's setup
+	 * failing used to skip this, leaving the earlier ones running while
+	 * their slots were freed below.
+	 */
 	if (thread) {
-		for (i = 0; i < nprocs; i++) {
+		for (i = 0; i < started; i++) {
 			struct cmp_data *tdat = dary[i];
 
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
@@ -2600,7 +2614,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	struct stat sbuf;
 	int compfd = -1, uncompfd = -1, err;
 	int thread, bail, single_chunk;
-	uint32_t i, nprocs, np, p, dedupe_flag;
+	uint32_t i, nprocs, np, p, dedupe_flag, started = 0;
 	struct cmp_data **dary = NULL, *tdat;
 	pthread_t writer_thr;
 	uchar_t *cread_buf, *pos;
@@ -2978,11 +2992,14 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				COMP_BAIL;
 			}
 		}
+		/* Running workers must be joined even if a later setup fails. */
+		thread = 1;
 		if (pthread_create(&(tdat->thr), NULL, perform_compress,
 		    (void *)tdat) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
 			COMP_BAIL;
 		}
+		started++;
 	}
 
 	/*
@@ -3304,7 +3321,7 @@ comp_done:
 	}
 
 	if (thread) {
-		for (i = 0; i < nprocs; i++) {
+		for (i = 0; i < started; i++) {
 			tdat = dary[i];
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
