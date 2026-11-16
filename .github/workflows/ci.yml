@@ -194,7 +194,12 @@ jobs:
             clang:p llvm-openmp:p openssl:p zlib:p bzip2:p pkgconf:p
       - name: Build and test
         env: { CC: clang, CXX: clang++ }
-        run: sh ci/build-test.sh quick
+        # The tests' C code opens $TMPDIR (default /tmp) itself: native
+        # Windows programs need a Windows path for it (MSYS2 converts only
+        # command-line arguments).
+        run: |
+          export TMPDIR=$(cygpath -m "$RUNNER_TEMP")
+          sh ci/build-test.sh quick
       - name: Binary I/O (CR, LF, CRLF, ^Z, NUL) round-trips in file and pipe mode
         run: |
           printf 'a\r\nb\nc\r\032d\000e\r\n\n\r' > crlf.bin
