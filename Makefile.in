@@ -527,11 +527,11 @@ $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 ifeq ($(PC_OS),MINGW)
 # Windows: the DLL sits next to the programs that load it (buildtmp/ here,
 # bin/ when installed), and -lpcompress links its import library, $(LIB).
-# The DLL exports what DLL_EXPORT marks, the list in libpcompress.map.
+# It exports the libpcompress.map names (./config writes libpcompress.def).
 DLL = libpcompress-$(LIBVER).dll
-$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB)
+$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
 	mkdir -p buildtmp
-	$(LINK.LIB) -o buildtmp/$(DLL) -Wl,--out-implib,$(LIB) $(OBJS) $(LDLIBS)
+	$(LINK.LIB) -o buildtmp/$(DLL) -Wl,--out-implib,$(LIB) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
 else
 # libpcompress.map lists the exported API (version node PCOMPRESS_1);
 # everything else, including the bundled libraries, is local.
@@ -704,7 +704,7 @@ clean: topclean
 	exit 0
 
 distclean: clean
-	$(RM) Makefile libpcompress.exports
+	$(RM) Makefile libpcompress.exports libpcompress.def
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM_RF) buildtmp
 	(cd @LIBARCHIVE_DIR@; make distclean; rm -rf Makefile.orig tar test test_utils cpio libarchive/test)

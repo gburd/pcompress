@@ -74,6 +74,9 @@ int pc_win32_mkstemp(char *tmpl);
 #ifndef	O_NOCTTY
 #define	O_NOCTTY	0
 #endif
+#ifndef	NAME_MAX
+#define	NAME_MAX	255
+#endif
 
 /*
  * No symbolic links: stat() reports what a link points to, so lstat() is
@@ -93,6 +96,7 @@ int pc_win32_mkstemp(char *tmpl);
  */
 typedef int uid_t;
 typedef int gid_t;
+typedef unsigned char u_char;
 
 /* Never root (0): extraction then restores no owners. */
 static inline uid_t geteuid(void) { return (1); }

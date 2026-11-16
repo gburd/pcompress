@@ -1509,9 +1509,11 @@ printf 'int pc_probe(void){return 0;}\nint pc_hidden(void){return 1;}\n' > .exp_
 printf 'PCOMPRESS_1 {\n\tglobal: pc_probe;\n\tlocal: *;\n};\n' > .exp_probe.map
 printf '_pc_probe\n' > .exp_probe.exp
 if [ "$OS" = "MINGW" ]; then
-	# PE: DLL_EXPORT is __declspec(dllexport) there (utils/utils.h), and
-	# a DLL with any dllexport exports only those. Nothing to pass.
-	export_flags=""
+	# PE: a module-definition file with the libpcompress.map names. With
+	# an EXPORTS list the linker exports only those.
+	{ echo "EXPORTS"; sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:' | \
+	    tr ';' '\n' | tr -d ' \t' | sed -e '/^$/d' -e 's/^/\t/'; } > libpcompress.def
+	export_flags="\$(CURDIR)/libpcompress.def"
 elif [ "$OS" = "Darwin" ]; then
 	# Mach-O names carry a leading _; the map lists several per line.
 	sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:' | \
@@ -1529,7 +1531,7 @@ elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
 fi
 rm -f .exp_probe.c .exp_probe.so .exp_probe.map .exp_probe.exp
 if [ "$OS" = "MINGW" ]; then
-	echo "  exports: the DLL_EXPORT (dllexport) functions"
+	echo "  exports: libpcompress.def"
 else
 	echo "  exports: ${export_flags:-all (linker has no version-script support)}"
 fi
