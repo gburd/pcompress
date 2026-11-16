@@ -193,10 +193,10 @@
 ;#
 
 .text	
-.globl	aesni_encrypt
-.type	aesni_encrypt,@function
+.globl	pc_aesni_encrypt
+.type	pc_aesni_encrypt,@function
 .align	16
-aesni_encrypt:
+pc_aesni_encrypt:
 	movups	(%rdi),%xmm2
 	movl	240(%rdx),%eax
 	movups	(%rdx),%xmm0
@@ -212,12 +212,12 @@ aesni_encrypt:
 .byte	102,15,56,221,209
 	movups	%xmm2,(%rsi)
 	.byte	0xf3,0xc3
-.size	aesni_encrypt,.-aesni_encrypt
+.size	pc_aesni_encrypt,.-pc_aesni_encrypt
 
-.globl	aesni_decrypt
-.type	aesni_decrypt,@function
+.globl	pc_aesni_decrypt
+.type	pc_aesni_decrypt,@function
 .align	16
-aesni_decrypt:
+pc_aesni_decrypt:
 	movups	(%rdi),%xmm2
 	movl	240(%rdx),%eax
 	movups	(%rdx),%xmm0
@@ -233,10 +233,10 @@ aesni_decrypt:
 .byte	102,15,56,223,209
 	movups	%xmm2,(%rsi)
 	.byte	0xf3,0xc3
-.size	aesni_decrypt, .-aesni_decrypt
-.type	_aesni_encrypt3,@function
+.size	pc_aesni_decrypt, .-pc_aesni_decrypt
+.type	_pc_aesni_encrypt3,@function
 .align	16
-_aesni_encrypt3:
+_pc_aesni_encrypt3:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -266,10 +266,10 @@ _aesni_encrypt3:
 .byte	102,15,56,221,216
 .byte	102,15,56,221,224
 	.byte	0xf3,0xc3
-.size	_aesni_encrypt3,.-_aesni_encrypt3
-.type	_aesni_decrypt3,@function
+.size	_pc_aesni_encrypt3,.-_pc_aesni_encrypt3
+.type	_pc_aesni_decrypt3,@function
 .align	16
-_aesni_decrypt3:
+_pc_aesni_decrypt3:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -299,10 +299,10 @@ _aesni_decrypt3:
 .byte	102,15,56,223,216
 .byte	102,15,56,223,224
 	.byte	0xf3,0xc3
-.size	_aesni_decrypt3,.-_aesni_decrypt3
-.type	_aesni_encrypt4,@function
+.size	_pc_aesni_decrypt3,.-_pc_aesni_decrypt3
+.type	_pc_aesni_encrypt4,@function
 .align	16
-_aesni_encrypt4:
+_pc_aesni_encrypt4:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -337,10 +337,10 @@ _aesni_encrypt4:
 .byte	102,15,56,221,224
 .byte	102,15,56,221,232
 	.byte	0xf3,0xc3
-.size	_aesni_encrypt4,.-_aesni_encrypt4
-.type	_aesni_decrypt4,@function
+.size	_pc_aesni_encrypt4,.-_pc_aesni_encrypt4
+.type	_pc_aesni_decrypt4,@function
 .align	16
-_aesni_decrypt4:
+_pc_aesni_decrypt4:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -375,10 +375,10 @@ _aesni_decrypt4:
 .byte	102,15,56,223,224
 .byte	102,15,56,223,232
 	.byte	0xf3,0xc3
-.size	_aesni_decrypt4,.-_aesni_decrypt4
-.type	_aesni_encrypt6,@function
+.size	_pc_aesni_decrypt4,.-_pc_aesni_decrypt4
+.type	_pc_aesni_encrypt6,@function
 .align	16
-_aesni_encrypt6:
+_pc_aesni_encrypt6:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -432,10 +432,10 @@ _aesni_encrypt6:
 .byte	102,15,56,221,240
 .byte	102,15,56,221,248
 	.byte	0xf3,0xc3
-.size	_aesni_encrypt6,.-_aesni_encrypt6
-.type	_aesni_decrypt6,@function
+.size	_pc_aesni_encrypt6,.-_pc_aesni_encrypt6
+.type	_pc_aesni_decrypt6,@function
 .align	16
-_aesni_decrypt6:
+_pc_aesni_decrypt6:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -489,10 +489,10 @@ _aesni_decrypt6:
 .byte	102,15,56,223,240
 .byte	102,15,56,223,248
 	.byte	0xf3,0xc3
-.size	_aesni_decrypt6,.-_aesni_decrypt6
-.type	_aesni_encrypt8,@function
+.size	_pc_aesni_decrypt6,.-_pc_aesni_decrypt6
+.type	_pc_aesni_encrypt8,@function
 .align	16
-_aesni_encrypt8:
+_pc_aesni_encrypt8:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -559,10 +559,10 @@ _aesni_encrypt8:
 .byte	102,68,15,56,221,192
 .byte	102,68,15,56,221,200
 	.byte	0xf3,0xc3
-.size	_aesni_encrypt8,.-_aesni_encrypt8
-.type	_aesni_decrypt8,@function
+.size	_pc_aesni_encrypt8,.-_pc_aesni_encrypt8
+.type	_pc_aesni_decrypt8,@function
 .align	16
-_aesni_decrypt8:
+_pc_aesni_decrypt8:
 	movups	(%rcx),%xmm0
 	shrl	$1,%eax
 	movups	16(%rcx),%xmm1
@@ -629,11 +629,11 @@ _aesni_decrypt8:
 .byte	102,68,15,56,223,192
 .byte	102,68,15,56,223,200
 	.byte	0xf3,0xc3
-.size	_aesni_decrypt8,.-_aesni_decrypt8
-.globl	aesni_ecb_encrypt
-.type	aesni_ecb_encrypt,@function
+.size	_pc_aesni_decrypt8,.-_pc_aesni_decrypt8
+.globl	pc_aesni_ecb_encrypt
+.type	pc_aesni_ecb_encrypt,@function
 .align	16
-aesni_ecb_encrypt:
+pc_aesni_ecb_encrypt:
 	andq	$-16,%rdx
 	jz	.Lecb_ret
 
@@ -682,7 +682,7 @@ aesni_ecb_encrypt:
 	leaq	128(%rdi),%rdi
 .Lecb_enc_loop8_enter:
 
-	call	_aesni_encrypt8
+	call	_pc_aesni_encrypt8
 
 	subq	$128,%rdx
 	jnc	.Lecb_enc_loop8
@@ -718,7 +718,7 @@ aesni_ecb_encrypt:
 	movups	80(%rdi),%xmm7
 	je	.Lecb_enc_six
 	movdqu	96(%rdi),%xmm8
-	call	_aesni_encrypt8
+	call	_pc_aesni_encrypt8
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -745,20 +745,20 @@ aesni_ecb_encrypt:
 .align	16
 .Lecb_enc_two:
 	xorps	%xmm4,%xmm4
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	jmp	.Lecb_ret
 .align	16
 .Lecb_enc_three:
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
 	jmp	.Lecb_ret
 .align	16
 .Lecb_enc_four:
-	call	_aesni_encrypt4
+	call	_pc_aesni_encrypt4
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -767,7 +767,7 @@ aesni_ecb_encrypt:
 .align	16
 .Lecb_enc_five:
 	xorps	%xmm7,%xmm7
-	call	_aesni_encrypt6
+	call	_pc_aesni_encrypt6
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -776,7 +776,7 @@ aesni_ecb_encrypt:
 	jmp	.Lecb_ret
 .align	16
 .Lecb_enc_six:
-	call	_aesni_encrypt6
+	call	_pc_aesni_encrypt6
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -825,7 +825,7 @@ aesni_ecb_encrypt:
 	leaq	128(%rdi),%rdi
 .Lecb_dec_loop8_enter:
 
-	call	_aesni_decrypt8
+	call	_pc_aesni_decrypt8
 
 	movups	(%r11),%xmm0
 	subq	$128,%rdx
@@ -863,7 +863,7 @@ aesni_ecb_encrypt:
 	je	.Lecb_dec_six
 	movups	96(%rdi),%xmm8
 	movups	(%rcx),%xmm0
-	call	_aesni_decrypt8
+	call	_pc_aesni_decrypt8
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -890,20 +890,20 @@ aesni_ecb_encrypt:
 .align	16
 .Lecb_dec_two:
 	xorps	%xmm4,%xmm4
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	jmp	.Lecb_ret
 .align	16
 .Lecb_dec_three:
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
 	jmp	.Lecb_ret
 .align	16
 .Lecb_dec_four:
-	call	_aesni_decrypt4
+	call	_pc_aesni_decrypt4
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -912,7 +912,7 @@ aesni_ecb_encrypt:
 .align	16
 .Lecb_dec_five:
 	xorps	%xmm7,%xmm7
-	call	_aesni_decrypt6
+	call	_pc_aesni_decrypt6
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -921,7 +921,7 @@ aesni_ecb_encrypt:
 	jmp	.Lecb_ret
 .align	16
 .Lecb_dec_six:
-	call	_aesni_decrypt6
+	call	_pc_aesni_decrypt6
 	movups	%xmm2,(%rsi)
 	movups	%xmm3,16(%rsi)
 	movups	%xmm4,32(%rsi)
@@ -931,11 +931,11 @@ aesni_ecb_encrypt:
 
 .Lecb_ret:
 	.byte	0xf3,0xc3
-.size	aesni_ecb_encrypt,.-aesni_ecb_encrypt
-.globl	aesni_ccm64_encrypt_blocks
-.type	aesni_ccm64_encrypt_blocks,@function
+.size	pc_aesni_ecb_encrypt,.-pc_aesni_ecb_encrypt
+.globl	pc_aesni_ccm64_encrypt_blocks
+.type	pc_aesni_ccm64_encrypt_blocks,@function
 .align	16
-aesni_ccm64_encrypt_blocks:
+pc_aesni_ccm64_encrypt_blocks:
 	movl	240(%rcx),%eax
 	movdqu	(%r8),%xmm9
 	movdqa	.Lincrement64(%rip),%xmm6
@@ -988,11 +988,11 @@ aesni_ccm64_encrypt_blocks:
 
 	movups	%xmm3,(%r9)
 	.byte	0xf3,0xc3
-.size	aesni_ccm64_encrypt_blocks,.-aesni_ccm64_encrypt_blocks
-.globl	aesni_ccm64_decrypt_blocks
-.type	aesni_ccm64_decrypt_blocks,@function
+.size	pc_aesni_ccm64_encrypt_blocks,.-pc_aesni_ccm64_encrypt_blocks
+.globl	pc_aesni_ccm64_decrypt_blocks
+.type	pc_aesni_ccm64_decrypt_blocks,@function
 .align	16
-aesni_ccm64_decrypt_blocks:
+pc_aesni_ccm64_decrypt_blocks:
 	movl	240(%rcx),%eax
 	movups	(%r8),%xmm9
 	movdqu	(%r9),%xmm3
@@ -1075,11 +1075,11 @@ aesni_ccm64_decrypt_blocks:
 .byte	102,15,56,221,217
 	movups	%xmm3,(%r9)
 	.byte	0xf3,0xc3
-.size	aesni_ccm64_decrypt_blocks,.-aesni_ccm64_decrypt_blocks
-.globl	aesni_ctr32_encrypt_blocks
-.type	aesni_ctr32_encrypt_blocks,@function
+.size	pc_aesni_ccm64_decrypt_blocks,.-pc_aesni_ccm64_decrypt_blocks
+.globl	pc_aesni_ctr32_encrypt_blocks
+.type	pc_aesni_ctr32_encrypt_blocks,@function
 .align	16
-aesni_ctr32_encrypt_blocks:
+pc_aesni_ctr32_encrypt_blocks:
 	cmpq	$1,%rdx
 	je	.Lctr32_one_shortcut
 
@@ -1252,7 +1252,7 @@ aesni_ctr32_encrypt_blocks:
 	por	%xmm14,%xmm6
 	xorps	%xmm7,%xmm7
 
-	call	_aesni_encrypt6
+	call	_pc_aesni_encrypt6
 
 	movups	64(%rdi),%xmm1
 	xorps	%xmm2,%xmm8
@@ -1291,7 +1291,7 @@ aesni_ctr32_encrypt_blocks:
 .align	16
 .Lctr32_two:
 	xorps	%xmm4,%xmm4
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 	xorps	%xmm2,%xmm8
 	xorps	%xmm3,%xmm9
 	movups	%xmm8,(%rsi)
@@ -1300,7 +1300,7 @@ aesni_ctr32_encrypt_blocks:
 
 .align	16
 .Lctr32_three:
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 	xorps	%xmm2,%xmm8
 	xorps	%xmm3,%xmm9
 	movups	%xmm8,(%rsi)
@@ -1311,7 +1311,7 @@ aesni_ctr32_encrypt_blocks:
 
 .align	16
 .Lctr32_four:
-	call	_aesni_encrypt4
+	call	_pc_aesni_encrypt4
 	xorps	%xmm2,%xmm8
 	xorps	%xmm3,%xmm9
 	movups	%xmm8,(%rsi)
@@ -1323,11 +1323,11 @@ aesni_ctr32_encrypt_blocks:
 
 .Lctr32_done:
 	.byte	0xf3,0xc3
-.size	aesni_ctr32_encrypt_blocks,.-aesni_ctr32_encrypt_blocks
-.globl	aesni_xts_encrypt
-.type	aesni_xts_encrypt,@function
+.size	pc_aesni_ctr32_encrypt_blocks,.-pc_aesni_ctr32_encrypt_blocks
+.globl	pc_aesni_xts_encrypt
+.type	pc_aesni_xts_encrypt,@function
 .align	16
-aesni_xts_encrypt:
+pc_aesni_xts_encrypt:
 	leaq	-104(%rsp),%rsp
 	movups	(%r9),%xmm15
 	movl	240(%r8),%eax
@@ -1575,7 +1575,7 @@ aesni_xts_encrypt:
 	pxor	%xmm13,%xmm5
 	pxor	%xmm14,%xmm6
 
-	call	_aesni_encrypt6
+	call	_pc_aesni_encrypt6
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm15,%xmm10
@@ -1621,7 +1621,7 @@ aesni_xts_encrypt:
 	xorps	%xmm10,%xmm2
 	xorps	%xmm11,%xmm3
 
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm12,%xmm10
@@ -1641,7 +1641,7 @@ aesni_xts_encrypt:
 	xorps	%xmm11,%xmm3
 	xorps	%xmm12,%xmm4
 
-	call	_aesni_encrypt3
+	call	_pc_aesni_encrypt3
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm13,%xmm10
@@ -1665,7 +1665,7 @@ aesni_xts_encrypt:
 	xorps	%xmm12,%xmm4
 	xorps	%xmm13,%xmm5
 
-	call	_aesni_encrypt4
+	call	_pc_aesni_encrypt4
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm15,%xmm10
@@ -1719,11 +1719,11 @@ aesni_xts_encrypt:
 	leaq	104(%rsp),%rsp
 .Lxts_enc_epilogue:
 	.byte	0xf3,0xc3
-.size	aesni_xts_encrypt,.-aesni_xts_encrypt
-.globl	aesni_xts_decrypt
-.type	aesni_xts_decrypt,@function
+.size	pc_aesni_xts_encrypt,.-pc_aesni_xts_encrypt
+.globl	pc_aesni_xts_decrypt
+.type	pc_aesni_xts_decrypt,@function
 .align	16
-aesni_xts_decrypt:
+pc_aesni_xts_decrypt:
 	leaq	-104(%rsp),%rsp
 	movups	(%r9),%xmm15
 	movl	240(%r8),%eax
@@ -1977,7 +1977,7 @@ aesni_xts_decrypt:
 	pxor	%xmm13,%xmm5
 	pxor	%xmm14,%xmm6
 
-	call	_aesni_decrypt6
+	call	_pc_aesni_decrypt6
 
 	xorps	%xmm10,%xmm2
 	xorps	%xmm11,%xmm3
@@ -2033,7 +2033,7 @@ aesni_xts_decrypt:
 	xorps	%xmm10,%xmm2
 	xorps	%xmm11,%xmm3
 
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm12,%xmm10
@@ -2054,7 +2054,7 @@ aesni_xts_decrypt:
 	xorps	%xmm11,%xmm3
 	xorps	%xmm12,%xmm4
 
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm13,%xmm10
@@ -2085,7 +2085,7 @@ aesni_xts_decrypt:
 	xorps	%xmm12,%xmm4
 	xorps	%xmm13,%xmm5
 
-	call	_aesni_decrypt4
+	call	_pc_aesni_decrypt4
 
 	xorps	%xmm10,%xmm2
 	movdqa	%xmm14,%xmm10
@@ -2159,11 +2159,11 @@ aesni_xts_decrypt:
 	leaq	104(%rsp),%rsp
 .Lxts_dec_epilogue:
 	.byte	0xf3,0xc3
-.size	aesni_xts_decrypt,.-aesni_xts_decrypt
-.globl	aesni_cbc_encrypt
-.type	aesni_cbc_encrypt,@function
+.size	pc_aesni_xts_decrypt,.-pc_aesni_xts_decrypt
+.globl	pc_aesni_cbc_encrypt
+.type	pc_aesni_cbc_encrypt,@function
 .align	16
-aesni_cbc_encrypt:
+pc_aesni_cbc_encrypt:
 	testq	%rdx,%rdx
 	jz	.Lcbc_ret
 
@@ -2339,7 +2339,7 @@ aesni_cbc_encrypt:
 
 	movups	96(%rdi),%xmm8
 	movaps	%xmm9,-24(%rsp)
-	call	_aesni_decrypt8
+	call	_pc_aesni_decrypt8
 	movups	(%rdi),%xmm1
 	movups	16(%rdi),%xmm0
 	xorps	-24(%rsp),%xmm2
@@ -2384,7 +2384,7 @@ aesni_cbc_encrypt:
 .align	16
 .Lcbc_dec_two:
 	xorps	%xmm4,%xmm4
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 	xorps	%xmm9,%xmm2
 	xorps	%xmm8,%xmm3
 	movups	%xmm2,(%rsi)
@@ -2395,7 +2395,7 @@ aesni_cbc_encrypt:
 	jmp	.Lcbc_dec_tail_collected
 .align	16
 .Lcbc_dec_three:
-	call	_aesni_decrypt3
+	call	_pc_aesni_decrypt3
 	xorps	%xmm9,%xmm2
 	xorps	%xmm8,%xmm3
 	movups	%xmm2,(%rsi)
@@ -2408,7 +2408,7 @@ aesni_cbc_encrypt:
 	jmp	.Lcbc_dec_tail_collected
 .align	16
 .Lcbc_dec_four:
-	call	_aesni_decrypt4
+	call	_pc_aesni_decrypt4
 	xorps	%xmm9,%xmm2
 	movups	48(%rdi),%xmm9
 	xorps	%xmm8,%xmm3
@@ -2424,7 +2424,7 @@ aesni_cbc_encrypt:
 .align	16
 .Lcbc_dec_five:
 	xorps	%xmm7,%xmm7
-	call	_aesni_decrypt6
+	call	_pc_aesni_decrypt6
 	movups	16(%rdi),%xmm1
 	movups	32(%rdi),%xmm0
 	xorps	%xmm9,%xmm2
@@ -2444,7 +2444,7 @@ aesni_cbc_encrypt:
 	jmp	.Lcbc_dec_tail_collected
 .align	16
 .Lcbc_dec_six:
-	call	_aesni_decrypt6
+	call	_pc_aesni_decrypt6
 	movups	16(%rdi),%xmm1
 	movups	32(%rdi),%xmm0
 	xorps	%xmm9,%xmm2
@@ -2484,13 +2484,13 @@ aesni_cbc_encrypt:
 .Lcbc_dec_ret:
 .Lcbc_ret:
 	.byte	0xf3,0xc3
-.size	aesni_cbc_encrypt,.-aesni_cbc_encrypt
-.globl	aesni_set_decrypt_key
-.type	aesni_set_decrypt_key,@function
+.size	pc_aesni_cbc_encrypt,.-pc_aesni_cbc_encrypt
+.globl	pc_aesni_set_decrypt_key
+.type	pc_aesni_set_decrypt_key,@function
 .align	16
-aesni_set_decrypt_key:
+pc_aesni_set_decrypt_key:
 .byte	0x48,0x83,0xEC,0x08	
-	call	__aesni_set_encrypt_key
+	call	__pc_aesni_set_encrypt_key
 	shll	$4,%esi
 	testl	%eax,%eax
 	jnz	.Ldec_key_ret
@@ -2522,12 +2522,12 @@ aesni_set_decrypt_key:
 	addq	$8,%rsp
 	.byte	0xf3,0xc3
 .LSEH_end_set_decrypt_key:
-.size	aesni_set_decrypt_key,.-aesni_set_decrypt_key
-.globl	aesni_set_encrypt_key
-.type	aesni_set_encrypt_key,@function
+.size	pc_aesni_set_decrypt_key,.-pc_aesni_set_decrypt_key
+.globl	pc_aesni_set_encrypt_key
+.type	pc_aesni_set_encrypt_key,@function
 .align	16
-aesni_set_encrypt_key:
-__aesni_set_encrypt_key:
+pc_aesni_set_encrypt_key:
+__pc_aesni_set_encrypt_key:
 .byte	0x48,0x83,0xEC,0x08	
 	movq	$-1,%rax
 	testq	%rdi,%rdi
@@ -2713,8 +2713,8 @@ __aesni_set_encrypt_key:
 	shufps	$170,%xmm1,%xmm1
 	xorps	%xmm1,%xmm2
 	.byte	0xf3,0xc3
-.size	aesni_set_encrypt_key,.-aesni_set_encrypt_key
-.size	__aesni_set_encrypt_key,.-__aesni_set_encrypt_key
+.size	pc_aesni_set_encrypt_key,.-pc_aesni_set_encrypt_key
+.size	__pc_aesni_set_encrypt_key,.-__pc_aesni_set_encrypt_key
 .align	64
 .Lbswap_mask:
 .byte	15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
