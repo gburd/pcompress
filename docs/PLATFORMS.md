@@ -12,7 +12,7 @@ failure there stops the release.
 | Linux | RPM (Fedora, RHEL) | gated: CI (Fedora, Rocky 9) | gated: CI (Fedora, Rocky 9) | not tested | n/a |
 | Linux | NixOS / Nix | gated: CI `nix build` (gcc, clang), meh (NixOS) | gated: CI `nix build` | not tested | n/a |
 | macOS | | gated: CI (macos-15-intel) | gated: CI (macos-15) | n/a | n/a |
-| Windows 11 | | **not supported** (no port) | **not supported** (no port) | n/a | n/a |
+| Windows 11 | MSYS2 / MinGW-w64 | gated: CI (windows-latest, CLANG64) | gated: CI (windows-11-arm, CLANGARM64) | n/a | n/a |
 | illumos | OpenIndiana | not tested | n/a | n/a | gated: sun (big-endian; also reachable as icarus) |
 | illumos | Solnix | not tested | not tested | not tested | not tested |
 
@@ -48,12 +48,21 @@ No build or test runs on a developer workstation.
 
 ## Gaps
 
-- **Windows 11 (x86_64, aarch64).** Not supported. The core compressors
-  build with MSVC, but the program and library use POSIX threads and
-  semaphores, `mmap`, POSIX file and directory calls, signals and
-  `nftw`. A port is real work (a platform layer, or a MinGW/MSYS2 build
-  as a first step) and has not been started. Until then no Windows cell
-  can be gated.
+- **Windows 11 (x86_64, aarch64).** Builds with MSYS2 and the MinGW-w64
+  clang toolchains (CLANG64, CLANGARM64): `./config && make && make
+  check` produce `buildtmp/pcompress.exe` and `buildtmp/libpcompress-1.dll`
+  (with the import library `libpcompress.dll.a`), and CI runs the unit,
+  integration and backward-compatibility tests and binary round trips on
+  both. Not covered: MSVC builds (the core compressors compile with it,
+  the program and library do not); the feature matrix and
+  `examples/backup` (POSIX-only test scripts and file APIs); `test_sem`
+  (no signals to interrupt a wait). Archives do not store or restore
+  symbolic links, owners or POSIX permissions on Windows: links are
+  followed when archiving, and extraction keeps the default ACLs. The
+  program uses the ANSI (code page) Windows file APIs, so names the
+  current code page cannot represent are not supported. The x86
+  assembler fast paths are not used (they are ELF-only), and the
+  password prompt's echo control is not covered by CI (no console).
 - **Solnix (illumos on x86_64, aarch64, riscv64, sparcv9).** No Solnix
   host is in the test fleet. OpenIndiana on SPARC is the nearest
   covered relative. Solnix packages go through the solnix.io cache
@@ -63,5 +72,5 @@ No build or test runs on a developer workstation.
   names, one hostid), so big-endian coverage has a single point of
   failure.
 - **Windows hosts** are wina (Windows 11 ARM64, formerly santorini) and
-  wini (Windows 11 x64). There is nothing to run on them until the port
-  exists.
+  wini (Windows 11 x64). `ci/gate.sh` has not been run on them; the gate
+  for Windows is CI.

@@ -36,7 +36,7 @@ MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	utils/cpu_features.c utils/cpu_features_x86_64.c \
 	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
 	filters/analyzer/analyzer.c \
-	meta_stream.c pcompress.c chunk.c manifest.c
+	meta_stream.c pcompress.c chunk.c manifest.c @PLATFORM_SRCS@
 MAINHDRS = include/pcompress/pcompress.h allocator.h  pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
 	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
 	filters/dispack/dis.hpp \
@@ -121,8 +121,8 @@ BSDIFFOBJS = $(BSDIFFSRCS:.c=.o)
 
 LZMASRCS = lzma/LzmaEnc.c lzma/LzFind.c lzma/LzmaDec.c lzma/Threads.c lzma/LzFindMt.c
 LZMAHDRS = lzma/CpuArch.h lzma/LzFind.h lzma/LzmaEnc.h lzma/Types.h \
-	lzma/LzHash.h lzma/LzmaDec.h utils/utils.h lzma/LzFindMt.h lzma/Threads.h lzma/windows.h \
-	lzma/Common/MyWindows.h lzma/Common/MyGuidDef.h lzma/basetyps.h
+	lzma/LzHash.h lzma/LzmaDec.h utils/utils.h lzma/LzFindMt.h lzma/Threads.h lzma/Common/windows.h \
+	lzma/Common/MyWindows.h lzma/Common/MyGuidDef.h lzma/Common/basetyps.h
 LZMAOBJS = $(LZMASRCS:.c=.o)
 
 LZFXSRCS = lzfx/lzfx.c
@@ -276,11 +276,20 @@ BASE_CPPFLAGS = -I. -I./include -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I
 	-I./crypto/xsalsa20 -I./archive -pedantic -Wall -Wno-variadic-macros -I./filters -fno-strict-aliasing \
 	-Wno-unused-but-set-variable -Wno-enum-compare -I./filters/analyzer -I./filters/dispack \
 	@COMPAT_CPPFLAGS@ @XSALSA20_DEBUG@ -I@LIBARCHIVE_DIR@/libarchive -I./filters/packjpg \
-	-I./filters/packpnm @ENABLE_WAVPACK@
-COMMON_CPPFLAGS = $(BASE_CPPFLAGS) -std=gnu99
+	-I./filters/packpnm @ENABLE_WAVPACK@ $(PLATFORM_CPPFLAGS)
+COMMON_CPPFLAGS = $(BASE_CPPFLAGS) -std=gnu99 $(PLATFORM_CINCLUDE)
 COMMON_CPPFLAGS_cpp = $(BASE_CPPFLAGS)
 COMMON_VEC_FLAGS = -ftree-vectorize
 COMMON_LOOP_OPTFLAGS = $(VEC_FLAGS) @GCC_LOOP_FLAGS@
+# Windows (MSYS2/MinGW-w64) only: the platform layer, utils/win32.h on
+# every C and C++ compile and utils/win32 for the POSIX headers MinGW
+# lacks. PC_OS is MINGW there and empty elsewhere.
+PC_OS=@PC_OS@
+EXEEXT=@EXEEXT@
+PLATFORM_CPPFLAGS = @PLATFORM_CPPFLAGS@
+PLATFORM_CINCLUDE = $(if $(PC_OS),-include utils/win32.h)
+# Programs and tests: binary file I/O by default (utils/win32_binmode.c).
+PROG_LDFLAGS = @PROG_LDFLAGS@
 RPATH=@RPATH@
 DTAGS=@DTAGS@
 # The installed binary finds libpcompress.so.1 in $(PREFIX)/lib.
@@ -320,7 +329,7 @@ RELEASE_FPTR_FLAG = -fomit-frame-pointer
 
 DEBUG_STATS_CPPFLAGS = -DDEBUG_STATS
 
-LINK.PROG = @LINK@
+LINK.PROG = @LINK@ $(PROG_LDFLAGS)
 LINK.LIB = @LINK@ -shared
 COMPILE = @COMPILE@
 COMPILE_cpp = @COMPILE_cpp@
@@ -480,6 +489,9 @@ $(MAINOBJS): $(MAINSRCS) $(MAINHDRS)
 $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 	$(COMPILE) $(GEN_OPT) $(LOOP_OPTFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
+utils/win32_binmode.o: utils/win32_binmode.c
+	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) $(@:.o=.c) -o $@
+
 # A stamp, not a phony target: a phony prerequisite made $(LIB) relink on
 # every make invocation, e.g. under 'make -j check' while tests ran it.
 LIBARCHIVE_A = @LIBARCHIVE_DIR@/.libs/libarchive.a
@@ -515,11 +527,22 @@ $(LIBBSC_C_OBJS): $(LIBBSC_C_SRCS)
 $(LIBBSCLIB): $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 	@AR@ rcs $@ $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS)
 
+ifeq ($(PC_OS),MINGW)
+# Windows: the DLL sits next to the programs that load it (buildtmp/ here,
+# bin/ when installed), and -lpcompress links its import library, $(LIB).
+# It exports the libpcompress.map names (./config writes libpcompress.def).
+DLL = libpcompress-$(LIBVER).dll
+# Every program links PROG_LDFLAGS and needs $(LIB) first: build it here.
+$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map $(PROG_LDFLAGS)
+	mkdir -p buildtmp
+	$(LINK.LIB) -o buildtmp/$(DLL) -Wl,--out-implib,$(LIB) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
+else
 # libpcompress.map lists the exported API (version node PCOMPRESS_1);
 # everything else, including the bundled libraries, is local.
 $(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
 	$(LINK.LIB) -Wl,-soname$(LIB).$(LIBVER) -o $(LIB).$(LIBVER) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
 	ln -sf $(LIB).$(LIBVER) $(LIB)
+endif
 
 ./buildtmp/$(PROG): $(LIB) $(PROGOBJS)
 	mkdir -p buildtmp
@@ -590,8 +613,13 @@ buildtmp/pcbackup: examples/backup/pcbackup.c include/pcompress/pcompress.h $(LI
 	$(COMPILE) $(GEN_OPT) -Iinclude examples/backup/pcbackup.c -o buildtmp/pcbackup.o
 	$(LINK.PROG) -o $@ buildtmp/pcbackup.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
 
+ifeq ($(PC_OS),MINGW)
+test-examples:
+	@echo "SKIP: test-examples: examples/backup uses POSIX file APIs (symlinks, O_NOFOLLOW, utimensat) that Windows lacks"
+else
 test-examples: buildtmp/pcbackup
 	sh examples/backup/test.sh "$$PWD/buildtmp/pcbackup"
+endif
 
 # Reference .pz files from earlier releases must keep decompressing.
 test-backward-compat: all
@@ -665,7 +693,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
 topclean:
-	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER)
+	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER) $(PROG_LDFLAGS)
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM) buildtmp/test_* buildtmp/bench_algos*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress
@@ -680,7 +708,7 @@ clean: topclean
 	exit 0
 
 distclean: clean
-	$(RM) Makefile libpcompress.exports
+	$(RM) Makefile libpcompress.exports libpcompress.def
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM_RF) buildtmp
 	(cd @LIBARCHIVE_DIR@; make distclean; rm -rf Makefile.orig tar test test_utils cpio libarchive/test)
@@ -690,14 +718,19 @@ distclean: clean
 install: $(PROG)
 	@mkdir -p $(DESTDIR)$(PREFIX)/bin
 	@chmod 0755 $(DESTDIR)$(PREFIX)/bin
-	@cp buildtmp/$(PROG) $(DESTDIR)$(PREFIX)/bin
-	@chmod 0555 $(DESTDIR)$(PREFIX)/bin/$(PROG)
+	@cp buildtmp/$(PROG)$(EXEEXT) $(DESTDIR)$(PREFIX)/bin
+	@chmod 0555 $(DESTDIR)$(PREFIX)/bin/$(PROG)$(EXEEXT)
 
 	@mkdir -p $(DESTDIR)$(LIBDIR)
 	@chmod 0755 $(DESTDIR)$(LIBDIR)
+ifeq ($(PC_OS),MINGW)
+	@cp buildtmp/$(DLL) $(DESTDIR)$(PREFIX)/bin
+	@cp $(LIB) $(DESTDIR)$(LIBDIR)
+else
 	@cp $(LIB).$(LIBVER) $(DESTDIR)$(LIBDIR)
 	@chmod 0555 $(DESTDIR)$(LIBDIR)/$(LIB).$(LIBVER)
 	@ln -sf $(LIB).$(LIBVER) $(DESTDIR)$(LIBDIR)/$(LIB)
+endif
 
 	@mkdir -p $(DESTDIR)$(PREFIX)/include/pcompress $(DESTDIR)$(LIBDIR)/pkgconfig
 	@cp include/pcompress/pcompress.h $(DESTDIR)$(PREFIX)/include/pcompress/

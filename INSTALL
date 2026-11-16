@@ -2,7 +2,8 @@ Copyright (c) 2012 Moinak Ghosh
 
 Prerequisites
 =============
-64-bit system (Linux, illumos/Solaris, macOS, BSD).
+64-bit system (Linux, illumos/Solaris, macOS, BSD; Windows with MSYS2
+and the MinGW-w64 clang toolchain, see README.md).
 GCC or Clang with OpenMP (Clang needs libomp).
 zlib and bzip2 with development headers.
 OpenSSL 1.1.1 or newer with development headers.

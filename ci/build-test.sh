@@ -47,7 +47,13 @@ say "configure $*"
 ./config "$@"
 
 say "build (-j$JOBS)"
-$MAKE -j"$JOBS"
+case "$(uname -s)" in
+MINGW*)
+	# Windows: list every compile error in one run before failing.
+	$MAKE -k -j"$JOBS" || { $MAKE -k 2>&1 | grep -E 'error|Error' | head -200; exit 1; }
+	;;
+*)	$MAKE -j"$JOBS" ;;
+esac
 ./pcompress -V
 
 # zstd, lz4 and libbsc are bundled; a direct dependency on a system copy
@@ -55,9 +61,11 @@ $MAKE -j"$JOBS"
 # library's own NEEDED entries count: ldd also lists what its dependencies
 # need (Debian's libcrypto pulls in libzstd, illumos's libnsl libmd).
 say "bundled libraries stay bundled"
-lib=$(ls libpcompress.so.1 libpcompress.1.dylib libpcompress.dylib 2>/dev/null | head -1 || true)
+lib=$(ls libpcompress.so.1 libpcompress.1.dylib libpcompress.dylib buildtmp/libpcompress-1.dll \
+    2>/dev/null | head -1 || true)
 if [ -n "$lib" ]; then
-	if command -v otool >/dev/null 2>&1; then deps=$(otool -L "$lib")
+	if [ "${lib%.dll}" != "$lib" ]; then deps=$(objdump -p "$lib" | grep 'DLL Name')
+	elif command -v otool >/dev/null 2>&1; then deps=$(otool -L "$lib")
 	elif command -v elfdump >/dev/null 2>&1; then deps=$(elfdump -d "$lib" | grep NEEDED)
 	elif command -v readelf >/dev/null 2>&1; then deps=$(readelf -d "$lib" | grep NEEDED)
 	else deps=$(objdump -p "$lib" 2>/dev/null | grep NEEDED || true); fi

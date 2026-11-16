@@ -48,6 +48,9 @@ typedef bool                      sBool;
 #define sFALSE                    false
 #endif
 
+/* Windows declares these itself (<stdlib.h>). */
+#ifndef _WIN32
 #define _byteswap_ushort          htons
 #define _byteswap_ulong           htonl
+#endif
 #endif

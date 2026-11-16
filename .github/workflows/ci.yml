@@ -2,7 +2,8 @@
 #
 # Every job runs the same recipe as the Codeberg CI: ci/build-test.sh.
 # Linux (glibc, gcc + clang, x86_64 + arm64), macOS (Apple Silicon + Intel),
-# sanitizers, and the Nix package build (which runs the test suite too).
+# Windows (MSYS2, x86_64 + aarch64), sanitizers, and the Nix package build
+# (which runs the test suite too).
 
 name: CI
 
@@ -160,6 +161,57 @@ jobs:
           echo "LDFLAGS=-L$omp/lib -lomp" >> "$GITHUB_ENV"
       - name: Build and test
         run: sh ci/build-test.sh full
+
+  windows:
+    # MSYS2 with a MinGW-w64 clang toolchain: x86_64 (CLANG64) and aarch64
+    # (CLANGARM64). ci/build-test.sh runs ./config, make, the unit and
+    # integration tests and the feature matrix; the tests that cannot pass
+    # on Windows skip themselves with a reason.
+    name: "Windows ${{ matrix.arch }} (MSYS2 ${{ matrix.sys }})"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, arch: x86_64, sys: CLANG64, env: clang-x86_64 }
+          - { runner: windows-11-arm, arch: aarch64, sys: CLANGARM64, env: clang-aarch64 }
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: No CRLF in the checkout (shell scripts, test data)
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.sys }}
+          update: false
+          install: >-
+            make autotools patch diffutils perl
+          pacboy: >-
+            clang:p llvm-openmp:p openssl:p zlib:p bzip2:p pkgconf:p python:p
+      - name: Build and test
+        env: { CC: clang, CXX: clang++ }
+        # The tests' C code opens $TMPDIR (default /tmp) itself: native
+        # Windows programs need a Windows path for it (MSYS2 converts only
+        # command-line arguments).
+        run: |
+          export TMPDIR=$(cygpath -m "$RUNNER_TEMP")
+          sh ci/build-test.sh full
+          make test-backward-compat test-examples
+      - name: Binary I/O (CR, LF, CRLF, ^Z, NUL) round-trips in file and pipe mode
+        run: |
+          printf 'a\r\nb\nc\r\032d\000e\r\n\n\r' > crlf.bin
+          head -c 3000000 /dev/urandom >> crlf.bin
+          ./pcompress -c zstd -l3 crlf.bin && ./pcompress -d crlf.bin.pz crlf.out && cmp crlf.bin crlf.out
+          ./pcompress -p -c lz4 -l1 < crlf.bin > crlf.p.pz && ./pcompress -d -p < crlf.p.pz > crlf.p.out
+          cmp crlf.bin crlf.p.out
+          mkdir -p arc/sub && cp crlf.bin arc/sub/ && printf 'x\r\n' > arc/t.txt
+          ./pcompress -a -c zstd -l6 arc arc && mkdir out && ./pcompress -d arc.pz out
+          cmp crlf.bin out/arc/sub/crlf.bin && cmp arc/t.txt out/arc/t.txt
 
   sanitizers:
     name: "ASan + UBSan"

@@ -36,7 +36,6 @@
 #ifndef	_CRYPTO_UTILS_H
 #define	_CRYPTO_UTILS_H
 
-#include <arpa/nameser_compat.h>
 #include <sys/types.h>
 #include <stdint.h>
 

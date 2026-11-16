@@ -26,7 +26,7 @@
 #ifndef	_UTILS_H
 #define	_UTILS_H
 
-#include <arpa/nameser_compat.h>
+#include "pc_byteorder.h"
 #include <arpa/inet.h>
 /* Public types (pc_ctx_t, pc_error_t, pc_log_fn, PC_LOG_*): one definition. */
 #include "../include/pcompress/pcompress.h"
@@ -99,9 +99,7 @@ typedef unsigned char uchar_t ;
 /* uintptr_t is provided by stdint.h (included above) */
 typedef int32_t bsize_t;
 
-#undef WORDS_BIGENDIAN
-#if BYTE_ORDER == BIG_ENDIAN
-#	define WORDS_BIGENDIAN
+#ifdef WORDS_BIGENDIAN
 #	ifndef htonll
 #		define htonll(x) (x)
 #	endif
@@ -174,7 +172,11 @@ typedef int32_t bsize_t;
 #	endif
 #endif
 
-#ifdef __GNUC__
+#if defined(_WIN32)
+/* The DLL exports what libpcompress.def (from libpcompress.map) lists. */
+#define DLL_EXPORT
+#define DLL_LOCAL
+#elif defined(__GNUC__)
 #define DLL_EXPORT __attribute__ ((visibility ("default")))
 #define DLL_LOCAL  __attribute__ ((visibility ("hidden")))
 #else

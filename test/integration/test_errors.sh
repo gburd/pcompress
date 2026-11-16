@@ -180,9 +180,15 @@ fi
 # A hand-made archive with an absolute path and a "../" entry must extract
 # only inside the target directory, also for a relative target with "..".
 CRAFT="$(cd "$(dirname "$0")/.." && pwd)/tools/craft_hostile_archive.py"
+# A native Windows python cannot run the ./pcompress shell wrapper: give
+# it the program itself.
+PCBIN=$PCOMPRESS
+case "$(uname -s)" in
+MINGW*) PCBIN="$(dirname "$PCOMPRESS")/buildtmp/pcompress.exe" ;;
+esac
 if command -v python3 >/dev/null 2>&1; then
 	mkdir -p "$T/esc" "$T/xa/sub" "$T/xb"
-	if python3 "$CRAFT" "$PCOMPRESS" "$T/evil.pz" "$T/esc" 2>/dev/null; then
+	if python3 "$CRAFT" "$PCBIN" "$T/evil.pz" "$T/esc" 2>/dev/null; then
 		(cd "$T/xa/sub" && $PCOMPRESS -d "$T/evil.pz" ../../xb >/dev/null 2>&1)
 		if [ -z "$(ls "$T/esc")" ] && [ ! -e "$T/dotdot_escape" ] &&
 		    [ ! -e "$T/xa/dotdot_escape" ] && [ -f "$T/xb/ok/inside" ]; then

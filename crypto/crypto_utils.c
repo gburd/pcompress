@@ -390,10 +390,20 @@ aligned_ctx_alloc(size_t sz)
 {
 	void *p = NULL;
 
+#ifdef _WIN32
+	/* No posix_memalign(); this memory goes back through _aligned_free(). */
+	p = _aligned_malloc(sz, 64);
+#else
 	if (posix_memalign(&p, 64, sz) != 0)
 		return (NULL);
+#endif
 	return (p);
 }
+#ifdef _WIN32
+#define	aligned_ctx_free(p)	_aligned_free(p)
+#else
+#define	aligned_ctx_free(p)	free(p)
+#endif
 #define	blake_state_alloc()	aligned_ctx_alloc(sizeof (blake2b_state))
 
 int
@@ -409,7 +419,7 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		mctx->mac_ctx = ctx;
 		ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) {
-			free(mctx->mac_ctx);
+			aligned_ctx_free(mctx->mac_ctx);
 			return (-1);
 		}
 		memcpy(ctx, mctx->mac_ctx, sizeof (blake2b_state));
@@ -423,7 +433,7 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		mctx->mac_ctx = ctx;
 		ctx = (blake2b_state *)blake_state_alloc();
 		if (!ctx) {
-			free(mctx->mac_ctx);
+			aligned_ctx_free(mctx->mac_ctx);
 			return (-1);
 		}
 		memcpy(ctx, mctx->mac_ctx, sizeof (blake2b_state));
@@ -539,7 +549,7 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 
 		ctx = (hashState *)aligned_ctx_alloc(sizeof (hashState));
 		if (!ctx) {
-			free(mctx->mac_ctx);
+			aligned_ctx_free(mctx->mac_ctx);
 			return (-1);
 		}
 		memcpy(ctx, mctx->mac_ctx, sizeof (hashState));
@@ -686,6 +696,12 @@ hmac_cleanup(mac_ctx_t *mctx)
 	if (cksum == CKSUM_BLAKE256 || cksum == CKSUM_BLAKE512) {
 		memset(mctx->mac_ctx, 0, sizeof (blake2b_state));
 		memset(mctx->mac_ctx_reinit, 0, sizeof (blake2b_state));
+#ifdef _WIN32
+		/* _aligned_malloc() memory: not for the free() below. */
+		aligned_ctx_free(mctx->mac_ctx);
+		aligned_ctx_free(mctx->mac_ctx_reinit);
+		mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
+#endif
 
 	} else if (cksum == CKSUM_SKEIN256 || cksum == CKSUM_SKEIN512) {
 		memset(mctx->mac_ctx, 0, sizeof (Skein_512_Ctxt_t));
@@ -709,6 +725,12 @@ hmac_cleanup(mac_ctx_t *mctx)
 	} else if (cksum == CKSUM_KECCAK256 || cksum == CKSUM_KECCAK512) {
 		memset(mctx->mac_ctx, 0, sizeof (hashState));
 		memset(mctx->mac_ctx_reinit, 0, sizeof (hashState));
+#ifdef _WIN32
+		/* _aligned_malloc() memory: not for the free() below. */
+		aligned_ctx_free(mctx->mac_ctx);
+		aligned_ctx_free(mctx->mac_ctx_reinit);
+		mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
+#endif
 	} else {
 		return (-1);
 	}
@@ -948,6 +970,21 @@ geturandom_bytes(uchar_t *rbytes, int buflen)
 	int64_t lenread;
 	uchar_t * buf = rbytes;
 
+#ifdef _WIN32
+	/* No /dev/urandom: rand_s() reads the system CSPRNG (RtlGenRandom). */
+	(void) fd; (void) lenread;
+	while (buflen > 0) {
+		unsigned int r;
+		int n = buflen < (int)sizeof (r) ? buflen : (int)sizeof (r);
+
+		if (rand_s(&r) != 0)
+			return (4);
+		memcpy(buf, &r, n);
+		buf += n;
+		buflen -= n;
+	}
+	return (0);
+#else
 	/* Open /dev/urandom. Upto 10 retries. */
 	fd = -1;
 	lenread = 1;
@@ -987,7 +1024,25 @@ err1:
 err0:
 	/* Failure! */
 	return (4);
+#endif
 }
+
+#ifdef _WIN32
+/*
+ * A line read from the Windows console, or from a binary stdin, ends in
+ * "\r\n": make it "\n", so the '\r' is not taken as part of the password.
+ */
+static void
+crlf_to_lf(char *s)
+{
+	size_t n = strlen(s);
+
+	if (n >= 2 && s[n - 2] == '\r' && s[n - 1] == '\n') {
+		s[n - 2] = '\n';
+		s[n - 1] = '\0';
+	}
+}
+#endif
 
 /*
  * Input password string from terminal without echoing.
@@ -1026,6 +1081,10 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 	fflush(stderr);
 	s = fgets(pw1, sz, input);
 	fputs("\n", stderr);
+#ifdef _WIN32
+	if (s != NULL)
+		crlf_to_lf(pw1);
+#endif
 	len = s ? (int)strlen(pw1) : 0;
 	if (s == NULL || len < 2 || pw1[len - 1] != '\n') {
 		/* Empty, EOF, or longer than PC_PW_MAX (no newline read). */
@@ -1040,6 +1099,10 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 		fprintf(stderr, "%s (once more): ", prompt);
 		fflush(stderr);
 		s = fgets(pw2, sz, input);
+#ifdef _WIN32
+		if (s != NULL)
+			crlf_to_lf(pw2);
+#endif
 		tcsetattr(fd, TCSANOW, &oldt);
 		fflush(strm);
 		fputs("\n", stderr);
