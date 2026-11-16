@@ -164,8 +164,9 @@ jobs:
 
   windows:
     # MSYS2 with a MinGW-w64 clang toolchain: x86_64 (CLANG64) and aarch64
-    # (CLANGARM64). ci/build-test.sh runs ./config, make and the tests; the
-    # tests that cannot pass on Windows skip themselves with a reason.
+    # (CLANGARM64). ci/build-test.sh runs ./config, make, the unit and
+    # integration tests and the feature matrix; the tests that cannot pass
+    # on Windows skip themselves with a reason.
     name: "Windows ${{ matrix.arch }} (MSYS2 ${{ matrix.sys }})"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -191,7 +192,7 @@ jobs:
           install: >-
             make autotools patch diffutils perl
           pacboy: >-
-            clang:p llvm-openmp:p openssl:p zlib:p bzip2:p pkgconf:p
+            clang:p llvm-openmp:p openssl:p zlib:p bzip2:p pkgconf:p python:p
       - name: Build and test
         env: { CC: clang, CXX: clang++ }
         # The tests' C code opens $TMPDIR (default /tmp) itself: native
@@ -199,7 +200,8 @@ jobs:
         # command-line arguments).
         run: |
           export TMPDIR=$(cygpath -m "$RUNNER_TEMP")
-          sh ci/build-test.sh quick
+          sh ci/build-test.sh full
+          make test-backward-compat test-examples
       - name: Binary I/O (CR, LF, CRLF, ^Z, NUL) round-trips in file and pipe mode
         run: |
           printf 'a\r\nb\nc\r\032d\000e\r\n\n\r' > crlf.bin
