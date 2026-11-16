@@ -1,3 +1,9 @@
+== Unreleased ==
+Library: pc_entry_t can grow. pc_manifest_add/get/find now pass the
+  caller's sizeof (pc_entry_t) to new pc_manifest_*_sz functions, so
+  programs built against a later or earlier header keep working; the
+  old functions remain for programs already built. ABI unchanged.
+
 == 4.2.1 Release ==
 Data corruption: archives made with -x, or at -l9 and above (which turn
   -x on), could hold a chunk that does not decode, depending on the bytes

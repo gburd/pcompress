@@ -36,6 +36,7 @@
  */
 
 #include <sys/types.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -264,11 +265,40 @@ dupn(const char *s, size_t n)
 	return (d);
 }
 
+/*
+ * pc_entry_t as of the first API (4.2), ending with lens: what programs
+ * built before the _sz functions pass. Fields added later go after it.
+ */
+#define	PC_ENTRY_V1_SIZE	(offsetof(pc_entry_t, lens) + sizeof (const uint32_t *))
+
+/* A caller's entry of esize bytes: usable if it holds at least version 1. */
+static int
+esize_ok(size_t esize)
+{
+	return (esize >= PC_ENTRY_V1_SIZE);
+}
+
+/* True if the bytes of a newer caller's entry beyond ours are all zero. */
+static int
+tail_zero(const pc_entry_t *in, size_t esize)
+{
+	const uchar_t *p = (const uchar_t *)in;
+	size_t i;
+
+	for (i = sizeof (pc_entry_t); i < esize; i++)
+		if (p[i] != 0)
+			return (0);
+	return (1);
+}
+
 int DLL_EXPORT
-pc_manifest_add(pc_manifest_t *m, const pc_entry_t *in)
+pc_manifest_add_sz(pc_manifest_t *m, const pc_entry_t *in, size_t esize)
 {
 	struct ment e;
 
+	/* A field this library does not know would be dropped: refuse. */
+	if (!esize_ok(esize) || (in != NULL && !tail_zero(in, esize)))
+		return (-1);
 	if (m == NULL || in == NULL || in->path == NULL || (in->nchunks > 0 &&
 	    (in->ids == NULL || in->lens == NULL)) || in->nchunks > SIZE_MAX / 32)
 		return (-1);
@@ -307,15 +337,25 @@ fail:
 	return (-1);
 }
 
+/* Parenthesised: pcompress.h maps the plain name to the _sz form. */
+int DLL_EXPORT
+(pc_manifest_add)(pc_manifest_t *m, const pc_entry_t *in)
+{
+	return (pc_manifest_add_sz(m, in, PC_ENTRY_V1_SIZE));
+}
+
 size_t DLL_EXPORT
 pc_manifest_count(pc_manifest_t *m)
 {
 	return (m ? m->n : 0);
 }
 
+/* Fill a caller's entry of esize bytes; fields it has that we lack read 0. */
 static void
-fill(const struct ment *e, pc_entry_t *out)
+fill(const struct ment *e, pc_entry_t *out, size_t esize)
 {
+	if (esize > sizeof (pc_entry_t))
+		memset((uchar_t *)out + sizeof (pc_entry_t), 0, esize - sizeof (pc_entry_t));
 	out->path = e->path;
 	out->target = e->target;
 	out->type = e->type;
@@ -331,27 +371,39 @@ fill(const struct ment *e, pc_entry_t *out)
 }
 
 int DLL_EXPORT
-pc_manifest_get(pc_manifest_t *m, size_t i, pc_entry_t *out)
+pc_manifest_get_sz(pc_manifest_t *m, size_t i, pc_entry_t *out, size_t esize)
 {
-	if (m == NULL || out == NULL || i >= m->n)
+	if (m == NULL || out == NULL || i >= m->n || !esize_ok(esize))
 		return (-1);
 	msort(m);
-	fill(&m->e[i], out);
+	fill(&m->e[i], out, esize);
 	return (0);
 }
 
+int DLL_EXPORT
+(pc_manifest_get)(pc_manifest_t *m, size_t i, pc_entry_t *out)
+{
+	return (pc_manifest_get_sz(m, i, out, PC_ENTRY_V1_SIZE));
+}
+
 int64_t DLL_EXPORT
-pc_manifest_find(pc_manifest_t *m, const char *path, pc_entry_t *out)
+pc_manifest_find_sz(pc_manifest_t *m, const char *path, pc_entry_t *out, size_t esize)
 {
 	int64_t k;
 
-	if (m == NULL || path == NULL)
+	if (m == NULL || path == NULL || (out != NULL && !esize_ok(esize)))
 		return (-1);
 	msort(m);
 	k = lookup(m, path, strlen(path));
 	if (k >= 0 && out != NULL)
-		fill(&m->e[k], out);
+		fill(&m->e[k], out, esize);
 	return (k);
+}
+
+int64_t DLL_EXPORT
+(pc_manifest_find)(pc_manifest_t *m, const char *path, pc_entry_t *out)
+{
+	return (pc_manifest_find_sz(m, path, out, PC_ENTRY_V1_SIZE));
 }
 
 static uchar_t *

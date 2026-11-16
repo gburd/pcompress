@@ -264,6 +264,23 @@ size_t pc_manifest_count(pc_manifest_t *m);
 int pc_manifest_get(pc_manifest_t *m, size_t i, pc_entry_t *e);
 /** Index of path, filling e if not NULL; -1 if absent. */
 int64_t pc_manifest_find(pc_manifest_t *m, const char *path, pc_entry_t *e);
+
+/**
+ * pc_entry_t may gain fields at its end in later versions. These take the
+ * size of the caller's pc_entry_t, so a program built against an older or
+ * newer header still works with this library: fields one side does not
+ * know read as zero, and add refuses (-1) an entry that sets fields this
+ * library does not know rather than drop them. The macros below make the
+ * plain names use them; the plain functions remain for programs built
+ * before they existed.
+ */
+int pc_manifest_add_sz(pc_manifest_t *m, const pc_entry_t *e, size_t esize);
+int pc_manifest_get_sz(pc_manifest_t *m, size_t i, pc_entry_t *e, size_t esize);
+int64_t pc_manifest_find_sz(pc_manifest_t *m, const char *path, pc_entry_t *e,
+    size_t esize);
+#define	pc_manifest_add(m, e)	pc_manifest_add_sz((m), (e), sizeof (pc_entry_t))
+#define	pc_manifest_get(m, i, e)	pc_manifest_get_sz((m), (i), (e), sizeof (pc_entry_t))
+#define	pc_manifest_find(m, p, e)	pc_manifest_find_sz((m), (p), (e), sizeof (pc_entry_t))
 /** buf NULL: set *len to the size needed. -1 on duplicates or an entry
  *  under a symlink, or if *len is too small. */
 int pc_manifest_encode(pc_manifest_t *m, void *buf, size_t *len);

@@ -119,6 +119,12 @@ libpcompress
 .Ft int64_t
 .Fn pc_manifest_find "pc_manifest_t *m" "const char *path" "pc_entry_t *e"
 .Ft int
+.Fn pc_manifest_add_sz "pc_manifest_t *m" "const pc_entry_t *e" "size_t esize"
+.Ft int
+.Fn pc_manifest_get_sz "pc_manifest_t *m" "size_t i" "pc_entry_t *e" "size_t esize"
+.Ft int64_t
+.Fn pc_manifest_find_sz "pc_manifest_t *m" "const char *path" "pc_entry_t *e" "size_t esize"
+.Ft int
 .Fn pc_manifest_encode "pc_manifest_t *m" "void *buf" "size_t *len"
 .Ft pc_manifest_t *
 .Fn pc_manifest_decode "const void *buf" "size_t len"
@@ -408,6 +414,25 @@ trailing bytes, so a restore that follows a decoded manifest cannot be
 steered outside its target directory through ".." or a symlink it just
 created.
 Seal the encoded manifest like any chunk to encrypt and authenticate it.
+.Pp
+.Vt pc_entry_t
+may gain fields at its end in a later version.
+The header maps
+.Fn pc_manifest_add ,
+.Fn pc_manifest_get
+and
+.Fn pc_manifest_find
+to
+.Fn pc_manifest_add_sz ,
+.Fn pc_manifest_get_sz
+and
+.Fn pc_manifest_find_sz ,
+which also take
+.Li sizeof (pc_entry_t)
+as the program saw it, so a program built against another version of
+the header keeps working: fields one side does not know read as zero,
+and add refuses an entry that sets a field the library does not know
+rather than drop it.
 .El
 .Pp
 The object format is described in

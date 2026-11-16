@@ -344,6 +344,39 @@ MU_TEST(test_decode_flips)
 	free(b);
 }
 
+/*
+ * Entries of another size: a program built against a newer header (with
+ * fields this library lacks) or an older one. Unknown fields read as zero;
+ * an entry that sets one is refused rather than silently dropped.
+ */
+MU_TEST(test_entry_size)
+{
+	struct { pc_entry_t e; uint64_t future[2]; } big;
+	pc_manifest_t *m = pc_manifest_new();
+
+	memset(&big, 0, sizeof (big));
+	big.e = ent("a", PC_ENTRY_FILE);
+	mu_assert_int_eq(0, pc_manifest_add_sz(m, &big.e, sizeof (big)));
+	big.e.path = "b";
+	big.future[1] = 1;
+	mu_assert_int_eq(-1, pc_manifest_add_sz(m, &big.e, sizeof (big)));
+	mu_assert_int_eq(-1, pc_manifest_add_sz(m, &big.e, sizeof (pc_entry_t) - 1));
+
+	memset(&big, 0xff, sizeof (big));
+	mu_assert_int_eq(0, pc_manifest_get_sz(m, 0, &big.e, sizeof (big)));
+	mu_assert(strcmp(big.e.path, "a") == 0 && big.e.size == 1000, "get_sz fields");
+	mu_assert(big.future[0] == 0 && big.future[1] == 0, "unknown fields not zeroed");
+	memset(&big, 0xff, sizeof (big));
+	mu_assert(pc_manifest_find_sz(m, "a", &big.e, sizeof (big)) == 0 &&
+	    big.future[0] == 0 && big.e.nchunks == 4, "find_sz");
+	mu_assert_int_eq(-1, pc_manifest_get_sz(m, 0, &big.e, 8));
+
+	/* The plain names, as old binaries call them, still work. */
+	mu_assert_int_eq(0, (pc_manifest_get)(m, 0, &big.e));
+	mu_assert(strcmp(big.e.path, "a") == 0, "old pc_manifest_get");
+	pc_manifest_free(m);
+}
+
 MU_TEST_SUITE(suite_manifest)
 {
 	MU_RUN_TEST(test_roundtrip);
@@ -351,6 +384,7 @@ MU_TEST_SUITE(suite_manifest)
 	MU_RUN_TEST(test_decode_hostile);
 	MU_RUN_TEST(test_decode_tree);
 	MU_RUN_TEST(test_decode_flips);
+	MU_RUN_TEST(test_entry_size);
 }
 
 int
