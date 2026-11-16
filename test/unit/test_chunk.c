@@ -15,6 +15,21 @@
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
+#ifdef _WIN32
+/* The C runtime has no memmem(). */
+static void *
+memmem(const void *h, size_t hl, const void *n, size_t nl)
+{
+	const unsigned char *p = h;
+	size_t i;
+
+	for (i = 0; nl <= hl && i <= hl - nl; i++)
+		if (memcmp(p + i, n, nl) == 0)
+			return ((void *)(p + i));
+	return (NULL);
+}
+#endif
+
 static uint32_t rs = 12345;
 static uint32_t
 rnd(void)

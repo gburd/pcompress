@@ -7,6 +7,17 @@
  * program that links libpcompress and installs signal handlers (a daemon,
  * for example) delivers exactly such signals.
  */
+#ifdef _WIN32
+#include <stdio.h>
+
+int
+main(void)
+{
+	printf("SKIP: test_sem: Windows has no SIGUSR1 or sigaction(), so no "
+	    "signal can interrupt a wait\n");
+	return (0);
+}
+#else
 #include <sys/types.h>
 #include <errno.h>
 #include <pthread.h>
@@ -90,3 +101,4 @@ main(void)
 	MU_REPORT();
 	return (MU_EXIT_CODE);
 }
+#endif

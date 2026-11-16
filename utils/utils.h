@@ -172,7 +172,11 @@ typedef int32_t bsize_t;
 #	endif
 #endif
 
-#ifdef __GNUC__
+#if defined(_WIN32) && defined(__GNUC__)
+/* A DLL with any dllexport exports only those: the libpcompress.map list. */
+#define DLL_EXPORT __attribute__ ((dllexport))
+#define DLL_LOCAL
+#elif defined(__GNUC__)
 #define DLL_EXPORT __attribute__ ((visibility ("default")))
 #define DLL_LOCAL  __attribute__ ((visibility ("hidden")))
 #else

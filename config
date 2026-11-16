@@ -244,6 +244,15 @@ zstd_objs='\$\(ZSTDOBJS\)'
 zstd_wrapobj='\$\(ZSTDWRAPOBJ\)'
 zstd_cppflags="-DENABLE_PC_ZSTD"
 zstd_incflags="-I./zstd/lib"
+# Windows (MSYS2) only; see the MINGW case below.
+pc_os=""
+exeext=""
+platform_srcs=""
+platform_cppflags=""
+prog_ldflags=""
+la_host=""
+la_extra=""
+la_cflags=""
 
 # ----------------------------------------------------------------
 # Initialize git submodules if present and not yet initialized
@@ -300,8 +309,7 @@ cat << _EOF > tst.c
 int
 main(void)
 {
-	long l;
-	printf("%lu\n", sizeof (l));
+	printf("%lu\n", (unsigned long)sizeof (void *));
 	return (0);
 }
 _EOF
@@ -515,6 +523,9 @@ fi
 # ----------------------------------------------------------------
 echo "Checking OS ..."
 OS=$(uname)
+case "$OS" in
+MINGW*) OS=MINGW ;;
+esac
 skeinblock='\$\(SKEIN_BLOCK_C\)'
 gnu_arch=""
 
@@ -547,6 +558,34 @@ then
 	plat=$(isainfo -n)
 	dtag_val=""
 	lrt="-lrt -lsocket -lnsl"	# socketpair() lives in libsocket
+elif [ "$OS" = "MINGW" ]
+then
+	# MSYS2 with a MinGW-w64 toolchain (CLANG64, UCRT64, CLANGARM64). uname -m
+	# names the MSYS runtime, which is x86_64 on ARM64 Windows too; the
+	# compiler knows the target.
+	plat=$(${GCC} -dumpmachine | cut -d- -f1)
+	pc_os=MINGW
+	exeext=".exe"
+	# What -lpcompress links: the DLL's import library (see Makefile.in).
+	so_suffix="dll.a"
+	ldl=""
+	lrt=""
+	dtag_val=""
+	enable_rpath=0
+	test_rpath=""
+	platform_srcs="utils/win32.c"
+	# utils/win32 holds the POSIX headers MinGW lacks (C and C++); C files
+	# also get utils/win32.h first (see Makefile.in, PLATFORM_CINCLUDE).
+	platform_cppflags="-DWIN32_LEAN_AND_MEAN -DNOMINMAX -I./utils/win32"
+	# The programs and tests open every file in binary mode (no CRLF
+	# translation, no stop at ^Z); the library passes O_BINARY itself.
+	prog_ldflags=$(${GCC} -print-file-name=binmode.o)
+	# The MSYS config.guess would say x86_64 here even on ARM64. The
+	# static libarchive must not mark its API dllexport: our DLL would
+	# export it.
+	la_host="--build=${plat}-w64-mingw32 --host=${plat}-w64-mingw32"
+	la_extra="--without-xmllite"
+	la_cflags="-DLIBARCHIVE_STATIC"
 else
 	echo "WARNING: Untested OS '$OS'. Attempting to continue ..."
 	plat=$(uname -m)
@@ -716,7 +755,8 @@ extra_ld_flags="${LDFLAGS}"
 # ----------------------------------------------------------------
 if [ $sse_detect -eq 1 ]
 then
-	${GCC} -o sse_level ./utils/sse_level.c ./utils/cpuid.c -I./utils
+	${GCC} ${platform_cppflags} ${pc_os:+-D_FILE_OFFSET_BITS=64 -include utils/win32.h} \
+	    -o sse_level ./utils/sse_level.c ./utils/cpuid.c -I./utils
 	if [ $? -ne 0 ]
 	then
 		echo "ERROR:"
@@ -870,6 +910,23 @@ else
 	keccak_srcs='\$\(KECCAK_SRC_OPT64\)'
 fi
 
+if [ "$OS" = "MINGW" ] && [ $is_x86 -eq 1 ]; then
+	# The x86 .s and .asm files are ELF only (and assume the System V
+	# calling convention): use the C code paths, as on Intel Macs.
+	aes_asm_srcs=""
+	salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
+	salsa20_stream_asm=
+	salsa20_debug='\$\(XSALSA20_DEBUG\)'
+	skeinblock='\$\(SKEIN_BLOCK_C\)'
+	keccak_srcs='\$\(KECCAK_SRC_OPT64\)'
+	keccak_srcs_asm=
+	keccak_hdrs='\$\(KECCAK_HDRS_OPT64\)'
+	sha256asmobjs=
+	yasm="@echo Skipping"
+	gnu_as_flag=""
+	extra_opt_flags="${extra_opt_flags} -DPC_NO_AES_ASM"
+fi
+
 if [ "$OS" = "Darwin" ]
 then
 	# The x86 .s files are ELF/GAS only: use the portable C/OpenSSL code
@@ -902,7 +959,10 @@ fi
 
 # Installed binary: the install prefix, plus <bindir>/../lib so a binary
 # tarball works wherever it is unpacked.
-if [ "$OS" = "Darwin" ]; then
+if [ "$OS" = "MINGW" ]; then
+	# Windows finds a DLL next to the program, or on PATH: no run paths.
+	prog_rpath=""
+elif [ "$OS" = "Darwin" ]; then
 	# @rpath/libpcompress.dylib.1: build tree (tests) and install prefix.
 	prog_rpath="-Wl,-rpath,$(pwd) -Wl,-rpath,${prefix}/lib -Wl,-rpath,@loader_path/../lib"
 else
@@ -1372,7 +1432,7 @@ echo "*************** Running configure in libarchive ****************"
  fi
  # libarchive runs on our threads: it needs the thread-safe errno etc.
  # (illumos/Solaris use a global errno without -D_REENTRANT).
- CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT" ./configure --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-iconv --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --without-zstd --without-lz4 --without-libb2 --without-lzo2 --without-cng --without-mbedtls --without-nettle --without-md --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
+ CC=${GCC} CFLAGS="${CFLAGS:--g -O2} -pthread -D_REENTRANT ${la_cflags}" ./configure ${la_host} ${la_extra} --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip --without-iconv --without-zlib --without-bz2lib --without-lzma --without-openssl --without-xml2 --without-expat --without-zstd --without-lz4 --without-libb2 --without-lzo2 --without-cng --without-mbedtls --without-nettle --without-md --disable-silent-rules --enable-shared=no --enable-static=yes --with-pic
  [ $? -ne 0 ] && exit $?
  sed '
 s@$(BUILT_SOURCES)@@
@@ -1448,7 +1508,11 @@ export_flags=""
 printf 'int pc_probe(void){return 0;}\nint pc_hidden(void){return 1;}\n' > .exp_probe.c
 printf 'PCOMPRESS_1 {\n\tglobal: pc_probe;\n\tlocal: *;\n};\n' > .exp_probe.map
 printf '_pc_probe\n' > .exp_probe.exp
-if [ "$OS" = "Darwin" ]; then
+if [ "$OS" = "MINGW" ]; then
+	# PE: DLL_EXPORT is __declspec(dllexport) there (utils/utils.h), and
+	# a DLL with any dllexport exports only those. Nothing to pass.
+	export_flags=""
+elif [ "$OS" = "Darwin" ]; then
 	# Mach-O names carry a leading _; the map lists several per line.
 	sed -n -e '/global:/,/local:/p' libpcompress.map | grep -v 'global:\|local:' | \
 	    tr ';' '\n' | tr -d ' \t' | sed -e '/^$/d' -e 's/^/_/' > libpcompress.exports
@@ -1464,7 +1528,11 @@ elif ${GCC} -shared -fPIC -o .exp_probe.so .exp_probe.c \
 	export_flags="-Wl,-M,\$(CURDIR)/libpcompress.map"	# illumos/Solaris ld
 fi
 rm -f .exp_probe.c .exp_probe.so .exp_probe.map .exp_probe.exp
-echo "  exports: ${export_flags:-all (linker has no version-script support)}"
+if [ "$OS" = "MINGW" ]; then
+	echo "  exports: the DLL_EXPORT (dllexport) functions"
+else
+	echo "  exports: ${export_flags:-all (linker has no version-script support)}"
+fi
 
 pc_version=$(sed -n 's/.*UTILITY_VERSION[^"]*"\([^"]*\)".*/\1/p' pcompress.h)
 
@@ -1478,6 +1546,11 @@ fi
 
 sed "
 s#@EXPORT_FLAGS@#${export_flags}#g
+s#@PC_OS@#${pc_os}#g
+s#@EXEEXT@#${exeext}#g
+s#@PLATFORM_SRCS@#${platform_srcs}#g
+s#@PLATFORM_CPPFLAGS@#${platform_cppflags}#g
+s#@PROG_LDFLAGS@#${prog_ldflags}#g
 s#@PC_VERSION@#${pc_version}#g
 s#@TEST_RPATH@#${test_rpath}#g
 s#@GCC@#${GCC}#g

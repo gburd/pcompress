@@ -1015,8 +1015,14 @@ cont:
 #define UNCOMP_BAIL err = 1; goto uncomp_done
 
 /* The job's stream ends: pc_*_fd() descriptors, else stdin/stdout. */
-#define	PC_IN_FD(p)	((p)->in_fd >= 0 ? (p)->in_fd : fileno(stdin))
-#define	PC_OUT_FD(p)	((p)->out_fd >= 0 ? (p)->out_fd : fileno(stdout))
+#ifdef _WIN32
+/* Binary: Windows opens stdin and stdout in text (CRLF) mode. */
+#define	PC_STDIO_FD(f)	pc_win32_binfd(fileno(f))
+#else
+#define	PC_STDIO_FD(f)	fileno(f)
+#endif
+#define	PC_IN_FD(p)	((p)->in_fd >= 0 ? (p)->in_fd : PC_STDIO_FD(stdin))
+#define	PC_OUT_FD(p)	((p)->out_fd >= 0 ? (p)->out_fd : PC_STDIO_FD(stdout))
 
 /*
  * The fixed part of a .pz file header, as read by start_decompress_impl()

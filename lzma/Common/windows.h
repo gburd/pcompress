@@ -42,7 +42,7 @@
 
 /* BEGIN #include <windef.h> */
 
-#include "Common/MyWindows.h" // FIXED
+#include "MyWindows.h" // FIXED
 
 #ifndef CONST
 #define CONST const
@@ -189,7 +189,7 @@ DWORD WINAPI GetTickCount(VOID);
 #define CP_UTF8  65001
 
 /* #include <unknwn.h> */
-#include <basetyps.h>
+#include "basetyps.h"
 struct IEnumSTATPROPSTG;
 
 typedef struct  tagSTATPROPSTG {

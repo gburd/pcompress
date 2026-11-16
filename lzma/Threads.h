@@ -30,7 +30,22 @@
 #define __7Z_THRESDS_H
 
 #include "Types.h"
-#include "windows.h"
+#ifdef _WIN32
+/*
+ * The p7zip shim Common/windows.h stands in for <windows.h> on POSIX
+ * hosts. These threads are pthreads everywhere: take only what they use.
+ */
+typedef void *LPVOID;
+typedef int BOOL;
+#ifndef TRUE
+#define	TRUE	1
+#endif
+#ifndef FALSE
+#define	FALSE	0
+#endif
+#else
+#include "Common/windows.h"
+#endif
 
 #ifdef ENV_BEOS
 #include <kernel/OS.h>
