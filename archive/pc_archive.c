@@ -1033,18 +1033,11 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 int
 setup_extractor(pc_ctx_t *pctx)
 {
-	int pipefd[2];
 	struct archive *arc;
-
-	if (pipe(pipefd) == -1) {
-		log_msg(LOG_ERR, 1, "Unable to create extractor pipe.\n");
-		return (-1);
-	}
 
 	arc = archive_read_new();
 	if (!arc) {
 		log_msg(LOG_ERR, 1, "Unable to create libarchive context.\n");
-		close(pipefd[0]); close(pipefd[1]);
 		return (-1);
 	}
 	if (pctx->meta_stream)

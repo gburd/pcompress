@@ -1981,6 +1981,9 @@ dec_free_workers(pc_ctx_t *pctx, struct cmp_data **dary, uint32_t nprocs)
 		if (pctx->_deinit_func)
 			pctx->_deinit_func(&(dary[i]->data));
 		if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan)) {
+			/* The read handle global dedupe restores from (dec_start_worker()). */
+			if (dary[i]->rctx && dary[i]->rctx->out_fd != -1)
+				close(dary[i]->rctx->out_fd);
 			destroy_dedupe_context(dary[i]->rctx);
 		}
 		if (pctx->encrypt_type && dary[i]->chunk_hmac.mac_ctx)

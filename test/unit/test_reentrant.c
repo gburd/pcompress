@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <ftw.h>
 #include <pcompress.h>
@@ -224,6 +225,24 @@ chunk_round(struct job *j, int r)
 	return (bad ? -1 : 0);
 }
 
+/*
+ * How many descriptors above stderr are open (fcntl() fails on a closed
+ * one). Windows has no fcntl(): there the check counts nothing.
+ */
+static int
+open_fds(void)
+{
+	int n = 0;
+#ifndef _WIN32
+	int fd;
+
+	for (fd = 3; fd < 1024; fd++)
+		if (fcntl(fd, F_GETFD) != -1)
+			n++;
+#endif
+	return (n);
+}
+
 static void *
 worker(void *arg)
 {
@@ -275,7 +294,7 @@ main(int argc, char **argv)
 	int rounds = argc > 2 ? atoi(argv[2]) : 6;
 	pthread_t *t;
 	struct job *jobs;
-	int i, failures = 0;
+	int i, failures = 0, fd_before, fd_after;
 
 	snprintf(dir, sizeof (dir), "%s/pc_reentrant_%d",
 	    getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
@@ -312,11 +331,23 @@ main(int argc, char **argv)
 	}
 
 	/* 1. Sequential reuse: one context after another in one thread. */
+	fd_before = open_fds();
 	jobs[0].rounds = (int)NMODES;
 	worker(&jobs[0]);
 	failures += jobs[0].failures;
 	jobs[0].failures = 0;
 	jobs[0].rounds = rounds;
+	/*
+	 * A library may run in a long-lived process: the jobs must close
+	 * every descriptor they open. (Global dedupe restore left one read
+	 * handle per thread open after each decompression.)
+	 */
+	fd_after = open_fds();
+	if (fd_after != fd_before) {
+		fprintf(stderr, "descriptors leaked: %d open before, %d after\n",
+		    fd_before, fd_after);
+		failures++;
+	}
 	printf("sequential: %s\n", failures ? "FAIL" : "PASS");
 
 	/* 2. Concurrent contexts. */
