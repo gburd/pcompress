@@ -1018,67 +1018,61 @@ cont:
 #define	PC_IN_FD(p)	((p)->in_fd >= 0 ? (p)->in_fd : fileno(stdin))
 #define	PC_OUT_FD(p)	((p)->out_fd >= 0 ? (p)->out_fd : fileno(stdout))
 
-static int
-start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
-{
-	char algorithm[ALGO_SZ];
-	struct stat sbuf;
-	struct wdata w;
-	int compfd = -1, compfd2 = -1, p, dedupe_flag;
-	int uncompfd = -1, err, np, bail, own_uncompfd = 0;
-	int thread = 0, level;
-	uint32_t nprocs = 1, i;
+/*
+ * The fixed part of a .pz file header, as read by start_decompress_impl()
+ * and checked by the helpers below. Each helper logs its own error and
+ * returns -1; the caller then bails out to its single cleanup path.
+ */
+struct dec_hdr {
 	unsigned short version, flags;
-	int64_t chunksize, compressed_chunksize;
-	struct cmp_data **dary, *tdat;
-	pthread_t writer_thr;
-	algo_props_t props;
+	int64_t chunksize;
+	int level;
+};
 
-	err = 0;
-	flags = 0;
-	thread = 0;
-	dary = NULL;
-	init_algo_props(&props);
-
-	/*
-	 * Open files and do sanity checks.
-	 */
-	if (!pctx->pipe_mode) {
-		if (filename == NULL) {
-			pctx->pipe_mode = 1;
-			compfd = PC_IN_FD(pctx);
-			if (compfd == -1) {
-				log_msg(LOG_ERR, 1, "fileno ");
-				UNCOMP_BAIL;
-			}
-			sbuf.st_size = 0;
-		} else {
-			if ((compfd = open(filename, O_RDONLY, 0)) == -1) {
-				log_msg(LOG_ERR, 1, "Cannot open: %s", filename);
-				return (1);
-			}
-
-			if (fstat(compfd, &sbuf) == -1) {
-				log_msg(LOG_ERR, 1, "Cannot stat: %s", filename);
-				return (1);
-			}
-			if (sbuf.st_size == 0)
-				return (1);
+/*
+ * Open the compressed input (a file, or the job's input stream in pipe
+ * mode) and stat it. Returns 1 if the file cannot be opened or is empty
+ * (the caller returns at once, as before any setup), 0 on success, -1 if
+ * the input stream is missing.
+ */
+static int
+dec_open_input(pc_ctx_t *pctx, const char *filename, int *compfd, struct stat *sbuf)
+{
+	if (!pctx->pipe_mode && filename != NULL) {
+		if ((*compfd = open(filename, O_RDONLY, 0)) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot open: %s", filename);
+			return (1);
 		}
-	} else {
-		compfd = PC_IN_FD(pctx);
-		if (compfd == -1) {
-			log_msg(LOG_ERR, 1, "fileno ");
-			UNCOMP_BAIL;
+		if (fstat(*compfd, sbuf) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot stat: %s", filename);
+			return (1);
 		}
+		return (sbuf->st_size == 0 ? 1 : 0);
 	}
+	if (!pctx->pipe_mode) {
+		pctx->pipe_mode = 1;
+		sbuf->st_size = 0;
+	}
+	*compfd = PC_IN_FD(pctx);
+	if (*compfd == -1) {
+		log_msg(LOG_ERR, 1, "fileno ");
+		return (-1);
+	}
+	return (0);
+}
 
-	/*
-	 * Read file header pieces and verify.
-	 */
+/*
+ * Read the algorithm name, version, flags, chunk size and level, and
+ * refuse values no writer produces (tampering or corruption). algorithm
+ * must outlive the job: pctx->algo points into it.
+ */
+static int
+dec_read_header(pc_ctx_t *pctx, int compfd, const char *filename, char *algorithm,
+    struct dec_hdr *h)
+{
 	if (Read(compfd, algorithm, ALGO_SZ) < ALGO_SZ) {
 		log_msg(LOG_ERR, 1, "Read: ");
-		UNCOMP_BAIL;
+		return (-1);
 	}
 	if (init_algo(pctx, algorithm, 0) != 0) {
 		log_error_code(PC_ERR_FORMAT);
@@ -1086,218 +1080,217 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			log_msg(LOG_ERR, 0, "Input stream is not pcompressed.");
 		else
 			log_msg(LOG_ERR, 0, "%s is not a pcompressed file.", filename);
-		UNCOMP_BAIL;
+		return (-1);
 	}
 	pctx->algo = algorithm;
 
-	if (Read(compfd, &version, sizeof (version)) < sizeof (version) ||
-	    Read(compfd, &flags, sizeof (flags)) < sizeof (flags) ||
-	    Read(compfd, &chunksize, sizeof (chunksize)) < sizeof (chunksize) ||
-	    Read(compfd, &level, sizeof (level)) < sizeof (level)) {
+	if (Read(compfd, &h->version, sizeof (h->version)) < sizeof (h->version) ||
+	    Read(compfd, &h->flags, sizeof (h->flags)) < sizeof (h->flags) ||
+	    Read(compfd, &h->chunksize, sizeof (h->chunksize)) < sizeof (h->chunksize) ||
+	    Read(compfd, &h->level, sizeof (h->level)) < sizeof (h->level)) {
 		log_msg(LOG_ERR, 1, "Read: ");
-		UNCOMP_BAIL;
+		return (-1);
 	}
-
-	version = ntohs(version);
-	flags = ntohs(flags);
-	chunksize = ntohll(chunksize);
-	level = ntohl(level);
+	h->version = ntohs(h->version);
+	h->flags = ntohs(h->flags);
+	h->chunksize = ntohll(h->chunksize);
+	h->level = ntohl(h->level);
 
 	/*
 	 * Check for ridiculous values (malicious tampering or otherwise).
 	 */
-	if (version > VERSION_MAX) {
+	if (h->version > VERSION_MAX) {
 		log_error_code(PC_ERR_FORMAT);
 		log_msg(LOG_ERR, 0, "Cannot handle newer archive version %d, capability %d",
-			version, VERSION_MAX);
-		err = 1;
-		goto uncomp_done;
+			h->version, VERSION_MAX);
+		return (-1);
 	}
-	if (chunksize > EIGHTY_PCT(get_total_ram())) {
+	if (h->chunksize > EIGHTY_PCT(get_total_ram())) {
 		log_msg(LOG_ERR, 0, "Chunk size must not exceed 80%% of total RAM.");
-		err = 1;
-		goto uncomp_done;
+		return (-1);
 	}
-	if (level > MAX_LEVEL || level < 0) {
+	if (h->level > MAX_LEVEL || h->level < 0) {
 		log_error_code(PC_ERR_CORRUPT);
-		log_msg(LOG_ERR, 0, "Invalid compression level in header: %d", level);
-		err = 1;
-		goto uncomp_done;
+		log_msg(LOG_ERR, 0, "Invalid compression level in header: %d", h->level);
+		return (-1);
 	}
-	if (version < VERSION-4) {
+	if (h->version < VERSION-4) {
 		log_error_code(PC_ERR_FORMAT);
-		log_msg(LOG_ERR, 0, "Unsupported version: %d", version);
-		err = 1;
-		goto uncomp_done;
+		log_msg(LOG_ERR, 0, "Unsupported version: %d", h->version);
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * Archive mode: the target must be a directory, created if missing
+ * (default "."). With a metadata stream, open the second descriptor the
+ * metadata thread reads.
+ */
+static int
+dec_archive_target(pc_ctx_t *pctx, const char *filename, char **to_filename,
+    const struct dec_hdr *h, int *compfd2)
+{
+	struct stat sbuf;
+
+	if (h->flags & FLAG_META_STREAM && h->version > 9)
+		pctx->meta_stream = 1;
+
+	/*
+	 * Archives with metadata streams cannot be decoded in pipe mode.
+	 */
+	if (pctx->pipe_mode && pctx->meta_stream) {
+		log_msg(LOG_ERR, 0,
+		    "Cannot extract archive with metadata stream in pipe mode.");
+		return (-1);
 	}
 
 	/*
-	 * First check for archive mode. In that case the to_filename must be a directory.
+	 * If to_filename is not set, we just use the current directory.
 	 */
-	if (flags & FLAG_ARCHIVE) {
-		if (flags & FLAG_META_STREAM && version > 9)
-			pctx->meta_stream = 1;
-
-		/*
-		 * Archives with metadata streams cannot be decoded in pipe mode.
-		 */
-		if (pctx->pipe_mode && pctx->meta_stream) {
-			log_msg(LOG_ERR, 0,
-			    "Cannot extract archive with metadata stream in pipe mode.");
-			err = 1;
-			goto uncomp_done;
+	if (*to_filename == NULL) {
+		*to_filename = ".";
+		pctx->to_filename = ".";
+	}
+	pctx->archive_mode = 1;
+	if (stat(*to_filename, &sbuf) == -1) {
+		if (errno != ENOENT) {
+			log_msg(LOG_ERR, 1, "Target path is not a directory.");
+			return (-1);
 		}
-
-		/*
-		 * If to_filename is not set, we just use the current directory.
-		 */
-		if (to_filename == NULL) {
-			to_filename = ".";
-			pctx->to_filename = ".";
+		if (mkdir(*to_filename,
+		    S_IRUSR|S_IWUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH) == -1) {
+			log_msg(LOG_ERR, 1, "Unable to create target directory %s.",
+			    *to_filename);
+			return (-1);
 		}
-		pctx->archive_mode = 1;
-		if (stat(to_filename, &sbuf) == -1) {
-			if (errno != ENOENT) {
-				log_msg(LOG_ERR, 1, "Target path is not a directory.");
-				err = 1;
-				goto uncomp_done;
-			}
-			if (mkdir(to_filename,
-			    S_IRUSR|S_IWUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH) == -1) {
-				log_msg(LOG_ERR, 1, "Unable to create target directory %s.",
-				    to_filename);
-				err = 1;
-				goto uncomp_done;
-			}
-			if (stat(to_filename, &sbuf) == -1) {
-				log_msg(LOG_ERR, 1, "Unable to correctly create target directory %s.",
-				    to_filename);
-				err = 1;
-				goto uncomp_done;
-			}
-		}
-		if (!S_ISDIR(sbuf.st_mode)) {
-			log_msg(LOG_ERR, 0, "Target path is not a directory.", to_filename);
-			err = 1;
-			goto uncomp_done;
-		}
-
-		/*
-		 * Open another fd to the compressed archive. This is used by the metadata
-		 * thread.
-		 */
-		if (pctx->meta_stream) {
-			if ((compfd2 = open(filename, O_RDONLY, 0)) == -1) {
-				log_msg(LOG_ERR, 1, "Cannot open: %s", filename);
-				err = 1;
-				goto uncomp_done;
-			}
-		}
-	} else {
-		const char *origf;
-
-		if (pctx->list_mode) {
-			log_msg(LOG_ERR, 0, "Nothing to list. The compressed file "
-			    "is not an archive.");
-			err = 1;
-			goto uncomp_done;
-		}
-		if (to_filename == NULL && !pctx->pipe_mode) {
-			char *pos;
-
-			/*
-			 * Use unused space in archive_members_file buffer to hold generated
-			 * filename so that it need not be explicitly freed at the end.
-			 */
-			to_filename = pctx->archive_members_file;
-			pctx->to_filename = pctx->archive_members_file;
-			pos = strrchr(filename, '.');
-			if (pos != NULL) {
-				/* pos points at the '.': was pos[0]/pos[1], never matched. */
-				if ((pos[1] == 'p' || pos[1] == 'P') &&
-				    (pos[2] == 'z' || pos[2] == 'Z') && pos[3] == '\0') {
-					memcpy(to_filename, filename, pos - filename);
-					to_filename[pos - filename] = '\0';
-				} else {
-					pos = NULL;
-				}
-			}
-
-			/*
-			 * If no .pz extension is found then use <filename>.out as the
-			 * decompressed file name.
-			 */
-			if (pos == NULL) {
-				strcpy(to_filename, filename);
-				strcat(to_filename, ".out");
-				log_msg(LOG_WARN, 0, "Using %s for output file name.", to_filename);
-			}
-		}
-		if (to_filename != NULL) {
-			origf = to_filename;
-			if ((to_filename = realpath(origf, NULL)) != NULL) {
-				free((void *)(to_filename));
-				log_msg(LOG_ERR, 0, "File %s exists", origf);
-				err = 1;
-				goto uncomp_done;
-			}
-			to_filename = (char *)origf;
+		if (stat(*to_filename, &sbuf) == -1) {
+			log_msg(LOG_ERR, 1, "Unable to correctly create target directory %s.",
+			    *to_filename);
+			return (-1);
 		}
 	}
-
-	compressed_chunksize = chunksize + CHUNK_HDR_SZ + zlib_buf_extra(chunksize);
-
-	if (pctx->_props_func) {
-		pctx->_props_func(&props, level, chunksize);
-		if (chunksize + props.buf_extra > compressed_chunksize) {
-			compressed_chunksize += (chunksize + props.buf_extra - 
-			    compressed_chunksize);
-		}
+	if (!S_ISDIR(sbuf.st_mode)) {
+		log_msg(LOG_ERR, 0, "Target path is not a directory.", *to_filename);
+		return (-1);
 	}
 
-	dedupe_flag = RABIN_DEDUPE_SEGMENTED; // Silence the compiler
-	if (flags & FLAG_DEDUP) {
+	/*
+	 * Open another fd to the compressed archive. This is used by the metadata
+	 * thread.
+	 */
+	if (pctx->meta_stream) {
+		if ((*compfd2 = open(filename, O_RDONLY, 0)) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot open: %s", filename);
+			return (-1);
+		}
+	}
+	return (0);
+}
+
+/*
+ * Single-file mode: with no target name, derive one from the input
+ * (strip .pz, else append .out). An existing target is never overwritten.
+ */
+static int
+dec_output_name(pc_ctx_t *pctx, const char *filename, char **to_filename)
+{
+	const char *origf;
+
+	if (pctx->list_mode) {
+		log_msg(LOG_ERR, 0, "Nothing to list. The compressed file "
+		    "is not an archive.");
+		return (-1);
+	}
+	if (*to_filename == NULL && !pctx->pipe_mode) {
+		char *pos;
+
+		/*
+		 * Use unused space in archive_members_file buffer to hold generated
+		 * filename so that it need not be explicitly freed at the end.
+		 */
+		*to_filename = pctx->archive_members_file;
+		pctx->to_filename = pctx->archive_members_file;
+		pos = strrchr(filename, '.');
+		if (pos != NULL) {
+			/* pos points at the '.': was pos[0]/pos[1], never matched. */
+			if ((pos[1] == 'p' || pos[1] == 'P') &&
+			    (pos[2] == 'z' || pos[2] == 'Z') && pos[3] == '\0') {
+				memcpy(*to_filename, filename, pos - filename);
+				(*to_filename)[pos - filename] = '\0';
+			} else {
+				pos = NULL;
+			}
+		}
+
+		/*
+		 * If no .pz extension is found then use <filename>.out as the
+		 * decompressed file name.
+		 */
+		if (pos == NULL) {
+			strcpy(*to_filename, filename);
+			strcat(*to_filename, ".out");
+			log_msg(LOG_WARN, 0, "Using %s for output file name.", *to_filename);
+		}
+	}
+	if (*to_filename != NULL) {
+		char *real;
+
+		origf = *to_filename;
+		if ((real = realpath(origf, NULL)) != NULL) {
+			free(real);
+			log_msg(LOG_ERR, 0, "File %s exists", origf);
+			return (-1);
+		}
+	}
+	return (0);
+}
+
+/*
+ * Dedupe and checksum settings from the header flags. Global dedupe
+ * restore re-reads already written output, so it needs a real output
+ * file (archives use a temp file).
+ */
+static int
+dec_flags(pc_ctx_t *pctx, const struct dec_hdr *h, const char *to_filename,
+    int *dedupe_flag, algo_props_t *props)
+{
+	*dedupe_flag = RABIN_DEDUPE_SEGMENTED; // Silence the compiler
+	if (h->flags & FLAG_DEDUP) {
 		pctx->enable_rabin_scan = 1;
-		dedupe_flag = RABIN_DEDUPE_SEGMENTED;
+		*dedupe_flag = RABIN_DEDUPE_SEGMENTED;
 
-		if (flags & FLAG_DEDUP_FIXED) {
-			if (version > 7) {
-				/*
-				 * Global dedupe restore re-reads already written
-				 * output, so it needs a real output file (archives
-				 * use a temp file).
-				 */
-				if (to_filename == NULL && !(flags & FLAG_ARCHIVE)) {
+		if (h->flags & FLAG_DEDUP_FIXED) {
+			if (h->version > 7) {
+				if (to_filename == NULL && !(h->flags & FLAG_ARCHIVE)) {
 					log_msg(LOG_ERR, 0, "Global Deduplication requires "
 					    "an output file; cannot decompress to stdout.");
-					err = 1;
-					goto uncomp_done;
+					return (-1);
 				}
 				pctx->enable_rabin_global = 1;
-				dedupe_flag = RABIN_DEDUPE_FILE_GLOBAL;
+				*dedupe_flag = RABIN_DEDUPE_FILE_GLOBAL;
 			} else {
 				log_error_code(PC_ERR_CORRUPT);
 				log_msg(LOG_ERR, 0, "Invalid file deduplication flags.");
-				err = 1;
-				goto uncomp_done;
+				return (-1);
 			}
 		}
-	} else if (flags & FLAG_DEDUP_FIXED) {
+	} else if (h->flags & FLAG_DEDUP_FIXED) {
 		pctx->enable_fixed_scan = 1;
-		dedupe_flag = RABIN_DEDUPE_FIXED;
+		*dedupe_flag = RABIN_DEDUPE_FIXED;
 	}
 
-	if (flags & FLAG_SINGLE_CHUNK) {
-		props.is_single_chunk = 1;
+	if (h->flags & FLAG_SINGLE_CHUNK) {
+		props->is_single_chunk = 1;
 	}
 
-	pctx->cksum = flags & CKSUM_MASK;
+	pctx->cksum = h->flags & CKSUM_MASK;
 
 	/*
 	 * Backward compatibility check for SKEIN in archives version 5 or below.
 	 * In newer versions BLAKE uses same IDs as SKEIN.
 	 */
-	if (version <= 5) {
+	if (h->version <= 5) {
 		if (pctx->cksum == CKSUM_BLAKE256) pctx->cksum = CKSUM_SKEIN256;
 		if (pctx->cksum == CKSUM_BLAKE512) pctx->cksum = CKSUM_SKEIN512;
 	}
@@ -1305,382 +1298,386 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	    &(pctx->mac_bytes), 1) == -1) {
 		log_msg(LOG_ERR, 0, "Invalid checksum algorithm code: %d. "
 		    "File corrupt ?", pctx->cksum);
-		UNCOMP_BAIL;
+		return (-1);
 	}
 
 	/*
 	 * Archives older than version 5 did not support MACs.
 	 */
-	if (version < 5)
+	if (h->version < 5)
 		pctx->mac_bytes = 0;
+	return (0);
+}
 
-	/*
-	 * If encryption is enabled initialize crypto.
-	 */
-	if (flags & MASK_CRYPTO_ALG) {
-		int saltlen, noncelen;
-		uchar_t *salt1, *salt2;
-		uchar_t nonce[MAX_NONCE], n1[MAX_NONCE];
-		uchar_t pw[PC_PW_MAX + 1];
-		int pw_len;
-		uint32_t kdf_raw[4];	/* version 11: KDF id, log2 N, r, p */
-		scrypt_params_t kdf;
-		mac_ctx_t hdr_mac;
-		uchar_t hdr_hash1[pctx->mac_bytes], hdr_hash2[pctx->mac_bytes];
-		unsigned int hlen;
-		unsigned short d1;
-		unsigned int d2;
-		uint64_t d3;
+/*
+ * The encryption fields of a header (version 7 and later: salt, nonce and
+ * key length; version 11 and later: the KDF cost) and its stored HMAC.
+ * salt1/n1 are the bytes as stored (what the HMAC covers), salt2/nonce
+ * as the cipher wants them.
+ */
+struct dec_crypto {
+	int saltlen, noncelen;
+	uchar_t *salt1, *salt2;
+	uchar_t nonce[MAX_NONCE], n1[MAX_NONCE];
+	uint32_t kdf_raw[4];	/* version 11: KDF id, log2 N, r, p */
+	scrypt_params_t kdf;
+	uchar_t stored_mac[CKSUM_MAX_BYTES];
+};
 
-		/*
-		 * In encrypted files we do not have a normal digest. The HMAC
-		 * is computed over header and encrypted data.
-		 */
-		pctx->cksum_bytes = 0;
-		pw_len = -1;
-		compressed_chunksize += pctx->mac_bytes;
-		pctx->encrypt_type = flags & MASK_CRYPTO_ALG;
-		if (version < 7)
-			pctx->keylen = OLD_KEYLEN;
-
-		if (pctx->encrypt_type == CRYPTO_ALG_AES) {
-			noncelen = 8;
-		} else if (pctx->encrypt_type == CRYPTO_ALG_SALSA20) {
-			noncelen = XSALSA20_CRYPTO_NONCEBYTES;
-		} else {
-			log_msg(LOG_ERR, 0, "Invalid Encryption algorithm code: %d. File corrupt ?",
-				pctx->encrypt_type);
-			UNCOMP_BAIL;
-		}
-		if (Read(compfd, &saltlen, sizeof (saltlen)) < sizeof (saltlen)) {
-			log_msg(LOG_ERR, 1, "Read: ");
-			UNCOMP_BAIL;
-		}
-		saltlen = ntohl(saltlen);
-		/* Untrusted header field: bound before allocating. */
-		if (saltlen <= 0 || saltlen > MAX_SALTLEN) {
-			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Invalid salt length %d. File corrupt ?", saltlen);
-			UNCOMP_BAIL;
-		}
-		salt1 = (uchar_t *)malloc(saltlen);
-		salt2 = (uchar_t *)malloc(saltlen);
-		if (salt1 == NULL || salt2 == NULL ||
-		    Read(compfd, salt1, saltlen) < saltlen) {
-			free(salt1);  free(salt2);
-			log_msg(LOG_ERR, 1, "Read: ");
-			UNCOMP_BAIL;
-		}
-		deserialize_checksum(salt2, salt1, saltlen);
-
-		if (Read(compfd, n1, noncelen) < noncelen) {
-			memset(salt2, 0, saltlen);
-			free(salt2);
-			memset(salt1, 0, saltlen);
-			free(salt1);
-			log_msg(LOG_ERR, 1, "Read: ");
-			UNCOMP_BAIL;
-		}
-
-		if (pctx->encrypt_type == CRYPTO_ALG_AES) {
-			U64_P(nonce) = ntohll(U64_P(n1));
-
-		} else if (pctx->encrypt_type == CRYPTO_ALG_SALSA20) {
-			deserialize_checksum(nonce, n1, noncelen);
-		}
-
-		if (version > 6) {
-			if (Read(compfd, &(pctx->keylen), sizeof (pctx->keylen)) < sizeof (pctx->keylen)) {
-				memset(salt2, 0, saltlen);
-				free(salt2);
-				memset(salt1, 0, saltlen);
-				free(salt1);
-				log_msg(LOG_ERR, 1, "Read: ");
-				UNCOMP_BAIL;
-			}
-			pctx->keylen = ntohl(pctx->keylen);
-			if (pctx->keylen != 16 && pctx->keylen != 32) {
-				memset(salt2, 0, saltlen); free(salt2);
-				memset(salt1, 0, saltlen); free(salt1);
-				log_msg(LOG_ERR, 0, "Invalid key length %d. File corrupt ?",
-				    pctx->keylen);
-				UNCOMP_BAIL;
-			}
-		}
-
-		/* Version 11: the scrypt cost, checked before any work is done. */
-		memset(&kdf, 0, sizeof (kdf));
-		if (version >= VERSION_KDF) {
-			if (Read(compfd, kdf_raw, sizeof (kdf_raw)) < (int64_t)sizeof (kdf_raw)) {
-				memset(salt2, 0, saltlen); free(salt2);
-				memset(salt1, 0, saltlen); free(salt1);
-				log_msg(LOG_ERR, 1, "Read: ");
-				UNCOMP_BAIL;
-			}
-			kdf.logn = (int)ntohl(kdf_raw[1]);
-			kdf.r = ntohl(kdf_raw[2]);
-			kdf.p = ntohl(kdf_raw[3]);
-			if (ntohl(kdf_raw[0]) != KDF_SCRYPT || !scrypt_params_ok(&kdf)) {
-				memset(salt2, 0, saltlen); free(salt2);
-				memset(salt1, 0, saltlen); free(salt1);
-				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "Invalid key derivation parameters. "
-				    "File corrupt ?");
-				UNCOMP_BAIL;
-			}
-		}
-
-		if (Read(compfd, hdr_hash1, pctx->mac_bytes) < pctx->mac_bytes) {
-			memset(salt2, 0, saltlen);
-			free(salt2);
-			memset(salt1, 0, saltlen);
-			free(salt1);
-			log_msg(LOG_ERR, 1, "Read: ");
-			UNCOMP_BAIL;
-		}
-		deserialize_checksum(hdr_hash2, hdr_hash1, pctx->mac_bytes);
-
-		{
-			/*
-			 * The whole password; for files written before 4.1.1 with
-			 * a -w file over 16 bytes, also the 15 bytes those used.
-			 */
-			uchar_t *upw = pctx->user_pw;
-			int upw_len = pctx->user_pw_len, legacy = -1, tries, t, ok = 0;
-
-			if (upw == NULL) {
-				if (!pctx->pwd_file) {
-					pw_len = get_pw_string(pw,
-					    "Please enter decryption password", 0);
-				} else {
-					pw_len = read_pw_file(pctx->pwd_file, pw, &legacy);
-					if (pw_len == -1)
-						log_msg(LOG_ERR, 1, "%s", pctx->pwd_file);
-				}
-				if (pw_len == -1) {
-					memset(salt2, 0, saltlen);
-					free(salt2);
-					memset(salt1, 0, saltlen);
-					free(salt1);
-					log_error_code(PC_ERR_CRYPTO);
-					log_msg(LOG_ERR, 0, "Failed to get password.");
-					UNCOMP_BAIL;
-				}
-				upw = pw;
-				upw_len = pw_len;
-			}
-			/*
-			 * A prompt never took more than 14 bytes: no legacy form.
-			 * Version 11 files were written with the whole password.
-			 */
-			tries = (legacy > 0 && legacy != upw_len &&
-			    version < VERSION_KDF) ? 2 : 1;
-			for (t = 0; t < tries && !ok; t++) {
-				int plen = t == 0 ? upw_len : legacy;
-				uchar_t ntry[MAX_NONCE];
-
-				/* init_crypto() wipes the nonce it is given: one copy per try. */
-				memcpy(ntry, nonce, sizeof (ntry));
-				cleanup_crypto(&(pctx->crypto_ctx));
-				pctx->crypto_ctx.kdf = kdf;
-				if (init_crypto(&(pctx->crypto_ctx), upw, plen, pctx->encrypt_type,
-				    salt2, saltlen, pctx->keylen, ntry, DECRYPT_FLAG) == -1) {
-					memset(salt2, 0, saltlen);
-					free(salt2);
-					memset(salt1, 0, saltlen);
-					free(salt1);
-					memset(upw, 0, upw_len);
-					log_msg(LOG_ERR, 0, "Failed to initialize crypto");
-					UNCOMP_BAIL;
-				}
-
-				/*
-				 * Verify file header HMAC: it also tells whether
-				 * this key is the right one.
-				 */
-				if (hmac_init(&hdr_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
-					memset(upw, 0, upw_len);
-					log_msg(LOG_ERR, 0, "Cannot initialize header hmac.");
-					UNCOMP_BAIL;
-				}
-				hmac_update(&hdr_mac, (uchar_t *)pctx->algo, ALGO_SZ);
-				d1 = htons(version);
-				hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (version));
-				d1 = htons(flags);
-				hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (flags));
-				d3 = htonll(chunksize);
-				hmac_update(&hdr_mac, (uchar_t *)&d3, sizeof (chunksize));
-				d2 = htonl(level);
-				hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (level));
-				if (version > 6) {
-					d2 = htonl(saltlen);
-					hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (saltlen));
-					hmac_update(&hdr_mac, salt1, saltlen);
-					hmac_update(&hdr_mac, n1, noncelen);
-					d2 = htonl(pctx->keylen);
-					hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (pctx->keylen));
-				}
-				if (version >= VERSION_KDF)
-					hmac_update(&hdr_mac, (uchar_t *)kdf_raw, sizeof (kdf_raw));
-				hmac_final(&hdr_mac, hdr_hash1, &hlen);
-				hmac_cleanup(&hdr_mac);
-				ok = memcmp(hdr_hash2, hdr_hash1, pctx->mac_bytes) == 0;
-			}
-			memset(upw, 0, upw_len);
-			if (upw == pctx->user_pw) {
-				pctx->user_pw = NULL;
-				pctx->user_pw_len = 0;
-			}
-			memset(salt2, 0, saltlen);
-			free(salt2);
-			memset(nonce, 0, noncelen);
-			memset(salt1, 0, saltlen);
-			free(salt1);
-			memset(n1, 0, noncelen);
-			if (!ok) {
-				log_error_code(PC_ERR_VERIFY);
-				log_msg(LOG_ERR, 0, "Header verification failed! File "
-				    "tampered or wrong password.");
-				UNCOMP_BAIL;
-			}
-		}
-	} else if (version >= 5) {
-		uint32_t crc1, crc2;
-		unsigned short d1;
-		unsigned int d2;
-		uint64_t ch;
-
-		/*
-		 * Verify file header CRC32 in non-crypto mode.
-		 */
-		if (Read(compfd, &crc1, sizeof (crc1)) < sizeof (crc1)) {
-			log_msg(LOG_ERR, 1, "Read: ");
-			UNCOMP_BAIL;
-		}
-		crc1 = htonl(crc1);
-		pctx->mac_bytes = sizeof (uint32_t);
-
-		crc2 = lzma_crc32((uchar_t *)pctx->algo, ALGO_SZ, 0);
-		d1 = htons(version);
-		crc2 = lzma_crc32((uchar_t *)&d1, sizeof (version), crc2);
-		d1 = htons(flags);
-		crc2 = lzma_crc32((uchar_t *)&d1, sizeof (version), crc2);
-		ch = htonll(chunksize);
-		crc2 = lzma_crc32((uchar_t *)&ch, sizeof (ch), crc2);
-		d2 = htonl(level);
-		crc2 = lzma_crc32((uchar_t *)&d2, sizeof (level), crc2);
-		if (crc1 != crc2) {
-			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Header verification failed! File tampered "
-			    "or wrong password.");
-			UNCOMP_BAIL;
-		}
+/* Wipe and free what dec_read_crypto() filled in. Safe after any failure. */
+static void
+dec_crypto_wipe(struct dec_crypto *c)
+{
+	if (c->salt1 != NULL) {
+		memset(c->salt1, 0, c->saltlen);
+		free(c->salt1);
 	}
+	if (c->salt2 != NULL) {
+		memset(c->salt2, 0, c->saltlen);
+		free(c->salt2);
+	}
+	memset(c, 0, sizeof (*c));
+}
 
-	if (flags & FLAG_ARCHIVE) {
-		if (pctx->enable_rabin_global) {
-			char cwd[MAXPATHLEN];
+/*
+ * Read the encryption fields and the header HMAC. Untrusted: the salt
+ * length is bounded before allocating, the key length and the KDF cost
+ * are checked before any key derivation.
+ */
+static int
+dec_read_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h,
+    struct dec_crypto *c)
+{
+	uchar_t hdr_hash1[CKSUM_MAX_BYTES];
 
-			if (to_filename[0] != PATHSEP_CHAR) {
-				if (getcwd(cwd, MAXPATHLEN) == NULL) {
-					log_msg(LOG_ERR, 1, "Cannot get current dir");
-					UNCOMP_BAIL;
-				}
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-				snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
-				    "%s" PATHSEP_STR "%s" PATHSEP_STR ".data", cwd, to_filename);
-#pragma GCC diagnostic pop
-			} else {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-				snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
-					 "%s" PATHSEP_STR ".data", to_filename);
-#pragma GCC diagnostic pop
-			}
-			if ((pctx->archive_temp_fd = open(pctx->archive_temp_file,
-			    O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) == -1) {
-				log_msg(LOG_ERR, 1, "Cannot open temporary data file in "
-				    "target directory.");
-				UNCOMP_BAIL;
-			}
-			add_fname(pctx->archive_temp_file);
-		}
-
-		/*
-		 * If we are having a metadata stream, get the current position of the main
-		 * fd. The secondary fd must be set to the same position so that metadata
-		 * thread can start scanning for chunks after the header and any info chunks.
-		 *
-		 * NOTE: This is done here to allow setup_extractor() call later to work.
-		 */
-		if (pctx->meta_stream) {
-			off_t cpos = lseek(compfd, 0, SEEK_CUR);
-			cpos = lseek(compfd2, cpos, SEEK_SET);
-			if (cpos == -1) {
-				log_msg(LOG_ERR, 1, "Can't seek in metadata fd: ");
-				UNCOMP_BAIL;
-			}
-
-			/*
-			 * Finally create the metadata context.
-			 */
-			pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2);
-			if (pctx->meta_ctx == NULL) {
-				UNCOMP_BAIL;	/* compfd2 is closed at uncomp_done */
-			}
-		}
-
-		/*
-		 * Listing an archive with a metadata stream decompresses metadata
-		 * only; data reads are served from a dummy buffer. It must exist
-		 * before the extractor thread starts reading.
-		 */
-		if (pctx->list_mode && pctx->meta_stream) {
-			pctx->temp_mmap_buf = (uchar_t *)slab_alloc(NULL, chunksize);
-			pctx->temp_mmap_len = chunksize;
-			if (pctx->temp_mmap_buf == NULL) {
-				log_error_code(PC_ERR_NOMEM);
-				log_msg(LOG_ERR, 0, "Out of memory");
-				UNCOMP_BAIL;
-			}
-		}
-
-		uncompfd = -1;
-		if (setup_extractor(pctx) == -1) {
-			log_msg(LOG_ERR, 0, "Setup of extraction context failed.");
-			UNCOMP_BAIL;
-		}
-
-		if (start_extractor(pctx) == -1) {
-			log_msg(LOG_ERR, 0, "Unable to start extraction thread.");
-			UNCOMP_BAIL;
-		}
+	if (pctx->encrypt_type == CRYPTO_ALG_AES) {
+		c->noncelen = 8;
+	} else if (pctx->encrypt_type == CRYPTO_ALG_SALSA20) {
+		c->noncelen = XSALSA20_CRYPTO_NONCEBYTES;
 	} else {
-		/* Write to the named target if given, else stdout (pipe mode). */
-		if (to_filename != NULL) {
-			if ((uncompfd = open(to_filename, O_WRONLY|O_CREAT|O_TRUNC,
-			    S_IRUSR|S_IWUSR)) == -1) {
-				log_msg(LOG_ERR, 1, "Cannot open: %s", to_filename);
-				UNCOMP_BAIL;
-			}
-			own_uncompfd = 1;
-		} else {
-			uncompfd = PC_OUT_FD(pctx);
-			if (uncompfd == -1) {
-				log_msg(LOG_ERR, 1, "fileno ");
-				UNCOMP_BAIL;
-			}
+		log_msg(LOG_ERR, 0, "Invalid Encryption algorithm code: %d. File corrupt ?",
+			pctx->encrypt_type);
+		return (-1);
+	}
+	if (Read(compfd, &c->saltlen, sizeof (c->saltlen)) < sizeof (c->saltlen)) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	c->saltlen = ntohl(c->saltlen);
+	/* Untrusted header field: bound before allocating. */
+	if (c->saltlen <= 0 || c->saltlen > MAX_SALTLEN) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Invalid salt length %d. File corrupt ?", c->saltlen);
+		return (-1);
+	}
+	c->salt1 = (uchar_t *)malloc(c->saltlen);
+	c->salt2 = (uchar_t *)malloc(c->saltlen);
+	if (c->salt1 == NULL || c->salt2 == NULL ||
+	    Read(compfd, c->salt1, c->saltlen) < c->saltlen) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	deserialize_checksum(c->salt2, c->salt1, c->saltlen);
+
+	if (Read(compfd, c->n1, c->noncelen) < c->noncelen) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	if (pctx->encrypt_type == CRYPTO_ALG_AES) {
+		U64_P(c->nonce) = ntohll(U64_P(c->n1));
+	} else if (pctx->encrypt_type == CRYPTO_ALG_SALSA20) {
+		deserialize_checksum(c->nonce, c->n1, c->noncelen);
+	}
+
+	if (h->version > 6) {
+		if (Read(compfd, &(pctx->keylen), sizeof (pctx->keylen)) < sizeof (pctx->keylen)) {
+			log_msg(LOG_ERR, 1, "Read: ");
+			return (-1);
+		}
+		pctx->keylen = ntohl(pctx->keylen);
+		if (pctx->keylen != 16 && pctx->keylen != 32) {
+			log_msg(LOG_ERR, 0, "Invalid key length %d. File corrupt ?",
+			    pctx->keylen);
+			return (-1);
 		}
 	}
 
-	/*
-	 * WARNING: NO Further file header/info chunk processing beyond this point.
-	 *          Doing so will BREAK Separate Metadata stream processing.
-	 */
+	/* Version 11: the scrypt cost, checked before any work is done. */
+	if (h->version >= VERSION_KDF) {
+		if (Read(compfd, c->kdf_raw, sizeof (c->kdf_raw)) < (int64_t)sizeof (c->kdf_raw)) {
+			log_msg(LOG_ERR, 1, "Read: ");
+			return (-1);
+		}
+		c->kdf.logn = (int)ntohl(c->kdf_raw[1]);
+		c->kdf.r = ntohl(c->kdf_raw[2]);
+		c->kdf.p = ntohl(c->kdf_raw[3]);
+		if (ntohl(c->kdf_raw[0]) != KDF_SCRYPT || !scrypt_params_ok(&c->kdf)) {
+			log_error_code(PC_ERR_CORRUPT);
+			log_msg(LOG_ERR, 0, "Invalid key derivation parameters. "
+			    "File corrupt ?");
+			return (-1);
+		}
+	}
 
-	nprocs = (uint32_t)sysconf(_SC_NPROCESSORS_ONLN);
+	if (Read(compfd, hdr_hash1, pctx->mac_bytes) < pctx->mac_bytes) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	deserialize_checksum(c->stored_mac, hdr_hash1, pctx->mac_bytes);
+	return (0);
+}
+
+/*
+ * Derive the key from one password candidate and check the header HMAC
+ * with it. 1 if it matches (the key is right), 0 if not, -1 on error.
+ */
+static int
+dec_try_key(pc_ctx_t *pctx, const struct dec_hdr *h, struct dec_crypto *c,
+    uchar_t *pw, int plen)
+{
+	uchar_t ntry[MAX_NONCE], mac[CKSUM_MAX_BYTES];
+	mac_ctx_t hdr_mac;
+	unsigned int hlen;
+	unsigned short d1;
+	unsigned int d2;
+	uint64_t d3;
+
+	/* init_crypto() wipes the nonce it is given: one copy per try. */
+	memcpy(ntry, c->nonce, sizeof (ntry));
+	cleanup_crypto(&(pctx->crypto_ctx));
+	pctx->crypto_ctx.kdf = c->kdf;
+	if (init_crypto(&(pctx->crypto_ctx), pw, plen, pctx->encrypt_type,
+	    c->salt2, c->saltlen, pctx->keylen, ntry, DECRYPT_FLAG) == -1) {
+		log_msg(LOG_ERR, 0, "Failed to initialize crypto");
+		return (-1);
+	}
+
+	/*
+	 * Verify file header HMAC: it also tells whether
+	 * this key is the right one.
+	 */
+	if (hmac_init(&hdr_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
+		log_msg(LOG_ERR, 0, "Cannot initialize header hmac.");
+		return (-1);
+	}
+	hmac_update(&hdr_mac, (uchar_t *)pctx->algo, ALGO_SZ);
+	d1 = htons(h->version);
+	hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (h->version));
+	d1 = htons(h->flags);
+	hmac_update(&hdr_mac, (uchar_t *)&d1, sizeof (h->flags));
+	d3 = htonll(h->chunksize);
+	hmac_update(&hdr_mac, (uchar_t *)&d3, sizeof (h->chunksize));
+	d2 = htonl(h->level);
+	hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (h->level));
+	if (h->version > 6) {
+		d2 = htonl(c->saltlen);
+		hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (c->saltlen));
+		hmac_update(&hdr_mac, c->salt1, c->saltlen);
+		hmac_update(&hdr_mac, c->n1, c->noncelen);
+		d2 = htonl(pctx->keylen);
+		hmac_update(&hdr_mac, (uchar_t *)&d2, sizeof (pctx->keylen));
+	}
+	if (h->version >= VERSION_KDF)
+		hmac_update(&hdr_mac, (uchar_t *)c->kdf_raw, sizeof (c->kdf_raw));
+	hmac_final(&hdr_mac, mac, &hlen);
+	hmac_cleanup(&hdr_mac);
+	return (memcmp(c->stored_mac, mac, pctx->mac_bytes) == 0);
+}
+
+/*
+ * Encrypted file: read the encryption fields, get the password, and set
+ * up decryption with the key whose header HMAC matches. The whole
+ * password is tried first; for files written before 4.1.1 with a -w file
+ * over 16 bytes, also the 15 bytes those used. The password is wiped.
+ */
+static int
+dec_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
+{
+	struct dec_crypto c;
+	uchar_t pw[PC_PW_MAX + 1];
+	uchar_t *upw = pctx->user_pw;
+	int upw_len = pctx->user_pw_len, legacy = -1, tries, t, ok = 0;
+
+	if (pctx->mac_bytes > CKSUM_MAX_BYTES)
+		return (-1);	/* not possible: from the checksum table */
+	memset(&c, 0, sizeof (c));
+	if (dec_read_crypto(pctx, compfd, h, &c) != 0) {
+		dec_crypto_wipe(&c);
+		return (-1);
+	}
+	if (upw == NULL) {
+		if (!pctx->pwd_file) {
+			upw_len = get_pw_string(pw, "Please enter decryption password", 0);
+		} else {
+			upw_len = read_pw_file(pctx->pwd_file, pw, &legacy);
+			if (upw_len == -1)
+				log_msg(LOG_ERR, 1, "%s", pctx->pwd_file);
+		}
+		if (upw_len == -1) {
+			dec_crypto_wipe(&c);
+			log_error_code(PC_ERR_CRYPTO);
+			log_msg(LOG_ERR, 0, "Failed to get password.");
+			return (-1);
+		}
+		upw = pw;
+	}
+	/*
+	 * A prompt never took more than 14 bytes: no legacy form.
+	 * Version 11 files were written with the whole password.
+	 */
+	tries = (legacy > 0 && legacy != upw_len &&
+	    h->version < VERSION_KDF) ? 2 : 1;
+	for (t = 0; t < tries && ok == 0; t++)
+		ok = dec_try_key(pctx, h, &c, upw, t == 0 ? upw_len : legacy);
+	memset(upw, 0, upw_len);
+	if (ok >= 0 && upw == pctx->user_pw) {
+		pctx->user_pw = NULL;
+		pctx->user_pw_len = 0;
+	}
+	dec_crypto_wipe(&c);
+	if (ok < 0)
+		return (-1);
+	if (!ok) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Header verification failed! File "
+		    "tampered or wrong password.");
+		return (-1);
+	}
+	return (0);
+}
+
+/* Unencrypted file, version 5 and later: verify the header CRC32. */
+static int
+dec_header_crc(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
+{
+	uint32_t crc1, crc2;
+	unsigned short d1;
+	unsigned int d2;
+	uint64_t ch;
+
+	if (Read(compfd, &crc1, sizeof (crc1)) < sizeof (crc1)) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	crc1 = htonl(crc1);
+	pctx->mac_bytes = sizeof (uint32_t);
+
+	crc2 = lzma_crc32((uchar_t *)pctx->algo, ALGO_SZ, 0);
+	d1 = htons(h->version);
+	crc2 = lzma_crc32((uchar_t *)&d1, sizeof (h->version), crc2);
+	d1 = htons(h->flags);
+	crc2 = lzma_crc32((uchar_t *)&d1, sizeof (h->version), crc2);
+	ch = htonll(h->chunksize);
+	crc2 = lzma_crc32((uchar_t *)&ch, sizeof (ch), crc2);
+	d2 = htonl(h->level);
+	crc2 = lzma_crc32((uchar_t *)&d2, sizeof (h->level), crc2);
+	if (crc1 != crc2) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Header verification failed! File tampered "
+		    "or wrong password.");
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * Archive mode, after the header: the global-dedupe temp file in the
+ * target, the metadata context (its descriptor positioned just past the
+ * header), the listing buffer, and the extractor thread.
+ */
+static int
+dec_archive_setup(pc_ctx_t *pctx, int compfd, int compfd2, const char *to_filename,
+    int64_t chunksize)
+{
+	if (pctx->enable_rabin_global) {
+		char cwd[MAXPATHLEN];
+
+		if (to_filename[0] != PATHSEP_CHAR) {
+			if (getcwd(cwd, MAXPATHLEN) == NULL) {
+				log_msg(LOG_ERR, 1, "Cannot get current dir");
+				return (-1);
+			}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+			snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
+			    "%s" PATHSEP_STR "%s" PATHSEP_STR ".data", cwd, to_filename);
+#pragma GCC diagnostic pop
+		} else {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+			snprintf(pctx->archive_temp_file, sizeof (pctx->archive_temp_file),
+				 "%s" PATHSEP_STR ".data", to_filename);
+#pragma GCC diagnostic pop
+		}
+		if ((pctx->archive_temp_fd = open(pctx->archive_temp_file,
+		    O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot open temporary data file in "
+			    "target directory.");
+			return (-1);
+		}
+		add_fname(pctx->archive_temp_file);
+	}
+
+	/*
+	 * If we are having a metadata stream, get the current position of the main
+	 * fd. The secondary fd must be set to the same position so that metadata
+	 * thread can start scanning for chunks after the header and any info chunks.
+	 *
+	 * NOTE: This is done here to allow setup_extractor() call later to work.
+	 */
+	if (pctx->meta_stream) {
+		off_t cpos = lseek(compfd, 0, SEEK_CUR);
+		cpos = lseek(compfd2, cpos, SEEK_SET);
+		if (cpos == -1) {
+			log_msg(LOG_ERR, 1, "Can't seek in metadata fd: ");
+			return (-1);
+		}
+
+		/*
+		 * Finally create the metadata context.
+		 */
+		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2);
+		if (pctx->meta_ctx == NULL)
+			return (-1);	/* compfd2 is closed by the caller */
+	}
+
+	/*
+	 * Listing an archive with a metadata stream decompresses metadata
+	 * only; data reads are served from a dummy buffer. It must exist
+	 * before the extractor thread starts reading.
+	 */
+	if (pctx->list_mode && pctx->meta_stream) {
+		pctx->temp_mmap_buf = (uchar_t *)slab_alloc(NULL, chunksize);
+		pctx->temp_mmap_len = chunksize;
+		if (pctx->temp_mmap_buf == NULL) {
+			log_error_code(PC_ERR_NOMEM);
+			log_msg(LOG_ERR, 0, "Out of memory");
+			return (-1);
+		}
+	}
+
+	if (setup_extractor(pctx) == -1) {
+		log_msg(LOG_ERR, 0, "Setup of extraction context failed.");
+		return (-1);
+	}
+	if (start_extractor(pctx) == -1) {
+		log_msg(LOG_ERR, 0, "Unable to start extraction thread.");
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * How many decompression threads: one per core (one fewer in archive mode,
+ * for the extractor), capped by -t; one for a single-chunk file; none when
+ * listing an archive with a metadata stream (only metadata is decoded).
+ */
+static uint32_t
+dec_thread_count(pc_ctx_t *pctx, algo_props_t *props)
+{
+	uint32_t nprocs = (uint32_t)sysconf(_SC_NPROCESSORS_ONLN);
+
 	if (pctx->archive_mode) {
 		nprocs = nprocs > 1 ? nprocs-1:nprocs;
 	}
@@ -1690,26 +1687,442 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	else
 		pctx->nthreads = nprocs;
 
-	set_threadcounts(&props, &(pctx->nthreads), nprocs, DECOMPRESS_THREADS);
-	if (props.is_single_chunk)
+	set_threadcounts(props, &(pctx->nthreads), nprocs, DECOMPRESS_THREADS);
+	if (props->is_single_chunk)
 		pctx->nthreads = 1;
-	/*
-	 * If we are trying to list the archive contents, and the archive has a
-	 * metadata stream, then we do not do any data decompression. Only
-	 * metadata is decompressed.
-	 */
 	if (pctx->list_mode && pctx->meta_stream)
 		pctx->nthreads = 0;
 
-	if (pctx->nthreads * props.nthreads > 1)
-		log_msg(LOG_INFO, 0, "Scaling to %d threads", pctx->nthreads * props.nthreads);
+	if (pctx->nthreads * props->nthreads > 1)
+		log_msg(LOG_INFO, 0, "Scaling to %d threads", pctx->nthreads * props->nthreads);
 	else
 		log_msg(LOG_INFO, 0, "Scaling to 1 thread");
-	nprocs = pctx->nthreads;
+	return (pctx->nthreads);
+}
+
+/* What every decompression worker is set up with. */
+struct dec_job {
+	const struct dec_hdr *h;
+	int64_t compressed_chunksize;
+	int dedupe_flag;
+	uint32_t nprocs;
+	algo_props_t *props;
+	const char *to_filename;
+};
+
+/*
+ * Set up one worker's slot (codec state, dedupe context and the read
+ * handle global dedupe restores from, chunk HMAC) and start its thread.
+ * tdat must be zeroed; on failure the caller frees it like any other.
+ */
+static int
+dec_start_worker(pc_ctx_t *pctx, struct cmp_data *tdat, const struct dec_job *j)
+{
+	const struct dec_hdr *h = j->h;
+
+	tdat->pctx = pctx;
+	tdat->compressed_chunk = NULL;
+	tdat->uncompressed_chunk = NULL;
+	tdat->chunksize = h->chunksize;
+	tdat->compress = pctx->_compress_func;
+	tdat->decompress = pctx->_decompress_func;
+	tdat->cancel = 0;
+	tdat->decompressing = 1;
+	if (j->props->is_single_chunk) {
+		tdat->cksum_mt = 1;
+		if (h->version == 6) {
+			tdat->cksum_mt = 2; // Indicate old format parallel hash
+		}
+	} else {
+		tdat->cksum_mt = 0;
+	}
+	tdat->level = h->level;
+	tdat->data = NULL;
+	tdat->props = j->props;
+	Sem_Init(&(tdat->start_sem), 0, 0);
+	Sem_Init(&(tdat->cmp_done_sem), 0, 0);
+	Sem_Init(&(tdat->write_done_sem), 0, 1);
+	Sem_Init(&(tdat->index_sem), 0, 0);
+
+	if (pctx->_init_func) {
+		if (pctx->_init_func(&(tdat->data), &(tdat->level), j->props->nthreads,
+		    h->chunksize, h->version, DECOMPRESS) != 0)
+			return (-1);
+	}
+
+	/*
+	 * The last parameter is freeram. It is not needed during decompression.
+	 */
+	if (pctx->enable_rabin_scan || pctx->enable_fixed_scan || pctx->enable_rabin_global) {
+		tdat->rctx = create_dedupe_context(h->chunksize, j->compressed_chunksize,
+		    pctx->rab_blk_size, pctx->algo, j->props, pctx->enable_delta_encode,
+		    j->dedupe_flag, h->version, DECOMPRESS, 0, NULL, pctx->pipe_mode,
+		    j->nprocs, 0, &pctx->dedupe_index);
+		if (tdat->rctx == NULL)
+			return (-1);
+		if (pctx->enable_rabin_global) {
+			const char *of = pctx->archive_mode ? pctx->archive_temp_file :
+			    j->to_filename;
+
+			if ((tdat->rctx->out_fd = open(of, O_RDONLY, 0)) == -1) {
+				log_msg(LOG_ERR, 1, "Unable to get new read handle"
+				    " to output file");
+				return (-1);
+			}
+		}
+		tdat->rctx->index_sem = &(tdat->index_sem);
+	} else {
+		tdat->rctx = NULL;
+	}
+
+	if (pctx->encrypt_type) {
+		if (hmac_init(&tdat->chunk_hmac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
+			log_msg(LOG_ERR, 0, "Cannot initialize chunk hmac.");
+			return (-1);
+		}
+	}
+	if (pthread_create(&(tdat->thr), NULL, perform_decompress, (void *)tdat) != 0) {
+		log_msg(LOG_ERR, 1, "Error in thread creation: ");
+		return (-1);
+	}
+	return (0);
+}
+
+/* Read a raw 8-byte length field (the caller converts it); -1 on a short read. */
+static int
+dec_read_len(pc_ctx_t *pctx, int compfd, uint64_t *v)
+{
+	int64_t rb = Read(compfd, v, sizeof (*v));
+
+	if (rb != sizeof (*v)) {
+		if (rb < 0) {
+			log_msg(LOG_ERR, 1, "Read: ");
+		} else {
+			log_error_code(PC_ERR_CORRUPT);
+			log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
+			    "file corrupt", pctx->chunk_num);
+		}
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * Read the next data chunk into tdat, skipping metadata chunks (read by
+ * the metadata thread from its own descriptor). Chunk buffers are
+ * allocated on first use: the format does not say how many chunks there
+ * are (pipe mode), and fewer chunks than threads is common.
+ * Returns 0 with a chunk ready, 1 at the end of the stream, 2 if the job
+ * was cancelled meanwhile, -1 on error.
+ */
+static int
+dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunksize,
+    int64_t compressed_chunksize)
+{
+	int64_t rb;
+	int is_meta;
+
+	do {
+		/*
+		 * First read length of compressed chunk.
+		 */
+		if (dec_read_len(pctx, compfd, &tdat->len_cmp) != 0)
+			return (-1);
+		tdat->len_cmp_be = tdat->len_cmp; // Needed for HMAC
+		tdat->len_cmp = htonll(tdat->len_cmp);
+
+		/*
+		 * Check for ridiculous length.
+		 */
+		if (tdat->len_cmp > chunksize + 256) {
+			log_error_code(PC_ERR_CORRUPT);
+			log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %d",
+			    pctx->chunk_num);
+			return (-1);
+		}
+
+		/*
+		 * Zero compressed len means end of file. A length equal to
+		 * METADATA_INDICATOR denotes a metadata chunk only when the
+		 * archive has metadata streams; otherwise it is a 1-byte chunk.
+		 */
+		is_meta = (pctx->meta_stream && tdat->len_cmp == METADATA_INDICATOR);
+		if (tdat->len_cmp == 0)
+			return (1);
+		if (is_meta) {
+			/* Its real length follows; it is skipped below. */
+			if (dec_read_len(pctx, compfd, &tdat->len_cmp_be) != 0)
+				return (-1);
+			tdat->len_cmp_be = LE64(tdat->len_cmp_be);
+		}
+
+		if (!tdat->compressed_chunk && !is_meta) {
+			tdat->compressed_chunk = (uchar_t *)slab_alloc(NULL,
+			    compressed_chunksize);
+			tdat->uncompressed_chunk = (uchar_t *)slab_alloc(NULL,
+			    compressed_chunksize);
+			tdat->buf_size = compressed_chunksize;
+			if (!tdat->compressed_chunk || !tdat->uncompressed_chunk) {
+				log_error_code(PC_ERR_NOMEM);
+				log_msg(LOG_ERR, 0, "2: Out of memory");
+				return (-1);
+			}
+			tdat->cmp_seg = tdat->uncompressed_chunk;
+		}
+
+		if (!is_meta) {
+			if (tdat->len_cmp > pctx->largest_chunk)
+				pctx->largest_chunk = tdat->len_cmp;
+			if (tdat->len_cmp < pctx->smallest_chunk)
+				pctx->smallest_chunk = tdat->len_cmp;
+			pctx->avg_chunk += tdat->len_cmp;
+
+			/*
+			 * Now read compressed chunk including the checksum. This is
+			 * a seek if it is just a listing operation. No data is
+			 * processed in that case.
+			 */
+			rb = tdat->len_cmp + pctx->cksum_bytes + pctx->mac_bytes +
+			    CHUNK_FLAG_SZ;
+			tdat->rbytes = Read(compfd, tdat->compressed_chunk, rb);
+		} else {
+			off_t cpos = lseek(compfd, 0, SEEK_CUR);
+
+			 /* Two values already read */
+			rb = tdat->len_cmp_be + METADATA_HDR_SZ - 16;
+			tdat->rbytes = lseek(compfd, rb, SEEK_CUR);
+			if (tdat->rbytes > 0)
+				tdat->rbytes = tdat->rbytes - cpos;
+		}
+		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
+			return (2);
+		if (tdat->rbytes < rb) {
+			if (tdat->rbytes < 0) {
+				log_msg(LOG_ERR, 1, "Read: ");
+			} else {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Incomplete chunk %d, file corrupt.",
+				    pctx->chunk_num);
+			}
+			return (-1);
+		}
+	} while (is_meta);
+	return (0);
+}
+
+/*
+ * Hand chunks to the workers in turn until the end of the stream, an
+ * error, or a cancel. Chunk sequencing is ensured: a slot is reused only
+ * after the writer has written its previous chunk. *np is the slot that
+ * saw the end (its write_done_sem is already taken).
+ */
+static int
+dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_job *j,
+    uint32_t *np)
+{
+	struct cmp_data *tdat;
+	uint32_t p;
+	int rv;
+
+	pctx->chunk_num = 0;
+	*np = 0;
+	if (j->nprocs == 0)
+		return (0);
+	for (;;) {
+		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
+			return (0);
+		for (p = 0; p < j->nprocs; p++) {
+			*np = p;
+			tdat = dary[p];
+			Sem_Wait(&tdat->write_done_sem);
+			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
+				break;
+			tdat->id = pctx->chunk_num;
+			if (tdat->rctx) tdat->rctx->id = tdat->id;
+			rv = dec_read_chunk(pctx, compfd, tdat, j->h->chunksize,
+			    j->compressed_chunksize);
+			if (rv == -1)
+				return (-1);
+			if (rv == 1)
+				return (0);
+			if (rv == 2)
+				break;
+			Sem_Post(&tdat->start_sem);
+			++(pctx->chunk_num);
+		}
+	}
+}
+
+/* Free every worker slot (after the threads are joined). */
+static void
+dec_free_workers(pc_ctx_t *pctx, struct cmp_data **dary, uint32_t nprocs)
+{
+	uint32_t i;
+
+	for (i = 0; i < nprocs; i++) {
+		if (!dary[i]) continue;
+		if (dary[i]->uncompressed_chunk)
+			slab_release(NULL, dary[i]->uncompressed_chunk);
+		if (dary[i]->compressed_chunk)
+			slab_release(NULL, dary[i]->compressed_chunk);
+		if (pctx->_deinit_func)
+			pctx->_deinit_func(&(dary[i]->data));
+		if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan)) {
+			destroy_dedupe_context(dary[i]->rctx);
+		}
+		if (pctx->encrypt_type && dary[i]->chunk_hmac.mac_ctx)
+			hmac_cleanup(&dary[i]->chunk_hmac);
+		Sem_Destroy(&(dary[i]->start_sem));
+		Sem_Destroy(&(dary[i]->cmp_done_sem));
+		Sem_Destroy(&(dary[i]->write_done_sem));
+		Sem_Destroy(&(dary[i]->index_sem));
+
+		slab_release(NULL, dary[i]);
+	}
+	slab_release(NULL, dary);
+}
+
+/*
+ * Archive mode teardown: end and join the extractor, free the metadata
+ * context and the listing buffer, remove the global-dedupe temp file.
+ */
+static void
+dec_archive_done(pc_ctx_t *pctx, int err)
+{
+	if (pctx->archive_thread_started) {
+		/*
+		 * On error the extractor may be blocked waiting for data
+		 * that will never come: signal end of stream first
+		 * (a no-op if the writer already did).
+		 */
+		if (err) {
+			/* The extractor's "End of file" that follows is this, not its own fault. */
+			log_msg(LOG_ERR, 0, "Decompression failed (see above): "
+			    "ending archive extraction.");
+			archiver_close(pctx);
+		}
+		pthread_join(pctx->archive_thread, NULL);
+		pctx->archive_thread_started = 0;
+	} else if (pctx->archive_ctx) {
+		/* Set up but never handed to the extractor thread, which frees it. */
+		archive_read_free((struct archive *)pctx->archive_ctx);
+	}
+	pctx->archive_ctx = NULL;
+	if (pctx->meta_stream) {
+		meta_ctx_done(pctx->meta_ctx);
+		pctx->meta_ctx = NULL;
+		if (pctx->list_mode) {
+			slab_release(NULL, pctx->temp_mmap_buf);
+		}
+	}
+	if (pctx->enable_rabin_global) {
+		close(pctx->archive_temp_fd);
+		unlink(pctx->archive_temp_file);
+	}
+	Sem_Destroy(&(pctx->read_sem));
+	Sem_Destroy(&(pctx->write_sem));
+}
+
+/*
+ * Decompress filename (or the job's input stream) to to_filename (or the
+ * output stream), or extract an archive into the to_filename directory.
+ * Reads and verifies the header, starts one worker per thread and a
+ * writer, feeds them chunks in order, and tears everything down on one
+ * path. Returns 0 or 1.
+ */
+static int
+start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
+{
+	char algorithm[ALGO_SZ];
+	struct stat sbuf;
+	struct wdata w;
+	struct dec_hdr h;
+	struct dec_job job;
+	int compfd = -1, compfd2 = -1, uncompfd = -1, own_uncompfd = 0, err = 0;
+	int thread = 0, dedupe_flag, rv;
+	uint32_t nprocs = 1, i, np = 0;
+	int64_t compressed_chunksize;
+	struct cmp_data **dary = NULL;
+	pthread_t writer_thr;
+	algo_props_t props;
+
+	init_algo_props(&props);
+	memset(&h, 0, sizeof (h));
+	if ((rv = dec_open_input(pctx, filename, &compfd, &sbuf)) == 1)
+		return (1);
+	if (rv != 0 || dec_read_header(pctx, compfd, filename, algorithm, &h) != 0) {
+		UNCOMP_BAIL;
+	}
+	if (h.flags & FLAG_ARCHIVE) {
+		if (dec_archive_target(pctx, filename, &to_filename, &h, &compfd2) != 0) {
+			UNCOMP_BAIL;
+		}
+	} else if (dec_output_name(pctx, filename, &to_filename) != 0) {
+		UNCOMP_BAIL;
+	}
+
+	compressed_chunksize = h.chunksize + CHUNK_HDR_SZ + zlib_buf_extra(h.chunksize);
+	if (pctx->_props_func) {
+		pctx->_props_func(&props, h.level, h.chunksize);
+		if (h.chunksize + props.buf_extra > compressed_chunksize) {
+			compressed_chunksize += (h.chunksize + props.buf_extra -
+			    compressed_chunksize);
+		}
+	}
+	if (dec_flags(pctx, &h, to_filename, &dedupe_flag, &props) != 0) {
+		UNCOMP_BAIL;
+	}
+
+	if (h.flags & MASK_CRYPTO_ALG) {
+		/*
+		 * In encrypted files we do not have a normal digest. The HMAC
+		 * is computed over header and encrypted data.
+		 */
+		pctx->cksum_bytes = 0;
+		compressed_chunksize += pctx->mac_bytes;
+		pctx->encrypt_type = h.flags & MASK_CRYPTO_ALG;
+		if (h.version < 7)
+			pctx->keylen = OLD_KEYLEN;
+		if (dec_crypto(pctx, compfd, &h) != 0) {
+			UNCOMP_BAIL;
+		}
+	} else if (h.version >= 5 && dec_header_crc(pctx, compfd, &h) != 0) {
+		UNCOMP_BAIL;
+	}
+
+	if (h.flags & FLAG_ARCHIVE) {
+		uncompfd = -1;
+		if (dec_archive_setup(pctx, compfd, compfd2, to_filename, h.chunksize) != 0) {
+			UNCOMP_BAIL;
+		}
+	} else if (to_filename != NULL) {
+		/* Write to the named target if given, else stdout (pipe mode). */
+		if ((uncompfd = open(to_filename, O_WRONLY|O_CREAT|O_TRUNC,
+		    S_IRUSR|S_IWUSR)) == -1) {
+			log_msg(LOG_ERR, 1, "Cannot open: %s", to_filename);
+			UNCOMP_BAIL;
+		}
+		own_uncompfd = 1;
+	} else if ((uncompfd = PC_OUT_FD(pctx)) == -1) {
+		log_msg(LOG_ERR, 1, "fileno ");
+		UNCOMP_BAIL;
+	}
+
+	/*
+	 * WARNING: NO Further file header/info chunk processing beyond this point.
+	 *          Doing so will BREAK Separate Metadata stream processing.
+	 */
+	nprocs = dec_thread_count(pctx, &props);
 	slab_cache_add(compressed_chunksize);
-	slab_cache_add(chunksize);
+	slab_cache_add(h.chunksize);
 	slab_cache_add(sizeof (struct cmp_data));
 
+	job.h = &h;
+	job.compressed_chunksize = compressed_chunksize;
+	job.dedupe_flag = dedupe_flag;
+	job.nprocs = nprocs;
+	job.props = &props;
+	job.to_filename = to_filename;
 	dary = (struct cmp_data **)slab_calloc(NULL, nprocs, sizeof (struct cmp_data *));
 	for (i = 0; i < nprocs; i++) {
 		dary[i] = (struct cmp_data *)slab_alloc(NULL, sizeof (struct cmp_data));
@@ -1720,89 +2133,15 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		}
 		/* Error paths free per-member; unset members must be NULL. */
 		memset(dary[i], 0, sizeof (struct cmp_data));
-		tdat = dary[i];
-		tdat->pctx = pctx;
-		tdat->compressed_chunk = NULL;
-		tdat->uncompressed_chunk = NULL;
-		tdat->chunksize = chunksize;
-		tdat->compress = pctx->_compress_func;
-		tdat->decompress = pctx->_decompress_func;
-		tdat->cancel = 0;
-		tdat->decompressing = 1;
-		if (props.is_single_chunk) {
-			tdat->cksum_mt = 1;
-			if (version == 6) {
-				tdat->cksum_mt = 2; // Indicate old format parallel hash
-			}
-		} else {
-			tdat->cksum_mt = 0;
-		}
-		tdat->level = level;
-		tdat->data = NULL;
-		tdat->props = &props;
-		Sem_Init(&(tdat->start_sem), 0, 0);
-		Sem_Init(&(tdat->cmp_done_sem), 0, 0);
-		Sem_Init(&(tdat->write_done_sem), 0, 1);
-		Sem_Init(&(tdat->index_sem), 0, 0);
-
-		if (pctx->_init_func) {
-			if (pctx->_init_func(&(tdat->data), &(tdat->level), props.nthreads, chunksize,
-			    version, DECOMPRESS) != 0) {
-				UNCOMP_BAIL;
-			}
-		}
-
-		/*
-		 * The last parameter is freeram. It is not needed during decompression.
-		 */
-		if (pctx->enable_rabin_scan || pctx->enable_fixed_scan || pctx->enable_rabin_global) {
-			tdat->rctx = create_dedupe_context(chunksize, compressed_chunksize,
-			    pctx->rab_blk_size, pctx->algo, &props, pctx->enable_delta_encode,
-			    dedupe_flag, version, DECOMPRESS, 0, NULL, pctx->pipe_mode, nprocs, 0, &pctx->dedupe_index);
-			if (tdat->rctx == NULL) {
-				UNCOMP_BAIL;
-			}
-			if (pctx->enable_rabin_global) {
-				if (pctx->archive_mode) {
-					if ((tdat->rctx->out_fd = open(pctx->archive_temp_file,
-					    O_RDONLY, 0)) == -1) {
-						log_msg(LOG_ERR, 1, "Unable to get new read handle"
-						    " to output file");
-						UNCOMP_BAIL;
-					}
-				} else {
-					if ((tdat->rctx->out_fd = open(to_filename, O_RDONLY, 0))
-					    == -1) {
-						log_msg(LOG_ERR, 1, "Unable to get new read handle"
-						    " to output file");
-						UNCOMP_BAIL;
-					}
-				}
-			}
-			tdat->rctx->index_sem = &(tdat->index_sem);
-		} else {
-			tdat->rctx = NULL;
-		}
-
-		if (pctx->encrypt_type) {
-			if (hmac_init(&tdat->chunk_hmac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
-				log_msg(LOG_ERR, 0, "Cannot initialize chunk hmac.");
-				UNCOMP_BAIL;
-			}
-		}
-		if (pthread_create(&(tdat->thr), NULL, perform_decompress,
-		    (void *)tdat) != 0) {
-			log_msg(LOG_ERR, 1, "Error in thread creation: ");
+		if (dec_start_worker(pctx, dary[i], &job) != 0) {
 			UNCOMP_BAIL;
 		}
 	}
 	thread = 1;
 
 	if (pctx->enable_rabin_global) {
-		for (i = 0; i < nprocs; i++) {
-			tdat = dary[i];
-			tdat->rctx->index_sem_next = &(dary[(i + 1) % nprocs]->index_sem);
-		}
+		for (i = 0; i < nprocs; i++)
+			dary[i]->rctx->index_sem_next = &(dary[(i + 1) % nprocs]->index_sem);
 	}
 	// When doing global dedupe first thread does not wait to start dedupe recovery.
 	if (nprocs > 0)
@@ -1817,7 +2156,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		w.dary = dary;
 		w.wfd = uncompfd;
 		w.nprocs = nprocs;
-		w.chunksize = chunksize;
+		w.chunksize = h.chunksize;
 		w.pctx = pctx;
 		if (pthread_create(&writer_thr, NULL, writer_thread, (void *)(&w)) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
@@ -1826,174 +2165,22 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		thread = 2;
 	}
 
-	/*
-	 * Now read from the compressed file in variable compressed chunk size.
-	 * First the size is read from the chunk header and then as many bytes +
-	 * checksum size are read and passed to decompression thread.
-	 * Chunk sequencing is ensured.
-	 */
-	pctx->chunk_num = 0;
-	np = 0;
-	bail = 0;
-	if (nprocs == 0)
-		bail = 1;
-	while (!bail) {
-		int64_t rb;
-		int is_meta;
-
-		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
-		for (p = 0; p < nprocs; p++) {
-			np = p;
-			tdat = dary[p];
-			Sem_Wait(&tdat->write_done_sem);
-			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
-			tdat->id = pctx->chunk_num;
-			if (tdat->rctx) tdat->rctx->id = tdat->id;
-
-redo:
-			/*
-			 * First read length of compressed chunk.
-			 */
-			rb = Read(compfd, &tdat->len_cmp, sizeof (tdat->len_cmp));
-			if (rb != sizeof (tdat->len_cmp)) {
-				if (rb < 0) {
-					log_msg(LOG_ERR, 1, "Read: ");
-				} else {
-					log_error_code(PC_ERR_CORRUPT);
-					log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
-					    "file corrupt", pctx->chunk_num);
-				}
-				UNCOMP_BAIL;
-			}
-			tdat->len_cmp_be = tdat->len_cmp; // Needed for HMAC
-			tdat->len_cmp = htonll(tdat->len_cmp);
-
-			/*
-			 * Check for ridiculous length.
-			 */
-			if (tdat->len_cmp > chunksize + 256) {
-				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %d",
-				    pctx->chunk_num);
-				UNCOMP_BAIL;
-			}
-
-			/*
-			 * Zero compressed len means end of file. A length equal to
-			 * METADATA_INDICATOR denotes a metadata chunk only when the
-			 * archive has metadata streams; otherwise it is a 1-byte chunk.
-			 */
-			is_meta = (pctx->meta_stream && tdat->len_cmp == METADATA_INDICATOR);
-			if (tdat->len_cmp == 0) {
-				bail = 1;
-				break;
-
-			} else if (is_meta) {
-				/*
-				 * If compressed length indicates a metadata chunk. Read it's length
-				 * and skip the chunk.
-				 */
-				rb = Read(compfd, &tdat->len_cmp_be, sizeof (tdat->len_cmp_be));
-				if (rb != sizeof (tdat->len_cmp_be)) {
-					if (rb < 0) {
-						log_msg(LOG_ERR, 1, "Read: ");
-					} else {
-						log_error_code(PC_ERR_CORRUPT);
-						log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
-							"file corrupt", pctx->chunk_num);
-					}
-					UNCOMP_BAIL;
-				}
-
-				/*
-				 * We will be reading and skipping this chunk next.
-				 */
-				tdat->len_cmp_be = LE64(tdat->len_cmp_be);
-			}
-
-			/*
-			 * Delayed allocation. Allocate chunks if not already done. The compressed
-			 * file format does not provide any info on how many chunks are there in
-			 * order to allow pipe mode operation. So delayed allocation during
-			 * decompression allows to avoid allocating per-thread chunks which will
-			 * never be used. This can happen if chunk count < thread count.
-			 */
-			if (!tdat->compressed_chunk && !is_meta) {
-				tdat->compressed_chunk = (uchar_t *)slab_alloc(NULL,
-				    compressed_chunksize);
-				tdat->uncompressed_chunk = (uchar_t *)slab_alloc(NULL,
-				    compressed_chunksize);
-				tdat->buf_size = compressed_chunksize;
-				if (!tdat->compressed_chunk || !tdat->uncompressed_chunk) {
-					log_error_code(PC_ERR_NOMEM);
-					log_msg(LOG_ERR, 0, "2: Out of memory");
-					UNCOMP_BAIL;
-				}
-				tdat->cmp_seg = tdat->uncompressed_chunk;
-			}
-
-			if (!is_meta) {
-				if (tdat->len_cmp > pctx->largest_chunk)
-					pctx->largest_chunk = tdat->len_cmp;
-				if (tdat->len_cmp < pctx->smallest_chunk)
-					pctx->smallest_chunk = tdat->len_cmp;
-				pctx->avg_chunk += tdat->len_cmp;
-
-				/*
-				 * Now read compressed chunk including the checksum. This is
-				 * a seek if it is just a listing operation. No data is
-				 * processed in that case.
-				 */
-				rb = tdat->len_cmp + pctx->cksum_bytes + pctx->mac_bytes +
-				    CHUNK_FLAG_SZ;
-				tdat->rbytes = Read(compfd, tdat->compressed_chunk, rb);
-			} else {
-				off_t cpos = lseek(compfd, 0, SEEK_CUR);
-
-				 /* Two values already read */
-				rb = tdat->len_cmp_be + METADATA_HDR_SZ - 16;
-				tdat->rbytes = lseek(compfd, rb, SEEK_CUR);
-				if (tdat->rbytes > 0)
-					tdat->rbytes = tdat->rbytes - cpos;
-			}
-			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
-			if (tdat->rbytes < rb) {
-				if (tdat->rbytes < 0) {
-					log_msg(LOG_ERR, 1, "Read: ");
-					UNCOMP_BAIL;
-				} else {
-					log_error_code(PC_ERR_CORRUPT);
-					log_msg(LOG_ERR, 0, "Incomplete chunk %d, file corrupt.",
-					    pctx->chunk_num);
-					UNCOMP_BAIL;
-				}
-			}
-
-			/*
-			 * If we just skipped a metadata chunk, redo the read to go to the next one.
-			 */
-			if (is_meta) {
-				goto redo;
-			}
-			Sem_Post(&tdat->start_sem);
-			++(pctx->chunk_num);
-		}
+	if (dec_feed(pctx, compfd, dary, &job, &np) != 0) {
+		UNCOMP_BAIL;
 	}
-
+	/* Wait for the writer to finish every other slot's last chunk. */
 	if (!__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) {
-		for (p = 0; p < nprocs; p++) {
-			if (p == np) continue;
-			tdat = dary[p];
-			Sem_Wait(&tdat->write_done_sem);
-// VS begin
+		for (i = 0; i < nprocs; i++) {
+			if (i == np) continue;
+			Sem_Wait(&dary[i]->write_done_sem);
 			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
-// VS end
 		}
 	}
 uncomp_done:
 	if (thread) {
 		for (i = 0; i < nprocs; i++) {
-			tdat = dary[i];
+			struct cmp_data *tdat = dary[i];
+
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
 			Sem_Post(&tdat->start_sem);
 			Sem_Post(&tdat->cmp_done_sem);
@@ -2020,68 +2207,15 @@ uncomp_done:
 		if (fchown(uncompfd, sbuf.st_uid, sbuf.st_gid) == -1)
 			log_msg(LOG_ERR, 1, "Chown ");
 	}
-	if (dary != NULL) {
-		for (i = 0; i < nprocs; i++) {
-			if (!dary[i]) continue;
-			if (dary[i]->uncompressed_chunk)
-				slab_release(NULL, dary[i]->uncompressed_chunk);
-			if (dary[i]->compressed_chunk)
-				slab_release(NULL, dary[i]->compressed_chunk);
-			if (pctx->_deinit_func)
-				pctx->_deinit_func(&(dary[i]->data));
-			if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan)) {
-				destroy_dedupe_context(dary[i]->rctx);
-			}
-			if (pctx->encrypt_type && dary[i]->chunk_hmac.mac_ctx)
-				hmac_cleanup(&dary[i]->chunk_hmac);
-			Sem_Destroy(&(dary[i]->start_sem));
-			Sem_Destroy(&(dary[i]->cmp_done_sem));
-			Sem_Destroy(&(dary[i]->write_done_sem));
-			Sem_Destroy(&(dary[i]->index_sem));
-
-			slab_release(NULL, dary[i]);
-		}
-		slab_release(NULL, dary);
-	}
+	if (dary != NULL)
+		dec_free_workers(pctx, dary, nprocs);
 	if (!pctx->pipe_mode) {
 		if (filename && compfd != -1) close(compfd);
 		/* stdout or the caller's out_fd (decompress to a stream): not ours. */
 		if (uncompfd != -1 && own_uncompfd) close(uncompfd);
 	}
-	if (pctx->archive_mode) {
-		if (pctx->archive_thread_started) {
-			/*
-			 * On error the extractor may be blocked waiting for data
-			 * that will never come: signal end of stream first
-			 * (a no-op if the writer already did).
-			 */
-			if (err) {
-				/* The extractor's "End of file" that follows is this, not its own fault. */
-				log_msg(LOG_ERR, 0, "Decompression failed (see above): "
-				    "ending archive extraction.");
-				archiver_close(pctx);
-			}
-			pthread_join(pctx->archive_thread, NULL);
-			pctx->archive_thread_started = 0;
-		} else if (pctx->archive_ctx) {
-			/* Set up but never handed to the extractor thread, which frees it. */
-			archive_read_free((struct archive *)pctx->archive_ctx);
-		}
-		pctx->archive_ctx = NULL;
-		if (pctx->meta_stream) {
-			meta_ctx_done(pctx->meta_ctx);
-			pctx->meta_ctx = NULL;
-			if (pctx->list_mode) {
-				slab_release(NULL, pctx->temp_mmap_buf);
-			}
-		}
-		if (pctx->enable_rabin_global) {
-			close(pctx->archive_temp_fd);
-			unlink(pctx->archive_temp_file);
-		}
-		Sem_Destroy(&(pctx->read_sem));
-		Sem_Destroy(&(pctx->write_sem));
-	}
+	if (pctx->archive_mode)
+		dec_archive_done(pctx, err);
 	/* The metadata thread reads compfd2 until meta_ctx_done() above. */
 	if (compfd2 != -1) close(compfd2);
 
