@@ -343,7 +343,12 @@ main(int argc, char **argv)
 	 * handle per thread open after each decompression.)
 	 */
 	fd_after = open_fds();
-	if (fd_after != fd_before) {
+	/*
+	 * Not under the sanitizers: printing a report starts a symbolizer
+	 * process that keeps two pipes open, which are not ours.
+	 * ci/build-test.sh sets PCOMPRESS_SANITIZE=1 for those builds.
+	 */
+	if (fd_after != fd_before && getenv("PCOMPRESS_SANITIZE") == NULL) {
 		fprintf(stderr, "descriptors leaked: %d open before, %d after\n",
 		    fd_before, fd_after);
 		failures++;
