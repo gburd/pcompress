@@ -39,7 +39,7 @@ rotate(uint32_t u,int c)
   return (u << c) | (u >> (32 - c));
 }
 
-#if BYTE_ORDER == LITTLE_ENDIAN
+#ifndef WORDS_BIGENDIAN
 #define	load_littleendian(x) *((uint32_t *)(x))
 #define	store_littleendian(x, u) *((uint32_t *)(x)) = (u);
 #else

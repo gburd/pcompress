@@ -228,7 +228,7 @@ cpuid_basic_identify(processor_cap_t *pc)
 		pc->proc_type = PROC_RISCV;
 		break;
 	default:
-#if BYTE_ORDER == BIG_ENDIAN
+#ifdef WORDS_BIGENDIAN
 		pc->proc_type = PROC_BIGENDIAN_GENERIC;
 #else
 		pc->proc_type = PROC_LITENDIAN_GENERIC;

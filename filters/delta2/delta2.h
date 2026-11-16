@@ -25,7 +25,6 @@
 #ifndef	_DELTA2_H
 #define	_DELTA2_H
 
-#include <arpa/nameser_compat.h>
 #include <sys/types.h>
 #include <stdint.h>
 #include <inttypes.h>

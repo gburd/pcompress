@@ -1,4 +1,12 @@
 == Unreleased ==
+Archives: on Linux, file types were not recognised from their contents
+  (ELF and PE executables, BMP, COFF, DOS COM, TZif, PPMd, WavPack), only
+  from their names, since 2013: pc_archive.c asks for strict X/Open, which
+  hides glibc's BYTE_ORDER, and the code then took the big-endian magic
+  numbers. The byte order now comes from the compiler (__BYTE_ORDER__)
+  everywhere, so -x and the type-based choices of adapt and adapt2 apply
+  to such files as intended; archives may differ from 4.2.1's, and both
+  extract with either release. <arpa/nameser_compat.h> is no longer used.
 Packaging: releases add .rpm (Fedora) and .deb (Debian) packages for x86_64
   and arm64 from packaging/, a static (musl) binary for both, and a signed
   build-provenance attestation for every file (gh attestation verify).
