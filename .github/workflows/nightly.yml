@@ -71,3 +71,45 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with: { name: coverage, path: coverage.info }
+
+  fuzz:
+    # libFuzzer with ASan over the decoders that take untrusted bytes:
+    # chunk objects and key files (fuzz_chunk), manifests (fuzz_manifest),
+    # raw codec input (fuzz_decompress), plus fuzz_compress and fuzz_crc.
+    name: "Fuzz (libFuzzer + ASan)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential clang libomp-dev libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config
+      # The library itself is built with fuzzer coverage, so the harnesses
+      # see inside the decoders and not only their own code.
+      - name: Build
+        env:
+          CC: clang
+          CXX: clang++
+          CFLAGS: -fsanitize=fuzzer-no-link,address -g
+          LDFLAGS: -fsanitize=address
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          ./config --disable-wavpack && make -j"$(nproc)"
+          make fuzz-build
+      - name: Fuzz each target for 10 minutes
+        env: { FUZZ_SECONDS: "600", ASAN_OPTIONS: "detect_leaks=0" }
+        run: cd test && sh run_all_tests.sh fuzz
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            test/crash-*
+            test/oom-*
+            test/timeout-*
+          if-no-files-found: ignore

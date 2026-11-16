@@ -245,7 +245,9 @@ excluded, so the figure covers pcompress's own code only. Re-run
 ## Fuzz Testing
 
 Fuzz tests detect crashes, undefined behavior, and memory errors when
-processing malformed input. Three fuzz harnesses are provided.
+processing malformed input. Five fuzz harnesses are provided; the nightly
+workflow runs each for 10 minutes with ASan, on a library built with
+fuzzer coverage.
 
 ### Available Fuzz Targets
 
@@ -254,13 +256,31 @@ processing malformed input. Three fuzz harnesses are provided.
 | `fuzz_decompress`   | `test/fuzz/fuzz_decompress.c`| Decompression of random data|
 | `fuzz_compress`     | `test/fuzz/fuzz_compress.c`  | Compression of random data  |
 | `fuzz_crc`          | `test/fuzz/fuzz_crc.c`       | CRC functions with random input |
+| `fuzz_chunk`        | `test/fuzz/fuzz_chunk.c`     | `pc_chunk_open()` on objects with a valid forged tag and on raw input; `pc_keyfile_open()` |
+| `fuzz_manifest`     | `test/fuzz/fuzz_manifest.c`  | `pc_manifest_decode()`; anything accepted must re-encode to the same bytes |
+
+`fuzz_chunk` and `fuzz_manifest` use only the public API and link the
+shared library. `make fuzz-build` also writes seed inputs for them to
+`buildtmp/fuzz-seeds/` (from `test/fuzz/seeds.c`, so they follow the
+formats), and `run_all_tests.sh fuzz` starts from those seeds.
 
 ### Building Fuzz Targets
 
 **With libFuzzer (Clang)**:
 
 ```sh
-make fuzz-build CC=clang FUZZ_FLAGS="-fsanitize=fuzzer,address"
+make fuzz-build
+```
+
+This needs `clang` on PATH; the harnesses are always built with
+`-fsanitize=fuzzer,address`. For coverage-guided fuzzing inside the
+library (as the nightly job does), build it with fuzzer instrumentation
+first:
+
+```sh
+CC=clang CXX=clang++ CFLAGS="-fsanitize=fuzzer-no-link,address -g" \
+    LDFLAGS=-fsanitize=address ./config --disable-wavpack
+make && make fuzz-build
 ```
 
 **With AFL++**:
