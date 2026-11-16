@@ -1027,6 +1027,23 @@ err0:
 #endif
 }
 
+#ifdef _WIN32
+/*
+ * A line read from the Windows console, or from a binary stdin, ends in
+ * "\r\n": make it "\n", so the '\r' is not taken as part of the password.
+ */
+static void
+crlf_to_lf(char *s)
+{
+	size_t n = strlen(s);
+
+	if (n >= 2 && s[n - 2] == '\r' && s[n - 1] == '\n') {
+		s[n - 2] = '\n';
+		s[n - 1] = '\0';
+	}
+}
+#endif
+
 /*
  * Input password string from terminal without echoing.
  */
@@ -1064,6 +1081,10 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 	fflush(stderr);
 	s = fgets(pw1, sz, input);
 	fputs("\n", stderr);
+#ifdef _WIN32
+	if (s != NULL)
+		crlf_to_lf(pw1);
+#endif
 	len = s ? (int)strlen(pw1) : 0;
 	if (s == NULL || len < 2 || pw1[len - 1] != '\n') {
 		/* Empty, EOF, or longer than PC_PW_MAX (no newline read). */
@@ -1078,6 +1099,10 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 		fprintf(stderr, "%s (once more): ", prompt);
 		fflush(stderr);
 		s = fgets(pw2, sz, input);
+#ifdef _WIN32
+		if (s != NULL)
+			crlf_to_lf(pw2);
+#endif
 		tcsetattr(fd, TCSANOW, &oldt);
 		fflush(strm);
 		fputs("\n", stderr);
