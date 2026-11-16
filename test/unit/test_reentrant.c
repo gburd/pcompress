@@ -132,6 +132,17 @@ run(char *args)
 	return (r);
 }
 
+/* The path an archive stores for an absolute path p: no drive letter. */
+static const char *
+tree_path(const char *p)
+{
+#ifdef _WIN32
+	if (p[0] != '\0' && p[1] == ':')
+		return (p + 2);
+#endif
+	return (p);
+}
+
 /*
  * Archive the job's tree (two files) and extract it to the job's own
  * directory: extraction must not depend on the process working directory,
@@ -148,9 +159,12 @@ archive_round(struct job *j, int r)
 	    r % 2 ? "lz4" : "zstd", j->tree, j->tree);
 	if (run(args) != 0)
 		return (-1);
-	/* Extracted members keep their full path below xdir. */
-	snprintf(f, sizeof (f), "%s%s/a", j->xdir, j->tree);
-	snprintf(g, sizeof (g), "%s%s/b", j->xdir, j->tree);
+	/*
+	 * Extracted members keep their full path below xdir, without a
+	 * Windows drive letter.
+	 */
+	snprintf(f, sizeof (f), "%s%s/a", j->xdir, tree_path(j->tree));
+	snprintf(g, sizeof (g), "%s%s/b", j->xdir, tree_path(j->tree));
 	unlink(f);
 	unlink(g);
 	snprintf(args, sizeof (args), "pcompress -d %s %s", a, j->xdir);

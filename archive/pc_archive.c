@@ -1382,6 +1382,17 @@ archiver_thread_run(pc_ctx_t *pctx) {
 		 * Strip leading '/' or '../' or '/../' from member name.
 		 */
 		name = fpath;
+#ifdef _WIN32
+		/* And a drive letter, as bsdtar does: "C:/x" is stored as "x". */
+		if (((name[0] >= 'a' && name[0] <= 'z') || (name[0] >= 'A' && name[0] <= 'Z')) &&
+		    name[1] == ':') {
+			if (warn) {
+				log_msg(LOG_WARN, 0, "Converting absolute paths.");
+				warn = 0;
+			}
+			name += 2;
+		}
+#endif
 		while (name[0] == '/' || name[0] == '\\') {
 			if (warn) {
 				log_msg(LOG_WARN, 0, "Converting absolute paths.");
