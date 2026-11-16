@@ -130,7 +130,8 @@ echo "--- Key derivation cost in the header ---"
 # files stay version 10. AES header: algorithm 8, version 2, flags 2, chunk
 # size 8, level 4, salt length 4, salt 32, nonce 8, key length 4, then KDF
 # id, log2 N, r and p (4 bytes each, big-endian), so log2 N ends at byte 79.
-byte_at() { od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' '; }
+# Numeric: illumos od pads with zeros ("011").
+byte_at() { echo $(( $(od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' ' | sed 's/^0*\(.\)/\1/') )); }
 KTF="${TMPDIR:-/tmp}/pc_kdf_$$"
 head -c 50000 /dev/urandom > "$KTF"
 printf 'kdf-test-password\n' > "$PWFILE"
