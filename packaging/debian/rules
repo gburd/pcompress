@@ -1,0 +1,24 @@
+#!/usr/bin/make -f
+# ./config is a hand-written script, not autoconf: run it by hand.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	./config --prefix=/usr --portable --disable-rpath --disable-wavpack
+
+override_dh_auto_build:
+	$(MAKE) -j$(shell nproc)
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	$(MAKE) check
+endif
+
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr \
+	    LIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
+	# The README is installed by dh_installdocs.
+	find $(CURDIR)/debian/tmp/usr/share/doc/pcompress -delete

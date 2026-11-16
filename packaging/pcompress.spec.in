@@ -1,0 +1,79 @@
+Name:           pcompress
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Parallel compression, deduplication and encryption utility and library
+License:        LGPL-3.0-or-later
+URL:            https://codeberg.org/gregburd/pcompress
+# The release tarball: it includes the bundled lz4, zstd, libbsc and
+# libarchive sources (git submodules) and libarchive's generated configure.
+Source0:        https://github.com/gburd/pcompress/releases/download/v%{version}/pcompress-%{version}.tar.gz
+
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  make
+BuildRequires:  openssl-devel
+BuildRequires:  zlib-devel
+BuildRequires:  bzip2-devel
+BuildRequires:  perl
+BuildRequires:  which
+BuildRequires:  diffutils
+BuildRequires:  findutils
+BuildRequires:  file
+BuildRequires:  patch
+
+# Bundled, statically linked into libpcompress and not exported.
+Provides:       bundled(lz4)
+Provides:       bundled(zstd)
+Provides:       bundled(libbsc)
+Provides:       bundled(libarchive) = 3.8.10
+Provides:       bundled(lzma-sdk)
+
+%description
+pcompress compresses files and directory trees in parallel chunks with a
+choice of algorithms (zstd, lzma, lz4, bzip2, ppmd, libbsc and adaptive
+modes), optional content-defined deduplication, and optional AES or
+XSalsa20 encryption with HMAC authentication.
+
+%package        devel
+Summary:        Header and pkg-config file for libpcompress
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+
+%description    devel
+The header, pkg-config file and manual page for building programs that
+use libpcompress: compression of streams and files, content-defined
+chunking, sealed chunk objects, key files and snapshot manifests.
+
+%prep
+%autosetup -p1
+
+%build
+# ./config is a hand-written script, not autoconf. --portable: no host CPU
+# tuning (SIMD paths are still chosen at run time). --disable-rpath: the
+# library goes to %%{_libdir}.
+./config --prefix=%{_prefix} --portable --disable-rpath --disable-wavpack
+%make_build
+
+%check
+make check
+
+%install
+make install DESTDIR=%{buildroot} PREFIX=%{_prefix} LIBDIR=%{_libdir}
+# The README is installed by %%doc below.
+rm -rf %{buildroot}%{_docdir}/%{name}
+
+%files
+%license COPYING COPYING.LESSER
+%doc README.md Changelog
+%attr(0755,root,root) %{_bindir}/pcompress
+%attr(0755,root,root) %{_libdir}/libpcompress.so.1
+%{_mandir}/man1/pcompress.1*
+
+%files devel
+%{_includedir}/pcompress/
+%{_libdir}/libpcompress.so
+%{_libdir}/pkgconfig/libpcompress.pc
+%{_mandir}/man3/libpcompress.3*
+
+%changelog
+* @DATE@ Greg Burd <greg@burd.me> - @VERSION@-1
+- pcompress @VERSION@; see Changelog.

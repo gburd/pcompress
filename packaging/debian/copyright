@@ -1,0 +1,24 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: pcompress
+Source: https://codeberg.org/gregburd/pcompress
+
+Files: *
+Copyright: 2012-2014 Moinak Ghosh
+           2024-2026 Greg Burd
+License: LGPL-3.0-or-later
+
+Files: lz4/* zstd/* bsc/* archive/libarchive/* lzma/* crypto/scrypt/*
+ crypto/blake2/* crypto/keccak/* crypto/skein/* crypto/aes/* filters/*
+Copyright: Their respective authors; see the notices in each tree.
+License: various
+ Bundled third-party sources under BSD-2-Clause, BSD-3-Clause, MIT,
+ Apache-2.0, public-domain and LGPL licences, as stated in each file or
+ tree. They are compiled into libpcompress and not exported.
+
+License: LGPL-3.0-or-later
+ This library is free software; you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License as published by
+ the Free Software Foundation; either version 3 of the License, or (at your
+ option) any later version.
+ .
+ On Debian systems the full text is in /usr/share/common-licenses/LGPL-3.

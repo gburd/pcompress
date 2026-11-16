@@ -1,0 +1,38 @@
+Source: pcompress
+Section: utils
+Priority: optional
+Maintainer: Greg Burd <greg@burd.me>
+Build-Depends: debhelper-compat (= 13), libssl-dev, zlib1g-dev, libbz2-dev,
+ perl, file, patch
+Standards-Version: 4.7.0
+Homepage: https://codeberg.org/gregburd/pcompress
+Rules-Requires-Root: no
+
+Package: pcompress
+Architecture: any
+Depends: libpcompress1 (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: parallel compression, deduplication and encryption utility
+ pcompress compresses files and directory trees in parallel chunks with a
+ choice of algorithms (zstd, lzma, lz4, bzip2, ppmd, libbsc and adaptive
+ modes), optional content-defined deduplication, and optional AES or
+ XSalsa20 encryption with HMAC authentication.
+
+Package: libpcompress1
+Section: libs
+Architecture: any
+Multi-Arch: same
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: parallel compression, deduplication and encryption library
+ The library behind pcompress: compression of streams and files to its
+ own format, content-defined chunking, sealed chunk objects, key files and
+ snapshot manifests for backup tools. lz4, zstd, libbsc and libarchive are
+ built in and not exported.
+
+Package: libpcompress-dev
+Section: libdevel
+Architecture: any
+Multi-Arch: same
+Depends: libpcompress1 (= ${binary:Version}), ${misc:Depends}
+Description: parallel compression library - development files
+ The header, pkg-config file and manual page for building programs that
+ use libpcompress.

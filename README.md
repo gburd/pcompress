@@ -82,9 +82,15 @@ libbsc, libarchive, optionally WavPack) are git submodules:
     make install PREFIX=/usr/local  # binary, library, header, pkg-config, man pages
 
 Useful `./config` options: `--portable` (no host-CPU tuning; for
-packages), `--enable-lto`, `--enable-debug`, `--enable-coverage` (then
-`make coverage`), `--disable-zstd`, `--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and `LDFLAGS` from the
-environment are honoured; Clang is used with `CC=clang CXX=clang++`.
+packages), `--disable-rpath` (for packages installing into a system
+library directory; then `make install LIBDIR=...`), `--enable-lto`,
+`--enable-debug`, `--enable-coverage` (then `make coverage`),
+`--disable-zstd`, `--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and
+`LDFLAGS` from the environment are honoured; Clang is used with
+`CC=clang CXX=clang++`. `make static` links one static binary
+(`buildtmp/pcompress-static`; fully static with musl). Release packages
+(RPM, Debian, static binaries) and how to verify a download are in
+`packaging/README.md`.
 
 With Nix: `nix build` (runs the test suite in the sandbox) or
 `nix develop` for a shell with every tool; see `docs/NIX.md`.

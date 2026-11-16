@@ -1,4 +1,14 @@
 == Unreleased ==
+Packaging: releases add .rpm (Fedora) and .deb (Debian) packages for x86_64
+  and arm64 from packaging/, a static (musl) binary for both, and a signed
+  build-provenance attestation for every file (gh attestation verify).
+  ./config --disable-rpath and make install LIBDIR=... for distribution
+  builds; make static. packaging/README.md lists what a release ships.
+Build fixes found by the static build: our copies of OpenSSL's AES
+  assembler are renamed (pc_aesni_*, pc_vpaes_*) so they no longer clash
+  with libcrypto's in a static link; ./config probes GCC's Graphite loop
+  flags on a real loop nest (Alpine's GCC 15 crashes in them); packPNM
+  includes <stdint.h> (musl).
 Encryption: the key is derived with scrypt at N = 2^17 (128 MB, about
   0.3 s), not 2^11: guessing a password costs 64 times more. The header
   records the cost (format version 11), and a crafted cost is refused

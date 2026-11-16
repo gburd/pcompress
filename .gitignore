@@ -5,6 +5,7 @@ files.lst
 *.so
 /pcompress
 libpcompress*
+!packaging/debian/libpcompress*
 Makefile
 test.log
 test/datafiles

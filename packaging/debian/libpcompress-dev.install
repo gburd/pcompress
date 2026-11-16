@@ -1,0 +1,4 @@
+usr/include/pcompress
+usr/lib/*/libpcompress.so
+usr/lib/*/pkgconfig/libpcompress.pc
+usr/share/man/man3/libpcompress.3

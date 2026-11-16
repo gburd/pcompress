@@ -3,7 +3,10 @@
 #   - pcompress-<ver>.tar.gz: full source including the bundled submodules
 #     (GitHub's automatic archives omit them, so they cannot be built)
 #   - pcompress-<ver>-<os>-<arch>.tar.gz: binary, library and man page
-#   - SHA256SUMS
+#   - pcompress-<ver>-linux-<arch>-static: one static (musl) binary
+#   - .rpm (Fedora) and .deb (Debian) packages from packaging/
+#   - SHA256SUMS, and a signed build-provenance attestation for every file
+#     (verify: gh attestation verify <file> -R gburd/pcompress)
 name: Release
 
 on:
@@ -17,6 +20,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write      # Sigstore signing of the provenance attestation
+  attestations: write
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
@@ -84,15 +89,108 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: "bin-${{ matrix.name }}", path: "pcompress-*-${{ matrix.name }}.tar.gz" }
 
+  static:
+    # Fully static only with musl: glibc's static NSS and dlopen do not work.
+    name: "Static binary linux-${{ matrix.arch }}"
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    container: { image: "alpine:latest" }
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Dependencies
+        run: |
+          apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
+            zlib-static bzip2-dev bzip2-static perl file patch tar
+      - uses: actions/download-artifact@v4
+        with: { name: source }
+      - name: Build, test, link statically
+        run: |
+          tar xzf pcompress-*.tar.gz && cd pcompress-*/
+          ./config --portable --disable-wavpack && make -j"$(nproc)" && make check && make static
+          file buildtmp/pcompress-static | grep -q 'static'
+          printf 'static binary check\n' > /tmp/s.txt
+          buildtmp/pcompress-static -c zstd -l3 /tmp/s.txt && buildtmp/pcompress-static -d /tmp/s.txt.pz /tmp/s.out
+          cmp /tmp/s.txt /tmp/s.out
+          cp buildtmp/pcompress-static "../pcompress-${TAG#v}-linux-${{ matrix.arch }}-static"
+      - uses: actions/upload-artifact@v4
+        with: { name: "static-${{ matrix.arch }}", path: "pcompress-*-static" }
+
+  rpm:
+    name: "RPM ${{ matrix.arch }}"
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    container: { image: "fedora:latest" }
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Dependencies
+        run: |
+          dnf -y install rpm-build gcc gcc-c++ make openssl-devel zlib-devel bzip2-devel \
+            perl which diffutils findutils file patch tar gzip
+      - uses: actions/download-artifact@v4
+        with: { name: source }
+      - name: rpmbuild (runs make check)
+        run: |
+          tar xzf pcompress-*.tar.gz && for d in pcompress-*/; do break; done
+          v=$(sh "$d/packaging/prepare.sh" "$d")
+          mkdir -p ~/rpmbuild/SOURCES && cp pcompress-*.tar.gz ~/rpmbuild/SOURCES/
+          rpmbuild -bb "$d/packaging/pcompress.spec"
+          dnf -y install ~/rpmbuild/RPMS/*/pcompress-"$v"-*.rpm && pcompress -V
+          cp ~/rpmbuild/RPMS/*/*.rpm .
+      - uses: actions/upload-artifact@v4
+        with: { name: "rpm-${{ matrix.arch }}", path: "*.rpm" }
+
+  deb:
+    name: "Debian package ${{ matrix.arch }}"
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    container: { image: "debian:stable" }
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Dependencies
+        run: |
+          apt-get update -q
+          DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
+            build-essential debhelper libssl-dev zlib1g-dev libbz2-dev perl file patch
+      - uses: actions/download-artifact@v4
+        with: { name: source }
+      - name: dpkg-buildpackage (runs make check)
+        run: |
+          tar xzf pcompress-*.tar.gz && for d in pcompress-*/; do break; done
+          v=$(sh "$d/packaging/prepare.sh" "$d")
+          cp pcompress-"$v".tar.gz pcompress_"$v".orig.tar.gz
+          (cd "$d" && dpkg-buildpackage -us -uc -b)
+          apt-get install -yq ./libpcompress1_*.deb ./pcompress_*.deb && pcompress -V
+          find . -maxdepth 1 -name '*dbgsym*' -delete
+      - uses: actions/upload-artifact@v4
+        with: { name: "deb-${{ matrix.arch }}", path: "*.deb" }
+
   publish:
     name: Publish release
-    needs: [source, binaries]
+    needs: [source, binaries, static, rpm, deb]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - name: Checksums
-        run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+        run: cd dist && sha256sum -- * | tee SHA256SUMS
+      - name: Signed build provenance for every file
+        uses: actions/attest-build-provenance@v2
+        with: { subject-path: "dist/*" }
       - name: Create release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |

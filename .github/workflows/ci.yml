@@ -89,6 +89,55 @@ jobs:
           tar xzf pcompress-HEAD.tar.gz && cd pcompress-HEAD
           sh ci/build-test.sh full
 
+  packages:
+    # The distribution recipes (packaging/) and the static binary, built from
+    # the release tarball as the release workflow does, so they do not rot.
+    name: "Packages: ${{ matrix.kind }}"
+    needs: dist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: { image: "${{ matrix.image }}" }
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { kind: rpm, image: "fedora:latest" }
+          - { kind: deb, image: "debian:stable" }
+          - { kind: static, image: "alpine:latest" }
+    steps:
+      - name: Dependencies
+        run: |
+          case ${{ matrix.kind }} in
+          rpm) dnf -y install rpm-build gcc gcc-c++ make openssl-devel zlib-devel bzip2-devel \
+                 perl which diffutils findutils file patch tar gzip ;;
+          deb) apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq \
+                 --no-install-recommends build-essential debhelper libssl-dev zlib1g-dev \
+                 libbz2-dev perl file patch ;;
+          static) apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
+                 zlib-static bzip2-dev bzip2-static perl file patch tar ;;
+          esac
+      - uses: actions/download-artifact@v4
+        with: { name: dist }
+      - name: Build the package and install it
+        run: |
+          tar xzf pcompress-HEAD.tar.gz
+          v=$(sh pcompress-HEAD/packaging/prepare.sh pcompress-HEAD)
+          mv pcompress-HEAD "pcompress-$v" && d="pcompress-$v"
+          case ${{ matrix.kind }} in
+          rpm) mkdir -p ~/rpmbuild/SOURCES && tar czf ~/rpmbuild/SOURCES/"$d".tar.gz "$d"
+               rpmbuild -bb "$d/packaging/pcompress.spec"
+               dnf -y install ~/rpmbuild/RPMS/*/pcompress-"$v"-*.rpm ;;
+          deb) tar czf pcompress_"$v".orig.tar.gz "$d"
+               (cd "$d" && dpkg-buildpackage -us -uc -b)
+               apt-get install -yq ./libpcompress1_*.deb ./pcompress_*.deb ;;
+          static) cd "$d" && ./config --portable --disable-wavpack && make -j"$(nproc)" &&
+               make test-unit && make static && file buildtmp/pcompress-static | grep -q static &&
+               install -m 755 buildtmp/pcompress-static /usr/local/bin/pcompress ;;
+          esac
+          pcompress -V
+          printf 'package check\n' > /tmp/p.txt
+          pcompress -c zstd -l3 /tmp/p.txt && pcompress -d /tmp/p.txt.pz /tmp/p.out && cmp /tmp/p.txt /tmp/p.out
+
   macos:
     name: "macOS ${{ matrix.arch }}"
     runs-on: ${{ matrix.runner }}

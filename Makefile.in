@@ -285,9 +285,14 @@ RPATH=@RPATH@
 DTAGS=@DTAGS@
 # The installed binary finds libpcompress.so.1 in $(PREFIX)/lib.
 PROG_RPATH=@PROG_RPATH@
-LDLIBS = @LDL@ -L./buildtmp -Wl,$(RPATH)@LIBBZ2_DIR@ -lbz2 -L./buildtmp -Wl,$(RPATH)@LIBZ_DIR@ -lz -lm @LIBBSCLFLAGS@ \
-	-L./buildtmp -Wl,$(RPATH)@OPENSSL_LIBDIR@ -lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
-	-lpthread @OMP_LIBS@ -Wl,$(RPATH)/usr/lib$(DTAGS) -Wl,$(RPATH)/usr/lib64$(DTAGS) @WAVPACK_LIBSPEC@
+# Run paths for the dependency libraries (OpenSSL outside the default
+# search path, e.g. /usr/openssl/3 or Homebrew); ./config --disable-rpath
+# drops them for distribution packages, which link system libraries.
+# ./config links the libraries it found into buildtmp/.
+LDRPATHS = @LDRPATHS@
+LDLIBS = @LDL@ -L./buildtmp -lbz2 -lz -lm @LIBBSCLFLAGS@ \
+	-lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
+	-lpthread @OMP_LIBS@ @WAVPACK_LIBSPEC@ $(LDRPATHS)
 OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) @ZSTD_OBJS@ $(ZSTD_ASM_OBJS) @ZSTD_WRAPOBJ@ $(CRCOBJS) \
 $(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
@@ -325,6 +330,9 @@ CPPFLAGS = @CPPFLAGS@ @DEBUG_STATS_CPPFLAGS@
 GEN_OPT = @GEN_OPT@ @SSE_OPT_FLAGS@
 BASE_OPT = @GEN_OPT@
 PREFIX=@PREFIX@
+# Where make install puts the library and libpcompress.pc (distros: lib64,
+# lib/<multiarch>).
+LIBDIR=$(PREFIX)/lib
 AVX_OPT_FLAG = @AVX_OPT_FLAG@
 SSE4_OPT_FLAG = @SSE4_OPT_FLAG@
 SSE3_OPT_FLAG = @SSE3_OPT_FLAG@
@@ -517,6 +525,13 @@ $(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
 	mkdir -p buildtmp
 	$(LINK.PROG) -o $@ $(PROGOBJS) $(LDLIBS) -L. -l$(LINKLIB) $(PROG_RPATH)
 
+# A self-contained binary: the library objects linked in, -static.
+# Fully static only where the libc allows it (musl; see packaging/).
+static: buildtmp/$(PROG)-static
+buildtmp/$(PROG)-static: $(LIBARCHIVE_A) $(OBJS) $(LIBBSCLIB) $(PROGOBJS)
+	mkdir -p buildtmp
+	$(LINK.PROG) -static -o $@ $(PROGOBJS) $(OBJS) $(LDLIBS)
+
 $(PROG): ./buildtmp/$(PROG)
 	cat utils/pcompress.sh | sed "s#<PC_PATH>#`pwd`#" > pcompress
 	chmod +x pcompress
@@ -678,19 +693,19 @@ install: $(PROG)
 	@cp buildtmp/$(PROG) $(DESTDIR)$(PREFIX)/bin
 	@chmod 0555 $(DESTDIR)$(PREFIX)/bin/$(PROG)
 
-	@mkdir -p $(DESTDIR)$(PREFIX)/lib
-	@chmod 0755 $(DESTDIR)$(PREFIX)/lib
-	@cp $(LIB).$(LIBVER) $(DESTDIR)$(PREFIX)/lib
-	@chmod 0555 $(DESTDIR)$(PREFIX)/lib/$(LIB).$(LIBVER)
-	@ln -sf $(LIB).$(LIBVER) $(DESTDIR)$(PREFIX)/lib/$(LIB)
+	@mkdir -p $(DESTDIR)$(LIBDIR)
+	@chmod 0755 $(DESTDIR)$(LIBDIR)
+	@cp $(LIB).$(LIBVER) $(DESTDIR)$(LIBDIR)
+	@chmod 0555 $(DESTDIR)$(LIBDIR)/$(LIB).$(LIBVER)
+	@ln -sf $(LIB).$(LIBVER) $(DESTDIR)$(LIBDIR)/$(LIB)
 
-	@mkdir -p $(DESTDIR)$(PREFIX)/include/pcompress $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	@mkdir -p $(DESTDIR)$(PREFIX)/include/pcompress $(DESTDIR)$(LIBDIR)/pkgconfig
 	@cp include/pcompress/pcompress.h $(DESTDIR)$(PREFIX)/include/pcompress/
 	@chmod 0444 $(DESTDIR)$(PREFIX)/include/pcompress/pcompress.h
 	@# Written here, not by ./config: 'make install PREFIX=...' may differ.
-	@sed -e 's#%PREFIX%#$(PREFIX)#' -e 's#%VERSION%#$(PC_VERSION)#' \
-	    pkgconfig/libpcompress.pc.in > $(DESTDIR)$(PREFIX)/lib/pkgconfig/libpcompress.pc
-	@chmod 0444 $(DESTDIR)$(PREFIX)/lib/pkgconfig/libpcompress.pc
+	@sed -e 's#%PREFIX%#$(PREFIX)#' -e 's#%LIBDIR%#$(LIBDIR)#' -e 's#%VERSION%#$(PC_VERSION)#' \
+	    pkgconfig/libpcompress.pc.in > $(DESTDIR)$(LIBDIR)/pkgconfig/libpcompress.pc
+	@chmod 0444 $(DESTDIR)$(LIBDIR)/pkgconfig/libpcompress.pc
 
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/doc/$(PROG)
 	@chmod 0755 $(DESTDIR)$(PREFIX)/share $(DESTDIR)$(PREFIX)/share/doc $(DESTDIR)$(PREFIX)/share/doc/$(PROG)

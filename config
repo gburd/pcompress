@@ -55,6 +55,9 @@ ${prog} [<options>]
 			for distribution packages. Implies '--no-sse-detect'.
 --enable-lto		Enable link-time optimization (-flto) for the library and binary.
 --enable-coverage	Build with gcov instrumentation (-O0 --coverage) for 'make coverage'.
+--disable-rpath		Install the binary without a run path (distribution packages that
+			put the library in a system directory). By default it looks in
+			<prefix>/lib and in <bin>/../lib, so an unpacked tarball works.
 --no-1.3-archive-compat Disable compatibility with compressed archives created with Pcompress
 			version 1.3 (default: retain compatibility). Hash formats changed from
 			version 1.3 to 1.4 so this option is required if files created using
@@ -231,6 +234,7 @@ ldl="-ldl"
 default_opt="O3"
 enable_lto=0
 enable_coverage=0
+enable_rpath=1
 max_opt="O3"
 libarchive_dir="archive/libarchive"
 enable_wavpack="-D_ENABLE_WAVPACK_"
@@ -436,6 +440,9 @@ do
 	;;
 	--enable-coverage)
 		enable_coverage=1
+	;;
+	--disable-rpath)
+		enable_rpath=0
 	;;
 	--no-1.3-archive-compat)
 		crypto_compat_objs=""
@@ -902,6 +909,11 @@ else
 	prog_rpath="-Wl,${rpath}${prefix}/lib${dtag_val} '-Wl,${rpath}\$\$ORIGIN/../lib${dtag_val}'"
 	# Tests in buildtmp/ load the library from the build tree.
 	test_rpath="'-Wl,${rpath}\$\$ORIGIN/..${dtag_val}'"
+fi
+if [ $enable_rpath -eq 0 ]; then
+	# Tests still need the build tree: they get test_rpath of their own.
+	prog_rpath=""
+	[ "$OS" = "Darwin" ] && test_rpath="-Wl,-rpath,$(pwd)"
 fi
 
 # ----------------------------------------------------------------
@@ -1456,6 +1468,14 @@ echo "  exports: ${export_flags:-all (linker has no version-script support)}"
 
 pc_version=$(sed -n 's/.*UTILITY_VERSION[^"]*"\([^"]*\)".*/\1/p' pcompress.h)
 
+# Run paths for the dependency libraries; none with --disable-rpath.
+ldrpaths=""
+if [ $enable_rpath -eq 1 ]; then
+	for _d in "${libbz2_libdir}" "${libz_libdir}" "${openssl_libdir}" "/usr/lib${dtag_val}" "/usr/lib64${dtag_val}"; do
+		[ -n "$_d" ] && ldrpaths="${ldrpaths} -Wl,${rpath}${_d}"
+	done
+fi
+
 sed "
 s#@EXPORT_FLAGS@#${export_flags}#g
 s#@PC_VERSION@#${pc_version}#g
@@ -1467,6 +1487,7 @@ s#@USE_CLANG_AS@#${use_clang_as}#g
 s#@SO_SUFFIX@#${so_suffix}#g
 s#@YASM_GAS@#${yasm_params_gas}#g
 s#@RPATH@#${rpath}#g
+s#@LDRPATHS@#${ldrpaths}#g
 s#@LRT@#${lrt}#g
 s#@LDL@#${ldl}#g
 s#@LIBARCHIVE_DIR@#${libarchive_dir}#g
