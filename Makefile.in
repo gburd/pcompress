@@ -288,7 +288,7 @@ PC_OS=@PC_OS@
 EXEEXT=@EXEEXT@
 PLATFORM_CPPFLAGS = @PLATFORM_CPPFLAGS@
 PLATFORM_CINCLUDE = $(if $(PC_OS),-include utils/win32.h)
-# Programs and tests: binary file I/O by default (binmode.o).
+# Programs and tests: binary file I/O by default (utils/win32_binmode.c).
 PROG_LDFLAGS = @PROG_LDFLAGS@
 RPATH=@RPATH@
 DTAGS=@DTAGS@
@@ -489,6 +489,9 @@ $(MAINOBJS): $(MAINSRCS) $(MAINHDRS)
 $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 	$(COMPILE) $(GEN_OPT) $(LOOP_OPTFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
+utils/win32_binmode.o: utils/win32_binmode.c
+	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) $(@:.o=.c) -o $@
+
 # A stamp, not a phony target: a phony prerequisite made $(LIB) relink on
 # every make invocation, e.g. under 'make -j check' while tests ran it.
 LIBARCHIVE_A = @LIBARCHIVE_DIR@/.libs/libarchive.a
@@ -529,7 +532,8 @@ ifeq ($(PC_OS),MINGW)
 # bin/ when installed), and -lpcompress links its import library, $(LIB).
 # It exports the libpcompress.map names (./config writes libpcompress.def).
 DLL = libpcompress-$(LIBVER).dll
-$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map
+# Every program links PROG_LDFLAGS and needs $(LIB) first: build it here.
+$(LIB): $(LIBARCHIVE_A) $(OBJS)  $(LIBBSCLIB) libpcompress.map $(PROG_LDFLAGS)
 	mkdir -p buildtmp
 	$(LINK.LIB) -o buildtmp/$(DLL) -Wl,--out-implib,$(LIB) $(OBJS) $(LDLIBS) @EXPORT_FLAGS@
 else
@@ -689,7 +693,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
 topclean:
-	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER)
+	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER) $(PROG_LDFLAGS)
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM) buildtmp/test_* buildtmp/bench_algos*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress

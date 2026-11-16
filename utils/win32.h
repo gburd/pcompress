@@ -20,7 +20,7 @@
  * <libgen.h>, nftw(), clock_gettime(). This file declares the rest under
  * the POSIX names, so the portable code reads as before.
  *
- * Files are always binary. The programs link the C runtime's binmode.o,
+ * Files are always binary. The programs link utils/win32_binmode.c,
  * which makes binary the default for everything they open, stdin and
  * stdout included. The library cannot rely on that, so open() and
  * mkstemp() here open in binary mode, and the job's stdin and stdout are
