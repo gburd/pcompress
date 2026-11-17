@@ -143,9 +143,6 @@ jobs:
     needs: dist
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    # shortcut: Alpine's GCC 15 on aarch64 crashes on our aligned(1) loads
-    # passed to musl's htonl(); drop this once utils.h no longer does that.
-    continue-on-error: ${{ matrix.arch == 'arm64' }}
     strategy:
       fail-fast: false
       matrix:

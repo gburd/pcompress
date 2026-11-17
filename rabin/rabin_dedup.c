@@ -1678,7 +1678,7 @@ dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size)
 	for (blk = 0; blk < blknum; blk++) {
 		if (ctx->blocks[blk] == 0)
 			ctx->blocks[blk] = (rabin_blockentry_t *)slab_alloc(NULL, sizeof (rabin_blockentry_t));
-		len = ntohl(dedupe_index[blk]);
+		len = ntohl(U32_P(&dedupe_index[blk]));	/* U32_P: see utils.h */
 		ctx->blocks[blk]->hash = 0;
 		if (len == 0) {
 			ctx->blocks[blk]->hash = 1;

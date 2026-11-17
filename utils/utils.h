@@ -201,6 +201,12 @@ typedef int32_t bsize_t;
  * compiler emits accesses that are legal on strict-alignment CPUs (SPARC,
  * some RISC-V and MIPS) and that do not break strict aliasing; on x86 and
  * ARM64 this is still a single load/store.
+ *
+ * The *_P() macros reach the value through a packed struct member rather
+ * than through the aligned(1) typedef. The access is the same, but the
+ * value has the plain integer type: GCC 15 on aarch64 crashes ("internal
+ * compiler error: in aarch64_function_arg_alignment") when an aligned(1)
+ * value is passed to a real function, such as musl's htonl().
  */
 #if defined(__GNUC__) || defined(__clang__)
 typedef uint64_t __attribute__((aligned(1), may_alias)) pc_u64u_t;
@@ -209,6 +215,18 @@ typedef uint16_t __attribute__((aligned(1), may_alias)) pc_u16u_t;
 typedef int64_t __attribute__((aligned(1), may_alias)) pc_i64u_t;
 typedef int32_t __attribute__((aligned(1), may_alias)) pc_i32u_t;
 typedef int16_t __attribute__((aligned(1), may_alias)) pc_i16u_t;
+struct pc_u64u_s { uint64_t v; } __attribute__((packed, may_alias));
+struct pc_u32u_s { uint32_t v; } __attribute__((packed, may_alias));
+struct pc_u16u_s { uint16_t v; } __attribute__((packed, may_alias));
+struct pc_i64u_s { int64_t v; } __attribute__((packed, may_alias));
+struct pc_i32u_s { int32_t v; } __attribute__((packed, may_alias));
+struct pc_i16u_s { int16_t v; } __attribute__((packed, may_alias));
+#define	U64_P(x) (((struct pc_u64u_s *)(x))->v)
+#define	U32_P(x) (((struct pc_u32u_s *)(x))->v)
+#define	U16_P(x) (((struct pc_u16u_s *)(x))->v)
+#define	I64_P(x) (((struct pc_i64u_s *)(x))->v)
+#define	I32_P(x) (((struct pc_i32u_s *)(x))->v)
+#define	I16_P(x) (((struct pc_i16u_s *)(x))->v)
 #else
 typedef uint64_t pc_u64u_t;
 typedef uint32_t pc_u32u_t;
@@ -216,13 +234,13 @@ typedef uint16_t pc_u16u_t;
 typedef int64_t pc_i64u_t;
 typedef int32_t pc_i32u_t;
 typedef int16_t pc_i16u_t;
-#endif
 #define	U64_P(x) (*((pc_u64u_t *)(x)))
 #define	U32_P(x) (*((pc_u32u_t *)(x)))
 #define	U16_P(x) (*((pc_u16u_t *)(x)))
 #define	I64_P(x) (*((pc_i64u_t *)(x)))
 #define	I32_P(x) (*((pc_i32u_t *)(x)))
 #define	I16_P(x) (*((pc_i16u_t *)(x)))
+#endif
 
 /* macOS >= 10.12 provides clock_gettime() and the CLOCK_* ids natively. */
 
