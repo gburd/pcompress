@@ -27,7 +27,7 @@ scheduling and storage backends belong in the consuming program.
 | P6 | Dedupe forgets everything | The global index is in memory or a temp file and is discarded at exit ("Disk based index not yet implemented"). | Fixed for chunk stores in 4.2.0 (Phase 5); `.pz` global dedupe stays per file |
 | P7 | Chunks are not content-addressed | Per-chunk checksums only verify data; they are never exposed as an identity. | Fixed in 4.2.0 (Phase 3) |
 | P8 | No single-file restore | An archive is one PAX stream through the compressor. Listing reads the whole file. | Fixed for chunk stores in 4.2.0 (Phases 6-7); a seekable `.pz` container is not done |
-| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed in 4.2.0 (Phase 4); raw keys for `.pz` wait for a new format version |
+| P9 | Key handling | Prompted and file passwords are capped at 16 bytes. No caller-supplied key, no key wrapping, no algorithm or version agility. | Fixed in 4.2.0 (Phase 4); since 4.3.0 `.pz` headers record the KDF cost (format version 11); raw keys for `.pz` are not done |
 | P10 | Process side effects | SIGINT/SIGTERM handlers that call `exit()`; `PCOMPRESS_*` environment variables; output written as a temp file beside the input. | Partly: no handlers or `exit()`; `PCOMPRESS_*` env vars remain |
 
 ## Phases
