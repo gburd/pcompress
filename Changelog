@@ -1,3 +1,15 @@
+== 4.3.1 Release ==
+Build: Alpine's GCC 15 on aarch64 crashed compiling 4.3.0 ("internal
+  compiler error: in aarch64_function_arg_alignment") where an unaligned
+  load was passed to musl's htonl() or ntohs(), so the 4.3.0 release has no
+  arm64 static binary. The unaligned-load macros now give values of the
+  plain integer type; the generated code is unchanged with GCC and clang
+  on aarch64 and with GCC on SPARC. The release again has both static
+  binaries.
+Packaging: packaging/allowed_signers lists every signing key the
+  maintainer uses, so ssh-keygen -Y verify accepts every release
+  signature.
+
 == 4.3.0 Release ==
 Encryption: the key is derived with scrypt at N = 2^17 (128 MB, about
   0.3 s), not 2^11: guessing a password costs 64 times more. The header
