@@ -1,1 +1,6 @@
-greg@burd.me namespaces="file,git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINz66/3UQozT70FKbDYtNI4Knu6iWyAAPBhHDFzV66IW
+# Public SSH signing keys of the maintainer, Greg Burd: one per machine,
+# the same keys GitHub lists as signing keys for gburd. Used to
+# check release signatures: see packaging/README.md.
+greg@burd.me namespaces="file,git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHQXs8Altzj+13U2tI+qc57fngav3QFJscptpvdy1vOv greg@burd.me-signing-floki-rotated20261106
+greg@burd.me namespaces="file,git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDq6QBNeFyj1crxjzENLgASQ1mNcGyXO/tGEhuFMfKGO greg@burd.me-signing-meh-rotated20261106
+greg@burd.me namespaces="file,git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINz66/3UQozT70FKbDYtNI4Knu6iWyAAPBhHDFzV66IW greg@burd.me-signing-werk-rotated20261106
