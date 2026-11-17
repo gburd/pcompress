@@ -91,32 +91,37 @@ jobs:
 
   static:
     # Fully static only with musl: glibc's static NSS and dlopen do not work.
+    # Alpine runs under docker from the host runner: GitHub's JavaScript
+    # actions (download/upload-artifact) cannot run inside an Alpine job
+    # container on arm64 runners.
     name: "Static binary linux-${{ matrix.arch }}"
     needs: source
     runs-on: ${{ matrix.runner }}
-    container: { image: "alpine:latest" }
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - { arch: x86_64, runner: ubuntu-24.04 }
           - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
-      - name: Dependencies
-        run: |
-          apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
-            zlib-static bzip2-dev bzip2-static perl file patch tar
       - uses: actions/download-artifact@v4
         with: { name: source }
-      - name: Build, test, link statically
+      - name: Build, test, link statically (Alpine)
+        env: { ARCH: "${{ matrix.arch }}" }
         run: |
+          cat > static.sh <<'EOF'
+          set -eu
+          apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
+            zlib-static bzip2-dev bzip2-static perl file patch tar
           tar xzf pcompress-*.tar.gz && cd pcompress-*/
           ./config --portable --disable-wavpack && make -j"$(nproc)" && make check && make static
           file buildtmp/pcompress-static | grep -q 'static'
           printf 'static binary check\n' > /tmp/s.txt
           buildtmp/pcompress-static -c zstd -l3 /tmp/s.txt && buildtmp/pcompress-static -d /tmp/s.txt.pz /tmp/s.out
           cmp /tmp/s.txt /tmp/s.out
-          cp buildtmp/pcompress-static "../pcompress-${TAG#v}-linux-${{ matrix.arch }}-static"
+          cp buildtmp/pcompress-static "../pcompress-${TAG#v}-linux-${ARCH}-static"
+          EOF
+          docker run --rm -e TAG -e ARCH -v "$PWD:/w" -w /w alpine:latest sh static.sh
       - uses: actions/upload-artifact@v4
         with: { name: "static-${{ matrix.arch }}", path: "pcompress-*-static" }
 

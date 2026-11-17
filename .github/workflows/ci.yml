@@ -93,6 +93,8 @@ jobs:
   packages:
     # The distribution recipes (packaging/) and the static binary, built from
     # the release tarball as the release workflow does, so they do not rot.
+    # rpm and deb only, in job containers; the static binary is built as in
+    # the release workflow (docker on the host, on both arches) by "static".
     name: "Packages: ${{ matrix.kind }}"
     needs: dist
     runs-on: ubuntu-24.04
@@ -104,7 +106,6 @@ jobs:
         include:
           - { kind: rpm, image: "fedora:latest" }
           - { kind: deb, image: "debian:stable" }
-          - { kind: static, image: "alpine:latest" }
     steps:
       - name: Dependencies
         run: |
@@ -114,8 +115,6 @@ jobs:
           deb) apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq \
                  --no-install-recommends build-essential debhelper libssl-dev zlib1g-dev \
                  libbz2-dev perl file patch ;;
-          static) apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
-                 zlib-static bzip2-dev bzip2-static perl file patch tar ;;
           esac
       - uses: actions/download-artifact@v4
         with: { name: dist }
@@ -131,13 +130,42 @@ jobs:
           deb) tar czf pcompress_"$v".orig.tar.gz "$d"
                (cd "$d" && dpkg-buildpackage -us -uc -b)
                apt-get install -yq ./libpcompress1_*.deb ./pcompress_*.deb ;;
-          static) cd "$d" && ./config --portable --disable-wavpack && make -j"$(nproc)" &&
-               make test-unit && make static && file buildtmp/pcompress-static | grep -q static &&
-               install -m 755 buildtmp/pcompress-static /usr/local/bin/pcompress ;;
           esac
           pcompress -V
           printf 'package check\n' > /tmp/p.txt
           pcompress -c zstd -l3 /tmp/p.txt && pcompress -d /tmp/p.txt.pz /tmp/p.out && cmp /tmp/p.txt /tmp/p.out
+
+  static:
+    # The static (musl) binary, as the release workflow builds it: Alpine
+    # under docker from the host runner, on x86_64 and arm64 (JavaScript
+    # actions cannot run inside an Alpine job container on arm64).
+    name: "Static binary ${{ matrix.arch }}"
+    needs: dist
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist }
+      - name: Build, unit tests, link statically (Alpine), run it
+        run: |
+          cat > static.sh <<'EOF'
+          set -eu
+          apk add build-base linux-headers openssl-dev openssl-libs-static zlib-dev \
+            zlib-static bzip2-dev bzip2-static perl file patch tar
+          tar xzf pcompress-HEAD.tar.gz && cd pcompress-HEAD
+          ./config --portable --disable-wavpack && make -j"$(nproc)" && make test-unit && make static
+          file buildtmp/pcompress-static | grep -q static
+          printf 'static binary check\n' > /tmp/s.txt
+          buildtmp/pcompress-static -c zstd -l3 /tmp/s.txt && buildtmp/pcompress-static -d /tmp/s.txt.pz /tmp/s.out
+          cmp /tmp/s.txt /tmp/s.out
+          EOF
+          docker run --rm -v "$PWD:/w" -w /w alpine:latest sh static.sh
 
   macos:
     name: "macOS ${{ matrix.arch }}"
