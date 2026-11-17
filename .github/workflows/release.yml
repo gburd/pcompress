@@ -97,6 +97,10 @@ jobs:
     name: "Static binary linux-${{ matrix.arch }}"
     needs: source
     runs-on: ${{ matrix.runner }}
+    # Alpine's GCC 15 on aarch64 crashes compiling 4.3.0 (an internal
+    # compiler error passing an aligned(1) value to musl's htonl()); the
+    # release goes out without that one file rather than not at all.
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
     strategy:
       fail-fast: false
       matrix:
@@ -187,6 +191,10 @@ jobs:
   publish:
     name: Publish release
     needs: [source, binaries, static, rpm, deb]
+    # Publish with whatever static binaries were built (see "static").
+    if: >-
+      ${{ !cancelled() && needs.source.result == 'success' && needs.binaries.result == 'success'
+      && needs.rpm.result == 'success' && needs.deb.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
