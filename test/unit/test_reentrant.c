@@ -22,6 +22,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifndef _WIN32
+#include <pwd.h>
+#include <grp.h>
+#endif
 #include <pthread.h>
 #include <ftw.h>
 #include <pcompress.h>
@@ -331,6 +335,15 @@ main(int argc, char **argv)
 	}
 
 	/* 1. Sequential reuse: one context after another in one thread. */
+#ifndef _WIN32
+	/*
+	 * The C library may keep a descriptor for name lookups once it has
+	 * made one (illumos: a door to nscd), and archive mode looks up the
+	 * owner of each file. Make the first lookup before counting.
+	 */
+	(void) getpwuid(getuid());
+	(void) getgrgid(getgid());
+#endif
 	fd_before = open_fds();
 	jobs[0].rounds = (int)NMODES;
 	worker(&jobs[0]);
