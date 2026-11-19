@@ -236,7 +236,9 @@ it allocate more than 512 MB.
 **Chunk index** (`pc_index_*`): the file is `PCIDX1`, two zero bytes,
 then 32-byte ids in the order they were added. It is only appended to
 (`O_APPEND`, whole records), loaded into an open-addressing hash table on
-open, and a torn last record is cut off. The `.pz` global-dedupe index
+open, and a torn last record is cut off. The table holds 32 bits of each
+id's hash and its record number, not the id: a match is confirmed by
+reading the record back, so memory is 11 to 21 bytes per id. The `.pz` global-dedupe index
 (`rabin/global/index.c`) is separate and still per file: making it
 persistent would make one `.pz` depend on others.
 

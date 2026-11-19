@@ -514,6 +514,32 @@ MU_TEST(test_index)
 		mu_assert(x != NULL && pc_index_count(x) == 100001 + 5000, "both handles' adds kept");
 		pc_index_close(x);
 	}
+	/*
+	 * Ids that all hash alike (equal first 8 bytes): only reading the id
+	 * back tells them apart, in buf, after a flush, and after a reopen.
+	 * 5000 adds go through several flushes of the 2048-id buffer.
+	 */
+	unlink(path);
+	x = pc_index_open(path);
+	memset(id, 0x5a, sizeof (id));
+	for (i = 0; i < 5000; i++) {
+		memcpy(id + 28, &i, sizeof (i));
+		mu_assert_int_eq(1, pc_index_add(x, id));
+		if (i % 1000 == 0)
+			mu_assert_int_eq(0, pc_index_add(x, id));
+	}
+	i = 5000;
+	memcpy(id + 28, &i, sizeof (i));
+	mu_assert_int_eq(0, pc_index_has(x, id));
+	mu_assert_int_eq(0, pc_index_close(x));
+	x = pc_index_open(path);
+	mu_assert(x != NULL && pc_index_count(x) == 5000, "colliding ids reload");
+	mu_assert_int_eq(0, pc_index_has(x, id));
+	for (i = 0; i < 5000; i += 7) {
+		memcpy(id + 28, &i, sizeof (i));
+		mu_assert_int_eq(1, pc_index_has(x, id));
+	}
+	pc_index_close(x);
 	/* Not an index: refused and left alone. */
 	f = fopen(path, "wb");
 	fputs("precious data, not an index", f);

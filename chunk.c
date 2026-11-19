@@ -898,20 +898,35 @@ out:
 #define	PCI_HDR		8
 #define	PCI_BUF		(2048 * 32)
 
-/* shortcut: every id is held in memory (about 45 bytes per chunk); move to
- * an on-disk hash if indexes of hundreds of millions of chunks appear. */
+/*
+ * Only a hash table is in memory: per slot 32 bits of the id's hash and
+ * its record number, 8 bytes, 3/8 to 3/4 full, so 11 to 21 bytes per id
+ * (about 270 MB for 1 TB of 64 KB chunks). The ids stay in the file, or
+ * in buf until written. A lookup whose hash matches reads the id back to
+ * confirm it, so a false "present" (which would lose data) cannot happen,
+ * and a present id costs one read. Records not yet written are numbered
+ * PCI_BUFREC + their place in buf, and get their file record numbers when
+ * written; with another handle appending too, those are only known then.
+ *
+ * shortcut: still O(ids) memory and an O(ids) read at open; past tens of
+ * TB per repository a tool should keep its own on-disk catalogue.
+ */
+#define	PCI_BUFREC	0x80000000U
+#define	PCI_MAXREC	0x7fffffffU	/* about 2 billion ids, 128 TB of 64 KB chunks */
+
 struct pc_index {
 	int fd;
-	uint8_t (*ids)[32];	/* every id, in file order */
-	size_t n, cap;
-	uint32_t *slot;		/* open addressing: 0 empty, else index + 1 */
-	size_t nslots;		/* power of two, kept at most half full */
+	size_t n;		/* ids known to this handle */
+	uint32_t *hash;		/* per slot; meaningful where rec != 0 */
+	uint32_t *rec;		/* per slot: 0 empty, else record number + 1 */
+	size_t nslots;		/* power of two, kept at most 3/4 full */
 	uchar_t buf[PCI_BUF];	/* adds not yet written */
 	size_t buflen;
+	uint8_t probe[32];	/* an id read back from the file */
 };
 
-static size_t
-pci_hash(const uint8_t id[32], size_t mask)
+static uint32_t
+pci_hash(const uint8_t id[32])
 {
 	uint64_t h = 0;
 	int i;
@@ -922,71 +937,106 @@ pci_hash(const uint8_t id[32], size_t mask)
 	h ^= h >> 33;
 	h *= 0xff51afd7ed558ccdULL;
 	h ^= h >> 33;
-	return ((size_t)h & mask);
+	return ((uint32_t)h);
 }
 
-static int
-pci_find(pc_index_t *x, const uint8_t id[32], size_t *where)
+/* The id of slot value r (record + 1): from buf, or read from the file. */
+static const uint8_t *
+pci_record(pc_index_t *x, uint32_t r)
 {
-	size_t mask = x->nslots - 1, s = pci_hash(id, mask);
+	r--;
+	if (r >= PCI_BUFREC)
+		return (x->buf + (size_t)(r - PCI_BUFREC) * 32);
+	if (lseek(x->fd, PCI_HDR + (off_t)r * 32, SEEK_SET) < 0 ||
+	    Read(x->fd, x->probe, 32) != 32)
+		return (NULL);
+	return (x->probe);
+}
 
-	while (x->slot[s] != 0) {
-		if (memcmp(x->ids[x->slot[s] - 1], id, 32) == 0) {
+/* 1 found, 0 not (*where: the free slot), -1 if reading an id failed. */
+static int
+pci_find(pc_index_t *x, const uint8_t id[32], uint32_t h, size_t *where)
+{
+	size_t mask = x->nslots - 1, s = (size_t)h & mask;
+
+	for (; x->rec[s] != 0; s = (s + 1) & mask) {
+		const uint8_t *p;
+
+		if (x->hash[s] != h)
+			continue;
+		if ((p = pci_record(x, x->rec[s])) == NULL)
+			return (-1);
+		if (memcmp(p, id, 32) == 0) {
 			*where = s;
 			return (1);
 		}
-		s = (s + 1) & mask;
 	}
 	*where = s;
 	return (0);
 }
 
+/* Double the table; the stored hashes place every slot again. */
 static int
 pci_grow(pc_index_t *x)
 {
-	size_t ns = x->nslots ? x->nslots * 2 : 1024, i, s;
-	uint32_t *t;
+	size_t ns = x->nslots ? x->nslots * 2 : 1024, i, mask = ns - 1;
+	uint32_t *h, *r;
 
-	if (x->n >= UINT32_MAX - 1 || (t = calloc(ns, sizeof (*t))) == NULL)
+	/* Up to 2^32 slots: the hash is 32 bits (PCI_MAXREC keeps it there). */
+	if (ns > SIZE_MAX / sizeof (*h) || (h = malloc(ns * sizeof (*h))) == NULL)
 		return (-1);
-	free(x->slot);
-	x->slot = t;
-	x->nslots = ns;
-	for (i = 0; i < x->n; i++) {
-		(void) pci_find(x, x->ids[i], &s);
-		x->slot[s] = (uint32_t)i + 1;
+	if ((r = calloc(ns, sizeof (*r))) == NULL) {
+		free(h);
+		return (-1);
 	}
+	for (i = 0; i < x->nslots; i++) {
+		size_t s;
+
+		if (x->rec[i] == 0)
+			continue;
+		for (s = (size_t)x->hash[i] & mask; r[s] != 0; s = (s + 1) & mask)
+			;
+		h[s] = x->hash[i];
+		r[s] = x->rec[i];
+	}
+	free(x->hash);
+	free(x->rec);
+	x->hash = h;
+	x->rec = r;
+	x->nslots = ns;
 	return (0);
 }
 
-/* Insert into memory only. 1 added, 0 already present, -1 no memory. */
+/*
+ * Insert into the table only, as record rec (a file record number, or
+ * PCI_BUFREC + place in buf). 1 added, 0 already present, -1 on error.
+ */
 static int
-pci_insert(pc_index_t *x, const uint8_t id[32])
+pci_insert(pc_index_t *x, const uint8_t id[32], uint32_t rec)
 {
+	uint32_t h = pci_hash(id);
 	size_t s;
+	int r;
 
-	if ((x->n + 1) * 2 > x->nslots && pci_grow(x) != 0)
+	if (x->n >= PCI_MAXREC || ((x->n + 1) * 4 > x->nslots * 3 && pci_grow(x) != 0))
 		return (-1);
-	if (pci_find(x, id, &s))
-		return (0);
-	if (x->n == x->cap) {
-		size_t nc = x->cap ? x->cap * 2 : 1024;
-		void *p = nc > SIZE_MAX / 32 ? NULL : realloc(x->ids, nc * 32);
-
-		if (p == NULL)
-			return (-1);
-		x->ids = p;
-		x->cap = nc;
-	}
-	memcpy(x->ids[x->n], id, 32);
-	x->slot[s] = (uint32_t)++x->n;
+	if ((r = pci_find(x, id, h, &s)) != 0)
+		return (r == 1 ? 0 : -1);
+	x->hash[s] = h;
+	x->rec[s] = rec + 1;
+	x->n++;
 	return (1);
 }
 
+/*
+ * Write buf, then renumber its records to where they landed: O_APPEND
+ * puts them at the end, after anything another handle appended.
+ */
 static int
 pci_flush(pc_index_t *x)
 {
-	off_t end;
+	off_t end, after;
+	size_t i, s;
 
 	if (x->buflen == 0)
 		return (0);
@@ -994,8 +1044,20 @@ pci_flush(pc_index_t *x)
 		return (-1);
 	if (Write(x->fd, x->buf, x->buflen) != (int64_t)x->buflen) {
 		/* Undo a short write so later records stay aligned; keep the buffer. */
-		(void) ftruncate(x->fd, end);
+		int undone = ftruncate(x->fd, end);
+
+		(void) undone;
 		return (-1);
+	}
+	if ((after = lseek(x->fd, 0, SEEK_CUR)) < 0 ||
+	    (uint64_t)(after - PCI_HDR) / 32 > PCI_MAXREC)
+		return (-1);
+	for (i = 0; i < x->buflen / 32; i++) {
+		const uint8_t *id = x->buf + i * 32;
+
+		if (pci_find(x, id, pci_hash(id), &s) != 1)
+			return (-1);	/* cannot happen: it was added */
+		x->rec[s] = (uint32_t)((after - PCI_HDR) / 32 - x->buflen / 32 + i) + 1;
 	}
 	x->buflen = 0;
 	return (0);
@@ -1011,6 +1073,7 @@ pc_index_open(const char *path)
 	if (path == NULL || (x = calloc(1, sizeof (*x))) == NULL)
 		return (NULL);
 	/* O_APPEND: whole-record appends from two processes cannot overlap. */
+	x->fd = -1;
 	if ((x->fd = open(path, O_RDWR | O_CREAT | O_APPEND, 0600)) == -1 || pci_grow(x) != 0)
 		goto fail;
 	sz = lseek(x->fd, 0, SEEK_END);
@@ -1023,13 +1086,20 @@ pc_index_open(const char *path)
 	    Read(x->fd, hdr, PCI_HDR) != PCI_HDR || memcmp(hdr, PCI_MAGIC, PCI_HDR) != 0)
 		goto fail;	/* not an index file: never overwrite it */
 	end = PCI_HDR + ((sz - PCI_HDR) / 32) * 32;
+	if ((uint64_t)(end - PCI_HDR) / 32 > PCI_MAXREC)
+		goto fail;
 	for (pos = PCI_HDR; pos < end; ) {
 		size_t want = (size_t)(end - pos < PCI_BUF ? end - pos : PCI_BUF), i;
+		uint32_t first = (uint32_t)((pos - PCI_HDR) / 32);
 
-		if (Read(x->fd, x->buf, want) != (int64_t)want)
+		/*
+		 * Loaded through buf, numbered as file records; pci_find() may
+		 * read a duplicate's earlier copy back, which moves the offset.
+		 */
+		if (lseek(x->fd, pos, SEEK_SET) != pos || Read(x->fd, x->buf, want) != (int64_t)want)
 			goto fail;
 		for (i = 0; i < want; i += 32)
-			if (pci_insert(x, x->buf + i) < 0)
+			if (pci_insert(x, x->buf + i, first + (uint32_t)(i / 32)) < 0)
 				goto fail;
 		pos += want;
 	}
@@ -1040,8 +1110,8 @@ pc_index_open(const char *path)
 fail:
 	if (x->fd != -1)
 		close(x->fd);
-	free(x->slot);
-	free(x->ids);
+	free(x->hash);
+	free(x->rec);
 	free(x);
 	return (NULL);
 }
@@ -1053,7 +1123,7 @@ pc_index_has(pc_index_t *x, const uint8_t id[32])
 
 	if (x == NULL || id == NULL)
 		return (-1);
-	return (pci_find(x, id, &s));
+	return (pci_find(x, id, pci_hash(id), &s));
 }
 
 int DLL_EXPORT
@@ -1066,7 +1136,7 @@ pc_index_add(pc_index_t *x, const uint8_t id[32])
 	/* Make room first: a failed add must leave nothing half done. */
 	if (x->buflen + 32 > PCI_BUF && pci_flush(x) != 0)
 		return (-1);
-	if ((r = pci_insert(x, id)) != 1)
+	if ((r = pci_insert(x, id, PCI_BUFREC + (uint32_t)(x->buflen / 32))) != 1)
 		return (r);
 	memcpy(x->buf + x->buflen, id, 32);
 	x->buflen += 32;
@@ -1097,8 +1167,8 @@ pc_index_close(pc_index_t *x)
 	rv = pc_index_sync(x);
 	if (close(x->fd) != 0)
 		rv = -1;
-	free(x->slot);
-	free(x->ids);
+	free(x->hash);
+	free(x->rec);
 	free(x);
 	return (rv);
 }

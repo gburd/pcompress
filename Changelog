@@ -21,6 +21,9 @@ Library: manifests are format 2 (PCMF2): entries gain birth and change
   are refused. PCMF1 manifests still decode. 4.3 and older cannot read
   PCMF2. pc_entry_t grows; programs built against the 4.3 header keep
   working through the _sz functions.
+Library: pc_index_* keeps only 32 bits of hash and a record number per
+  id in memory, reading the id back from the file to confirm a match:
+  11 to 21 bytes per id instead of about 45. The file format is unchanged.
 Tests: bench_chunk measures the chunkers, ids, seal and open ("make bench").
 
 == 4.3.1 Release ==

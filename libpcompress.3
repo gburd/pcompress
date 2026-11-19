@@ -407,7 +407,8 @@ make the tool store a chunk twice, never skip one.
 Use one thread at a time per index.
 Several processes may append to one file; each sees the others' ids at its
 next open.
-The ids are held in memory, about 45 bytes each.
+Only a hash table is held in memory, 11 to 21 bytes per id; the ids stay
+in the file, and a lookup that matches reads its id back to confirm it.
 Callers with their own catalogue need not use it: look ids up there
 instead.
 .It Fn pc_manifest_new
