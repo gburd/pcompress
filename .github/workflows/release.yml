@@ -23,6 +23,12 @@ permissions:
   id-token: write      # Sigstore signing of the provenance attestation
   attestations: write
 
+# One release run per tag: a tag push has started several at once, all
+# uploading to the same release. A later run waits instead of racing.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
