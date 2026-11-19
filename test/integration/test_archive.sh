@@ -110,6 +110,29 @@ done
 rm -f "${ARCDIR}.pz"
 
 echo ""
+echo "--- Sparse file ---"
+# A sparse file's map is archived as part of its data; with the metadata
+# stream (the default) extraction once failed with "Line too long".
+SDIR="datafiles/sparsetest"
+swipe() { [ -e "$1" ] && find "$1" -depth -delete; :; }
+swipe "$SDIR"; rm -f "$SDIR.pz"
+mkdir -p "$SDIR"
+dd if=/dev/zero of="$SDIR/holes.bin" bs=1 count=0 seek=8388608 2>/dev/null
+printf 'end' >> "$SDIR/holes.bin"
+for t in "" "-T"; do
+	label="sparse${t:+/$t}"
+	rm -f "$SDIR.pz"; swipe datafiles/sout; mkdir -p datafiles/sout
+	if $PCOMPRESS -a -c lz4 -l1 $t "$SDIR" 2>/dev/null &&
+	    $PCOMPRESS -d "$SDIR.pz" datafiles/sout 2>/dev/null &&
+	    cmp -s "$SDIR/holes.bin" "datafiles/sout/$SDIR/holes.bin"; then
+		log_pass "$label"
+	else
+		log_fail "$label: sparse file not restored"
+	fi
+done
+swipe "$SDIR"; swipe datafiles/sout; rm -f "$SDIR.pz"
+
+echo ""
 echo "--- -j applies packJPG ---"
 # -j was ignored in 4.0.x (filters were set only for the level-based choice).
 JPG="$(cd "$(dirname "$0")/.." && pwd)/res/jpg/screen.jpg"

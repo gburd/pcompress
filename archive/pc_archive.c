@@ -1344,6 +1344,15 @@ archiver_thread_run(pc_ctx_t *pctx) {
 	ctr = 1;
 	readdisk_flags = ARCHIVE_READDISK_NO_TRAVERSE_MOUNTS;
 	readdisk_flags |= ARCHIVE_READDISK_HONOR_NODUMP;
+	/*
+	 * A sparse entry's map (GNU sparse 1.0) is written at the start of
+	 * its data, but the reader parses it as header: with the metadata
+	 * stream the two come from different streams and extraction fails.
+	 * Archive the holes as zeros then; extraction recreates them
+	 * (ARCHIVE_EXTRACT_SPARSE).
+	 */
+	if (pctx->meta_stream)
+		readdisk_flags |= ARCHIVE_READDISK_NO_SPARSE;
 
 	ard = archive_read_disk_new();
 	archive_read_disk_set_behavior(ard, readdisk_flags);
