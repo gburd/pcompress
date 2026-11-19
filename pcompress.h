@@ -419,6 +419,7 @@ struct pc_ctx {
 	size_t pw_copy_len;
 	unsigned char chunk_key[32];	/* pc_set_key(): raw key for chunk objects */
 	int chunk_key_set;
+	void *chunk_codec[2];	/* chunk.c: codec state reused by seal/open */
 	char algo_name[ALGO_SZ + 1];	/* pc_set_algorithm() copy; algo points here */
 };
 
@@ -474,6 +475,8 @@ int start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int
 /** Decompress filename to to_filename (NULL: the job's streams). */
 int start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename);
 
+/** Free the codec state pc_chunk_seal()/pc_chunk_open() kept (chunk.c). */
+void chunk_codecs_free(pc_ctx_t *pctx);
 
 #ifdef	__cplusplus
 }

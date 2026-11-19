@@ -3654,6 +3654,7 @@ destroy_pc_context(pc_ctx_t *pctx)
 		free(pctx->pw_copy);
 	}
 	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
+	chunk_codecs_free(pctx);
 	free(pctx);
 }
 

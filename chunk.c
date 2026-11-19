@@ -282,7 +282,7 @@ ct_equal(const uchar_t *a, const uchar_t *b, int n)
 	return (d == 0);
 }
 
-/* The context's algorithm handlers, set up for one call. */
+/* The context's algorithm handlers and their state. */
 struct codec {
 	compress_func_ptr comp, decomp;
 	init_func_ptr init;
@@ -292,6 +292,24 @@ struct codec {
 };
 
 extern int pc_init_algo_handlers(pc_ctx_t *pctx, const char *algo);
+
+/*
+ * Codec state kept in the context between pc_chunk_seal() (and open)
+ * calls: one for compressing, one for decompressing. Setting a codec up
+ * allocates its working memory (a zstd context, an lzma encoder's tables),
+ * which for 64 KB chunks cost more than compressing them: zstd at level
+ * 12 and lzma ran at 1-2 MB/s. The state is kept for one algorithm and
+ * level and for inputs up to len bytes, and remade when any changes.
+ */
+struct codec_cache {
+	char algo[ALGO_SZ + 1];
+	int level;
+	uint64_t len;
+	struct codec k;
+};
+
+static void
+codec_close(struct codec *k);
 
 static int
 codec_open(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op_t op,
@@ -308,6 +326,62 @@ codec_open(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op
 	if (k->init != NULL && k->init(&k->data, &k->level, 1, len ? len : 1, VERSION, op) != 0)
 		return (-1);
 	return (0);
+}
+
+/*
+ * The context's codec for algo at level, able to take len bytes: the
+ * kept one if it matches, else a new one (at least 256 KB, rounded up to
+ * a power of two below 1 GB, so chunks of varying size do not each remake
+ * it).
+ * NULL on failure. Owned by the context (chunk_codecs_free()).
+ */
+static struct codec *
+codec_get(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op_t op)
+{
+	struct codec_cache **slot = (struct codec_cache **)&ctx->chunk_codec[op == COMPRESS];
+	struct codec_cache *c = *slot;
+	uint64_t cap = 256 * 1024;
+
+	if (c != NULL && c->level == level && len <= c->len && strcmp(c->algo, algo) == 0)
+		return (&c->k);
+	if (c != NULL) {
+		codec_close(&c->k);
+		free(c);
+		*slot = NULL;
+	}
+	while (cap < len && cap < ((uint64_t)1 << 30))
+		cap <<= 1;
+	if (cap < len)
+		cap = len;	/* past 1 GB: exact, codecs have limits near 2 GB */
+	if ((c = calloc(1, sizeof (*c))) == NULL)
+		return (NULL);
+	if (codec_open(ctx, algo, level, cap, op, &c->k) != 0) {
+		codec_close(&c->k);
+		free(c);
+		return (NULL);
+	}
+	snprintf(c->algo, sizeof (c->algo), "%s", algo);
+	c->level = level;
+	c->len = cap;
+	*slot = c;
+	return (&c->k);
+}
+
+/* Free the codec state pc_chunk_seal()/pc_chunk_open() kept in ctx. */
+void
+chunk_codecs_free(pc_ctx_t *ctx)
+{
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		struct codec_cache *c = (struct codec_cache *)ctx->chunk_codec[i];
+
+		if (c != NULL) {
+			codec_close(&c->k);
+			free(c);
+			ctx->chunk_codec[i] = NULL;
+		}
+	}
 }
 
 static void
@@ -390,14 +464,13 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 
 	/* Compress into the payload area; fall back to raw if it does not shrink. */
 	if (len > 0 && strcmp(algo, "none") != 0) {
-		struct codec k;
+		struct codec *k = codec_get(ctx, algo, level, len, COMPRESS);
 
-		if (codec_open(ctx, algo, level, len, COMPRESS, &k) == 0) {
+		if (k != NULL) {
 			int crv;
 
 			clen = len;	/* must not grow: else store raw */
-			crv = k.comp((void *)in, len, payload, &clen, k.level, 0, TYPE_UNKNOWN, k.data);
-			codec_close(&k);
+			crv = k->comp((void *)in, len, payload, &clen, k->level, 0, TYPE_UNKNOWN, k->data);
 			if (crv < 0 || clen == 0 || clen >= len) {
 				clen = 0;
 			} else {
@@ -533,19 +606,18 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	if (p[5] & PCK_RAW) {
 		memcpy(out, encrypted ? buf : p + PCK_HDR, clen);
 	} else {
-		struct codec k;
+		struct codec *k;
 		uint64_t dl = plain;
 		uchar_t lv = p[7] & 0x0f, chdr = p[7] & 0xf0;
 		int drv;
 
-		if (codec_open(ctx, algo_ids[p[6]], lv ? lv : 6, plain, DECOMPRESS, &k) != 0) {
+		if ((k = codec_get(ctx, algo_ids[p[6]], lv ? lv : 6, plain, DECOMPRESS)) == NULL) {
 			why = PC_ERR_INTERNAL;
 			msg = "pc_chunk_open: algorithm not available in this build";
 			goto out;
 		}
-		drv = k.decomp(encrypted ? buf : (void *)(p + PCK_HDR), clen, out, &dl,
-		    k.level, chdr, TYPE_UNKNOWN, k.data);
-		codec_close(&k);
+		drv = k->decomp(encrypted ? buf : (void *)(p + PCK_HDR), clen, out, &dl,
+		    k->level, chdr, TYPE_UNKNOWN, k->data);
 		if (drv < 0 || dl != plain)
 			goto out;	/* authenticated but undecodable: corrupt at seal time */
 	}

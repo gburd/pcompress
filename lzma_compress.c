@@ -134,6 +134,12 @@ lzma_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		p->level = *level;
 		p->numThreads = nthreads;
 		LzmaEncProps_Normalize(p);
+		/*
+		 * A dictionary past the chunk is never used, but the encoder
+		 * still sets up match tables for all of it on every call.
+		 */
+		while (p->dictSize > (1 << 16) && p->dictSize / 2 >= chunksize)
+			p->dictSize /= 2;
 		slab_cache_add(p->litprob_sz);
 	}
 	if (*level > 9) *level = 9;
