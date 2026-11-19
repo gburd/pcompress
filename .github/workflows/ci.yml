@@ -2,8 +2,8 @@
 #
 # Every job runs the same recipe as the Codeberg CI: ci/build-test.sh.
 # Linux (glibc, gcc + clang, x86_64 + arm64), macOS (Apple Silicon + Intel),
-# Windows (MSYS2, x86_64 + aarch64), sanitizers, and the Nix package build
-# (which runs the test suite too).
+# Windows (MSYS2, x86_64 + aarch64), FreeBSD and illumos (VMs), sanitizers,
+# and the Nix package build (which runs the test suite too).
 
 name: CI
 
@@ -240,6 +240,39 @@ jobs:
           mkdir -p arc/sub && cp crlf.bin arc/sub/ && printf 'x\r\n' > arc/t.txt
           ./pcompress -a -c zstd -l6 arc arc && mkdir out && ./pcompress -d arc.pz out
           cmp crlf.bin out/arc/sub/crlf.bin && cmp arc/t.txt out/arc/t.txt
+
+  freebsd:
+    # FreeBSD in a VM on a Linux runner: base clang (with OpenMP), base
+    # OpenSSL, GNU make from packages.
+    name: "FreeBSD 14 x86_64"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.4"
+          usesh: true
+          copyback: false
+          prepare: pkg install -y gmake autoconf automake libtool pkgconf perl5
+          run: env MAKE=gmake CC=cc CXX=c++ sh ci/build-test.sh quick
+
+  illumos:
+    # OmniOS (illumos) in a VM on a Linux runner, with GCC and GNU make
+    # from the build-essential package.
+    name: "illumos x86_64 (OmniOS)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: vmactions/omnios-vm@v1
+        with:
+          usesh: true
+          copyback: false
+          prepare: pkg install build-essential
+          run: env PATH=/usr/gnu/bin:$PATH MAKE=gmake CC=gcc CXX=g++ sh ci/build-test.sh quick
 
   sanitizers:
     name: "ASan + UBSan"
