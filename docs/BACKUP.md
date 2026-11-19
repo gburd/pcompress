@@ -119,7 +119,11 @@ and the repository's lifecycle.
 - **Chunking:** `pc_chunker_*`, with sizes fixed per repository and
   recorded in its config, so dedupe stays stable across versions (Arq's
   `chunkerVersion`).
-- **Identity:** `pc_chunk_id` keyed with the repository key. Object names
+- **Keys from one master:** `pc_derive_key(master, "chunk-id")` names
+  objects and `pc_derive_key(master, "seal")` seals them; the master key
+  itself (from the key file) is used for nothing else. Pick the purpose
+  names once per repository format and never change them.
+- **Identity:** `pc_chunk_id` keyed with the derived id key. Object names
   then reveal nothing about content to the storage provider.
 - **Objects:** `pc_chunk_seal`/`pc_chunk_open` for every chunk and every
   manifest, with `pc_set_algorithm` chosen per repository (zstd by

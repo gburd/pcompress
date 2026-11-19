@@ -1,3 +1,11 @@
+== Unreleased ==
+Library: pc_derive_key(master, purpose, out) derives one 256-bit key per
+  named purpose from a master key, so a backup tool can name objects
+  (pc_chunk_id) and seal them (pc_set_key) with different keys instead of
+  the master for both. examples/backup/pcbackup.c does so; repositories
+  made by older pcbackup builds do not open with this one (pcbackup is an
+  example, with no stored repositories to keep).
+
 == 4.3.1 Release ==
 Build: Alpine's GCC 15 on aarch64 crashed compiling 4.3.0 ("internal
   compiler error: in aarch64_function_arg_alignment") where an unaligned

@@ -14,7 +14,9 @@
  *
  * Repository layout:
  *   <repo>/keyfile           pc_keyfile_create(): the key, wrapped by the password
- *   <repo>/objects/<id>      sealed chunks; <id> = keyed pc_chunk_id(), hex
+ *   <repo>/objects/<id>      sealed chunks; <id> = pc_chunk_id() keyed with
+ *                            pc_derive_key(key, "pcbackup chunk-id"), hex;
+ *                            sealed with pc_derive_key(key, "pcbackup seal")
  *   <repo>/snapshots/<time>-<id>  a sealed, encoded pc_manifest_t
  *   <repo>/index             pc_index_t of stored objects (a cache: prune rebuilds it)
  *
@@ -53,7 +55,8 @@
 #define	MAX_CHUNK	(256 * 1024)
 #define	MAX_OBJECT	(256 * 1024 * 1024)	/* manifests are the big ones */
 
-static unsigned char key[32];
+/* The repository's master key, and the two keys derived from it. */
+static unsigned char key[32], id_key[32], seal_key[32];
 static pc_ctx_t *ctx;
 static pc_index_t *idx;
 static char repo[4096];
@@ -179,7 +182,12 @@ open_repo(const char *r, int need_index)
 	if (pc_keyfile_open(kf, len, pw, strlen(pw), key) != 0)
 		die("wrong password or damaged keyfile");
 	free(kf);
-	if ((ctx = pc_new()) == NULL || pc_set_key(ctx, key, 32) != 0 ||
+	/* One key names objects, another seals them: never the master for both. */
+	if (pc_derive_key(key, "pcbackup chunk-id", id_key) != 0 ||
+	    pc_derive_key(key, "pcbackup seal", seal_key) != 0)
+		die("cannot derive keys");
+	memset(key, 0, sizeof (key));
+	if ((ctx = pc_new()) == NULL || pc_set_key(ctx, seal_key, 32) != 0 ||
 	    pc_set_algorithm(ctx, "zstd") != 0 || pc_set_level(ctx, 6) != 0)
 		die("cannot set up libpcompress");
 	pc_set_log(ctx, NULL, NULL, PC_LOG_NONE);
@@ -196,7 +204,8 @@ close_repo(void)
 	if (idx != NULL && pc_index_close(idx) != 0)
 		die("cannot write index");
 	pc_free(ctx);
-	memset(key, 0, sizeof (key));
+	memset(id_key, 0, sizeof (id_key));
+	memset(seal_key, 0, sizeof (seal_key));
 }
 
 /* Seal buf and store it as <repo>/<dir>/<name>. */
@@ -237,7 +246,7 @@ get_object(const char *dir, const char *name, const unsigned char *want, size_t 
 		exit(1);
 	}
 	free(obj);
-	pc_chunk_id(out, pl, key, 32, id);
+	pc_chunk_id(out, pl, id_key, 32, id);
 	if (memcmp(id, want, 32) != 0) {
 		fprintf(stderr, "pcbackup: %s: object is not the one its name says\n", p);
 		exit(1);
@@ -266,7 +275,7 @@ add_chunk(struct ids *v, const unsigned char *buf, size_t len)
 		    (v->lens = realloc(v->lens, v->cap * sizeof (uint32_t))) == NULL)
 			die("out of memory");
 	}
-	pc_chunk_id(buf, len, key, 32, id);
+	pc_chunk_id(buf, len, id_key, 32, id);
 	memcpy(v->ids + 32 * v->n, id, 32);
 	v->lens[v->n++] = (uint32_t)len;
 	if (pc_index_has(idx, id) == 1) {
@@ -398,7 +407,7 @@ cmd_backup(const char *r, const char *dir)
 		die("manifest");
 	/* <time>-<id>: sorts by time, and restore checks the id. */
 	clock_gettime(CLOCK_REALTIME, &ts);
-	pc_chunk_id(buf, len, key, 32, id);
+	pc_chunk_id(buf, len, id_key, 32, id);
 	hex(id, h);
 	xpath(name, sizeof (name), "%010lld.%09ld-%s", (long long)ts.tv_sec, ts.tv_nsec, h);
 	/* Objects durable first, then the index, then the snapshot naming them. */

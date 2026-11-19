@@ -273,6 +273,38 @@ MU_TEST(test_ids)
 	}
 }
 
+/*
+ * Derived keys: fixed forever (repositories depend on them), different per
+ * purpose, and never equal to a chunk id made with the master key. The
+ * known answer was computed independently (Python hashlib.blake2b).
+ */
+MU_TEST(test_derive_key)
+{
+	static const unsigned char kat[32] = {
+		0x28, 0xc1, 0x7e, 0xf8, 0x85, 0x18, 0xac, 0x6c, 0xc2, 0xbc, 0xd5, 0x3a,
+		0x05, 0xb5, 0x98, 0x85, 0x94, 0x81, 0x4e, 0xb2, 0xea, 0x08, 0x5e, 0x07,
+		0x42, 0x9c, 0x93, 0x93, 0xdd, 0x73, 0x6d, 0x6f };
+	unsigned char master[32], a[32], b[32], id[32], in[64];
+	char longname[300];
+	int i;
+
+	for (i = 0; i < 32; i++)
+		master[i] = (unsigned char)i;
+	mu_assert_int_eq(0, pc_derive_key(master, "chunk-id", a));
+	mu_assert(memcmp(a, kat, 32) == 0, "pc_derive_key known answer");
+	mu_assert_int_eq(0, pc_derive_key(master, "seal", b));
+	mu_assert(memcmp(a, b, 32) != 0, "purposes give the same key");
+	/* Not the id of the derivation's own input under the master key. */
+	memcpy(in, "pcompress derive\x08" "chunk-id", 25);
+	mu_assert_int_eq(0, pc_chunk_id(in, 25, master, 32, id));
+	mu_assert(memcmp(a, id, 32) != 0, "derived key equals a chunk id");
+	memset(longname, 'x', sizeof (longname) - 1);
+	longname[sizeof (longname) - 1] = '\0';
+	mu_assert_int_eq(-1, pc_derive_key(master, longname, a));
+	mu_assert_int_eq(-1, pc_derive_key(master, "", a));
+	mu_assert_int_eq(-1, pc_derive_key(NULL, "seal", a));
+}
+
 /* Chunk all of buf in pieces cut at random; return the number of chunks. */
 static int
 chunk_split(pc_chunker_t *c, const unsigned char *buf, size_t n, size_t *out, int max, int split)
@@ -604,6 +636,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
+	MU_RUN_TEST(test_derive_key);
 	MU_RUN_TEST(test_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);
 	MU_RUN_TEST(test_keys);

@@ -84,6 +84,8 @@ libpcompress
 .Fn pc_chunk_id "const void *buf" "size_t len" "const void *key" "size_t keylen" "uint8_t id[32]"
 .Ft int
 .Fn pc_set_key "pc_ctx_t *ctx" "const void *key" "size_t keylen"
+.Ft int
+.Fn pc_derive_key "const uint8_t master[32]" "const char *purpose" "uint8_t out[32]"
 .Ft size_t
 .Fn pc_chunk_seal_bound "size_t len"
 .Ft int
@@ -320,6 +322,14 @@ BLAKE2b-256 of a chunk, keyed when
 is given, so that object names do not reveal content hashes.
 .It Fn pc_set_key
 A raw 32-byte key for sealed objects.
+.It Fn pc_derive_key
+A 32-byte key for one named purpose from a master key.
+Derive separate keys for chunk ids and for sealing (for example
+.Qq chunk-id
+and
+.Qq seal )
+instead of using the master key for both; the names are the caller's to
+choose and keep stable.
 .It Fn pc_chunk_seal
 Compresses one chunk with the context's algorithm and level, stores it
 raw if it does not shrink, and with a key encrypts it (XSalsa20, random

@@ -194,6 +194,14 @@ int pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uin
 int pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen);
 
 /**
+ * A 256-bit key for one purpose ("chunk-id", "seal", "index", ...), 1-255
+ * bytes of purpose name, from a master key such as pc_keyfile_open()
+ * returns. Use separate derived keys for pc_chunk_id() and pc_set_key()
+ * rather than the master for both. Deterministic. 0 or -1.
+ */
+int pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32]);
+
+/**
  * Key files: a random 256-bit key wrapped with a password of any length
  * (scrypt, then XSalsa20 and a BLAKE2b-256 tag). pc_keyfile_create()
  * writes pc_keyfile_size() bytes to out and returns the new key in key;

@@ -145,6 +145,35 @@ pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t
 	return (blake2b_keyed2(id, 32, key, (int)keylen, buf, len, NULL, 0));
 }
 
+/*
+ * A 256-bit key for one purpose from a master key: BLAKE2b keyed with the
+ * master over "pcompress derive", one length byte and the purpose. The
+ * digest is 48 bytes, cut to 32: BLAKE2b's parameter block holds the
+ * digest length, so no output here equals a 32-byte chunk id made with
+ * the master key, whatever data that id was taken over. The length byte
+ * keeps one purpose from being a prefix of another.
+ */
+int DLL_EXPORT
+pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32])
+{
+	static const uchar_t dom[] = "pcompress derive";
+	uchar_t hdr[sizeof (dom)], k[48];
+	size_t plen;
+	int rv;
+
+	if (master == NULL || purpose == NULL || out == NULL ||
+	    (plen = strlen(purpose)) == 0 || plen > 255)
+		return (-1);
+	memcpy(hdr, dom, sizeof (dom) - 1);
+	hdr[sizeof (dom) - 1] = (uchar_t)plen;
+	rv = blake2b_keyed2(k, 48, master, 32, hdr, sizeof (hdr),
+	    (const uchar_t *)purpose, plen);
+	if (rv == 0)
+		memcpy(out, k, 32);
+	memset(k, 0, sizeof (k));
+	return (rv);
+}
+
 /* --- Sealed chunk objects ----------------------------------------------- */
 
 /*
