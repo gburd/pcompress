@@ -260,19 +260,24 @@ jobs:
 
   illumos:
     # OmniOS (illumos) in a VM on a Linux runner, with GCC and GNU make
-    # from the build-essential package.
+    # from the build-essential package. It builds from the release
+    # tarball, as the illumos release gate does: the tarball ships
+    # libarchive's configure, so no autotools are needed.
     name: "illumos x86_64 (OmniOS)"
+    needs: dist
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
+      - uses: actions/download-artifact@v4
+        with: { name: dist }
       - uses: vmactions/omnios-vm@v1
         with:
           usesh: true
           copyback: false
           prepare: pkg install build-essential
-          run: env PATH=/usr/gnu/bin:$PATH MAKE=gmake CC=gcc CXX=g++ sh ci/build-test.sh quick
+          run: |
+            gzip -dc pcompress-HEAD.tar.gz | tar xf - && cd pcompress-HEAD
+            env PATH=/usr/gnu/bin:$PATH MAKE=gmake CC=gcc CXX=g++ sh ci/build-test.sh quick
 
   sanitizers:
     name: "ASan + UBSan"
