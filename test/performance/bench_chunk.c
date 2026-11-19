@@ -1,6 +1,6 @@
 /*
  * Throughput of the chunk-store pipeline a backup tool runs, through the
- * public API only: the content-defined chunker, the keyed chunk id, and
+ * public API only: the content-defined chunkers, the keyed chunk id, and
  * sealing and opening each chunk (compress, encrypt, authenticate, and
  * back). Prints MB/s of plaintext per stage, one thread.
  *
@@ -74,15 +74,29 @@ main(int argc, char **argv)
 	fill(buf, n);
 	cap = (int)(n / 16384) + 16;
 	lens = malloc(cap * sizeof (*lens));
-	printf("%zu MB, one thread, default chunker (64 KB average)\n", mb);
+	printf("%zu MB, one thread, default chunker sizes (avg 64 KB, min 16 KB)\n", mb);
 
+	{
+		pc_chunker_t *g = pc_chunker_new2(PC_CHUNKER_GEAR, 0, 0, 0);
+		int ng;
+
+		t = now();
+		ng = pc_chunker_feed(g, buf, n, lens, cap);
+		if (ng < 0)
+			return (3);
+		ng += pc_chunker_finish(g, lens + ng, cap - ng);
+		report("chunker gear", n, now() - t);
+		printf("  %-28s %8d (avg %zu bytes)\n", "  chunks", ng, n / (ng ? ng : 1));
+		pc_chunker_free(g);
+	}
+	/* The rabin chunks go on to the later stages. */
 	t = now();
 	nc = pc_chunker_feed(ch, buf, n, lens, cap);
 	if (nc < 0)
 		return (3);
 	nc += pc_chunker_finish(ch, lens + nc, cap - nc);
-	report("chunker", n, now() - t);
-	printf("  %-28s %8d (avg %zu bytes)\n", "chunks", nc, n / (nc ? nc : 1));
+	report("chunker rabin", n, now() - t);
+	printf("  %-28s %8d (avg %zu bytes)\n", "  chunks", nc, n / (nc ? nc : 1));
 
 	t = now();
 	for (off = 0, k = 0; k < nc; off += lens[k++])

@@ -20,6 +20,7 @@
 .Nm pc_strerror ,
 .Nm pc_cleanup_tempfiles ,
 .Nm pc_chunker_new ,
+.Nm pc_chunker_new2 ,
 .Nm pc_chunker_feed ,
 .Nm pc_chunker_finish ,
 .Nm pc_chunker_free ,
@@ -74,6 +75,8 @@ libpcompress
 .Fn pc_version "void"
 .Ft pc_chunker_t *
 .Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
+.Ft pc_chunker_t *
+.Fn pc_chunker_new2 "int algorithm" "size_t avg" "size_t min" "size_t max"
 .Ft int
 .Fn pc_chunker_feed "pc_chunker_t *c" "const void *buf" "size_t len" "size_t *lens" "int nlens"
 .Ft int
@@ -305,6 +308,17 @@ changes only the chunks around it.
 and
 .Fa max
 are in bytes; 0 picks 64 KB, avg/4 and avg*4.
+.It Fn pc_chunker_new2
+The same, with a choice of boundary function:
+.Dv PC_CHUNKER_RABIN
+(that of
+.Fn pc_chunker_new )
+or
+.Dv PC_CHUNKER_GEAR
+(FastCDC's gear hash with normalized chunking, several times faster, with
+chunk sizes near min + avg).
+Either one's boundaries never change between releases; a repository must
+record which one it uses and keep it.
 .It Fn pc_chunker_feed
 Takes any amount of input and appends the length of each chunk that ends
 in it to

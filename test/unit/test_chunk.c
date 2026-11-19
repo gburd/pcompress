@@ -330,6 +330,48 @@ chunk_split(pc_chunker_t *c, const unsigned char *buf, size_t n, size_t *out, in
 	return (total);
 }
 
+/*
+ * The gear chunker's boundaries are a repository format: pin them against
+ * an independent reference (Python, hashing every byte, where the C code
+ * skips the first min - 64 of each chunk), on xorshift64 data. Also check
+ * that any split of the input gives the same chunks, and the size limits.
+ */
+MU_TEST(test_gear_chunker)
+{
+	static const size_t want[8] = { 4287, 5073, 5516, 4147, 4959, 2102, 6594, 5360 };
+	size_t n = 1 << 20, lens[300], lens2[300], i, sum = 0;
+	unsigned char *buf = malloc(n);
+	uint64_t r = 0x2545F4914F6CDD1DULL;
+	pc_chunker_t *c = pc_chunker_new2(PC_CHUNKER_GEAR, 4096, 1024, 16384);
+	int nc, nc2;
+
+	mu_assert(buf != NULL && c != NULL, "gear chunker");
+	for (i = 0; i < n; i++) {
+		r ^= r << 13;
+		r ^= r >> 7;
+		r ^= r << 17;
+		buf[i] = (unsigned char)(r >> 56);
+	}
+	nc = pc_chunker_feed(c, buf, n, lens, 300);
+	mu_assert(nc > 0, "gear feed");
+	nc += pc_chunker_finish(c, lens + nc, 300 - nc);
+	mu_assert_int_eq(229, nc);
+	mu_assert(memcmp(lens, want, sizeof (want)) == 0, "gear boundaries known answer");
+	mu_assert_int_eq(3968, (int)lens[nc - 1]);
+	for (i = 0; i < (size_t)nc; i++) {
+		sum += lens[i];
+		mu_assert(lens[i] <= 16384 && (lens[i] >= 1024 || i == (size_t)nc - 1), "gear sizes");
+	}
+	mu_assert(sum == n, "gear chunks cover the input");
+	nc2 = chunk_split(c, buf, n, lens2, 300, 1);
+	mu_assert_int_eq(nc, nc2);
+	mu_assert(memcmp(lens, lens2, nc * sizeof (*lens)) == 0, "gear split-invariant");
+	pc_chunker_free(c);
+	mu_assert(pc_chunker_new2(3, 4096, 1024, 16384) == NULL, "unknown chunker");
+	mu_assert(pc_chunker_new2(PC_CHUNKER_GEAR, 4096, 63, 16384) == NULL, "min < 64");
+	free(buf);
+}
+
 MU_TEST(test_chunker)
 {
 	size_t n = 4 * 1024 * 1024, a[2000], b[2000], sum = 0;
@@ -638,6 +680,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_ids);
 	MU_RUN_TEST(test_derive_key);
 	MU_RUN_TEST(test_chunker);
+	MU_RUN_TEST(test_gear_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);
 	MU_RUN_TEST(test_keys);
 	MU_RUN_TEST(test_bad_args);

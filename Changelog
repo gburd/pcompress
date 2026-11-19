@@ -5,6 +5,15 @@ Library: pc_derive_key(master, purpose, out) derives one 256-bit key per
   the master for both. examples/backup/pcbackup.c does so; repositories
   made by older pcbackup builds do not open with this one (pcbackup is an
   example, with no stored repositories to keep).
+Library: pc_chunker_new2(algorithm, ...) adds PC_CHUNKER_GEAR, FastCDC's
+  gear hash with normalized chunking: 1058 MB/s against 245 MB/s for the
+  Rabin chunker on one core of meh's Xeon. pc_chunker_new() is unchanged.
+Library: pc_chunk_seal() and pc_chunk_open() keep their codec set up in
+  the context between calls instead of making it for every chunk (zstd:3
+  seals 43% faster, lzma about twice as fast), and lzma no longer sets up
+  a dictionary much larger than the chunk. pc_chunk_id() called before
+  any context now uses the CPU's fastest BLAKE2b code.
+Tests: bench_chunk measures the chunkers, ids, seal and open ("make bench").
 
 == 4.3.1 Release ==
 Build: Alpine's GCC 15 on aarch64 crashed compiling 4.3.0 ("internal

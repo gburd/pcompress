@@ -37,24 +37,57 @@
  * bytes since the previous one: feeding the same data in any split gives
  * the same chunks.
  */
+/*
+ * PC_CHUNKER_GEAR is FastCDC's: h = (h << 1) + gear[byte], so the top 64
+ * bits of h depend on the last 64 bytes only, with normalized chunking.
+ * Before avg bytes a boundary needs the top log2(avg) + 2 bits of h zero,
+ * from avg on the top log2(avg) - 2, so sizes cluster near avg. The gear
+ * table is splitmix64 from a fixed seed. Both, and so every boundary, are
+ * part of the repository format: never change them.
+ */
 struct pc_chunker {
+	int algo;		/* PC_CHUNKER_* */
 	const uint64_t *ir, *out;	/* rabin tables */
-	size_t min, max;
-	uint64_t mask;
+	size_t min, max, avg;
+	uint64_t mask, mask_s, mask_l;	/* rabin; gear before / from avg */
 	uint64_t roll;
 	uchar_t win[RAB_POLYNOMIAL_WIN_SIZE];
 	unsigned wpos;
 	size_t cur;		/* bytes in the current, unfinished chunk */
+	uint64_t gear[256];
 };
 
 #define	PC_CHUNK_AVG_DEFAULT	(64 * 1024)
 #define	PC_CHUNK_MAX_LIMIT	(64UL * 1024 * 1024)
 
+/* The gear table: splitmix64 seeded with "pcompres". */
+static void
+gear_table(uint64_t g[256])
+{
+	uint64_t s = 0x70636f6d70726573ULL, z;
+	int i;
+
+	for (i = 0; i < 256; i++) {
+		s += 0x9e3779b97f4a7c15ULL;
+		z = s;
+		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+		z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+		g[i] = z ^ (z >> 31);
+	}
+}
+
 pc_chunker_t DLL_EXPORT *
 pc_chunker_new(size_t avg, size_t min, size_t max)
 {
+	return (pc_chunker_new2(PC_CHUNKER_RABIN, avg, min, max));
+}
+
+pc_chunker_t DLL_EXPORT *
+pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
+{
 	pc_chunker_t *c;
 	size_t a = 1;
+	int bits = 0;
 
 	if (avg == 0)
 		avg = PC_CHUNK_AVG_DEFAULT;
@@ -63,17 +96,28 @@ pc_chunker_new(size_t avg, size_t min, size_t max)
 	if (max == 0)
 		max = avg * 4;
 	/* avg is rounded down to a power of two (it is a bit mask). */
-	while (a * 2 <= avg)
+	while (a * 2 <= avg) {
 		a *= 2;
-	if (a < 256 || min < 64 || min > a || max < a || max > PC_CHUNK_MAX_LIMIT)
+		bits++;
+	}
+	if ((algo != PC_CHUNKER_RABIN && algo != PC_CHUNKER_GEAR) ||
+	    a < 256 || min < 64 || min > a || max < a || max > PC_CHUNK_MAX_LIMIT)
 		return (NULL);
 	if ((c = calloc(1, sizeof (*c))) == NULL)
 		return (NULL);
-	rabin_tables(&c->ir, &c->out);
+	c->algo = algo;
 	c->min = min;
 	c->max = max;
-	/* Expected gap past min is about avg - min; keep the mask at avg. */
-	c->mask = a - 1;
+	c->avg = a;
+	if (algo == PC_CHUNKER_RABIN) {
+		rabin_tables(&c->ir, &c->out);
+		/* Expected gap past min is about avg - min; keep the mask at avg. */
+		c->mask = a - 1;
+	} else {
+		gear_table(c->gear);
+		c->mask_s = ~(uint64_t)0 << (64 - (bits + 2));
+		c->mask_l = ~(uint64_t)0 << (64 - (bits - 2));
+	}
 	return (c);
 }
 
@@ -92,6 +136,74 @@ chunk_reset(pc_chunker_t *c)
 	memset(c->win, 0, sizeof (c->win));
 }
 
+/*
+ * pc_chunker_feed() for PC_CHUNKER_GEAR. h at a candidate boundary depends
+ * on the last 64 bytes only, and no boundary comes before min >= 64 bytes,
+ * so the first min - 64 bytes of each chunk are skipped unhashed (h is 0
+ * at a chunk's start, and 64 shifts clear whatever came before).
+ */
+static int
+gear_feed(pc_chunker_t *c, const uchar_t *p, size_t len, size_t *lens, int nlens)
+{
+	const uint64_t *gear = c->gear;
+	const size_t min = c->min, avg = c->avg, max = c->max;
+	size_t i = 0, cur = c->cur;
+	uint64_t h = c->roll;
+	int n = 0;
+
+	/*
+	 * cur counts the chunk's bytes before p[i]. By cur the phases are:
+	 * skip to min - 64; hash, untested, to min - 1; test the strict mask
+	 * to avg - 1 (so bytes min to avg - 1 of the chunk); the loose one to
+	 * max. Each inner loop runs to the end of its phase or of the input,
+	 * so a call stops and resumes in any phase. Copies of c's fields are
+	 * locals because a byte load could alias any of them.
+	 */
+	while (i < len) {
+		size_t start = i, lim, end;
+		uint64_t m;
+		int cut = 0;
+
+		if (cur < min - 64) {
+			lim = min - 64;
+		} else if (cur < min - 1) {
+			lim = min - 1;
+			end = i + (lim - cur < len - i ? lim - cur : len - i);
+			for (; i < end; i++)
+				h = (h << 1) + gear[p[i]];
+			cur += i - start;
+			continue;
+		} else {
+			lim = cur < avg - 1 ? avg - 1 : max;
+			m = cur < avg - 1 ? c->mask_s : c->mask_l;
+			end = i + (lim - cur < len - i ? lim - cur : len - i);
+			while (i < end) {
+				h = (h << 1) + gear[p[i++]];
+				if ((h & m) == 0) {
+					cut = 1;
+					break;
+				}
+			}
+			cur += i - start;
+			if (!cut && cur < max)
+				continue;
+			if (n == nlens)
+				return (-2);	/* lens[] full: caller must feed less */
+			lens[n++] = cur;
+			cur = 0;
+			h = 0;
+			continue;
+		}
+		/* Skipping: those bytes cannot reach h at any boundary. */
+		end = lim - cur < len - i ? lim - cur : len - i;
+		cur += end;
+		i += end;
+	}
+	c->cur = cur;
+	c->roll = h;
+	return (n);
+}
+
 int DLL_EXPORT
 pc_chunker_feed(pc_chunker_t *c, const void *buf, size_t len, size_t *lens, int nlens)
 {
@@ -101,6 +213,8 @@ pc_chunker_feed(pc_chunker_t *c, const void *buf, size_t len, size_t *lens, int 
 
 	if (c == NULL || (buf == NULL && len > 0) || (lens == NULL && nlens > 0) || nlens < 0)
 		return (-1);
+	if (c->algo == PC_CHUNKER_GEAR)
+		return (gear_feed(c, p, len, lens, nlens));
 	for (i = 0; i < len; i++) {
 		uchar_t b = p[i], o = c->win[c->wpos];
 

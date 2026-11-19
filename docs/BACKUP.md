@@ -116,9 +116,11 @@ and the repository's lifecycle.
 
 ### What Argh! takes from libpcompress, unchanged
 
-- **Chunking:** `pc_chunker_*`, with sizes fixed per repository and
-  recorded in its config, so dedupe stays stable across versions (Arq's
-  `chunkerVersion`).
+- **Chunking:** `pc_chunker_new2(PC_CHUNKER_GEAR, ...)`, with the
+  chunker and its sizes fixed per repository and recorded in its config,
+  so dedupe stays stable across versions (Arq's `chunkerVersion`). The
+  gear chunker ran at 1058 MB/s on one core of a 2013 Xeon, the Rabin
+  one at 245 MB/s.
 - **Keys from one master:** `pc_derive_key(master, "chunk-id")` names
   objects and `pc_derive_key(master, "seal")` seals them; the master key
   itself (from the key file) is used for nothing else. Pick the purpose

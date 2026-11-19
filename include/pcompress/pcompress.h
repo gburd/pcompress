@@ -164,6 +164,20 @@ int pc_decompress_fd(pc_ctx_t *ctx, int in_fd, int out_fd);
  */
 typedef struct pc_chunker pc_chunker_t;
 pc_chunker_t *pc_chunker_new(size_t avg, size_t min, size_t max);
+
+/**
+ * pc_chunker_new() with a choice of boundary function. Each one's
+ * boundaries are fixed forever (they decide which chunks deduplicate), so
+ * a repository records which it uses. PC_CHUNKER_RABIN is
+ * pc_chunker_new()'s: a 16-byte Rabin window; chunk sizes past min are
+ * spread geometrically, averaging about min + avg. PC_CHUNKER_GEAR is
+ * FastCDC's gear hash with normalized chunking: several times faster, and
+ * sizes cluster around min + avg with few near max. Prefer it for new
+ * repositories.
+ */
+#define	PC_CHUNKER_RABIN	1
+#define	PC_CHUNKER_GEAR		2
+pc_chunker_t *pc_chunker_new2(int algorithm, size_t avg, size_t min, size_t max);
 void pc_chunker_free(pc_chunker_t *c);
 
 /**

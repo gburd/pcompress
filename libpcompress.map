@@ -13,7 +13,7 @@ PCOMPRESS_1 {
 		pc_compress_fd; pc_decompress_fd; pc_usage;
 		pc_chunker_new; pc_chunker_free; pc_chunker_feed; pc_chunker_finish;
 		pc_chunk_id; pc_set_key; pc_chunk_seal_bound; pc_chunk_seal;
-		pc_derive_key;
+		pc_derive_key; pc_chunker_new2;
 		pc_chunk_open; pc_chunk_open_size;
 		pc_keyfile_size; pc_keyfile_create; pc_keyfile_open;
 		pc_index_open; pc_index_has; pc_index_add; pc_index_count;
