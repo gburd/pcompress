@@ -298,6 +298,7 @@ static pthread_once_t sha512_once = PTHREAD_ONCE_INIT, blake2_once = PTHREAD_ONC
 static void
 init_sha512_once(void)
 {
+	init_pcompress();
 	(void) opt_Init_SHA512(&proc_info);
 	cksum_provider = PROVIDER_X64_OPT;
 }
@@ -305,6 +306,8 @@ init_sha512_once(void)
 static void
 init_blake2_once(void)
 {
+	/* The CPU probe first: library calls can come before any context. */
+	init_pcompress();
 	blake2_module_init(&bdsp, &proc_info);
 }
 
