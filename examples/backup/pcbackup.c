@@ -528,6 +528,10 @@ restore_entry(int dfd, const pc_entry_t *e)
 			die(e->path);
 		return;
 	}
+	if (e->type != PC_ENTRY_FILE) {
+		errno = 0;
+		die("snapshot holds an entry type pcbackup does not restore");
+	}
 	/* O_NOFOLLOW|O_EXCL: never write through a link or over an existing file. */
 	if ((fd = openat(dfd, e->path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600)) < 0)
 		die(e->path);

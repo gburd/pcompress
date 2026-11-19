@@ -240,16 +240,32 @@ open, and a torn last record is cut off. The `.pz` global-dedupe index
 (`rabin/global/index.c`) is separate and still per file: making it
 persistent would make one `.pz` depend on others.
 
-**Manifests** (`pc_manifest_*`): `PCMF1`, three zero bytes, a u64 entry
+**Manifests** (`pc_manifest_*`): `PCMF2`, three zero bytes, a u64 entry
 count, then the entries sorted by path bytes, each: u16 path length and
 path, u8 type, u32 mode, uid, gid, i64 mtime, u32 nanoseconds, u64 size,
 u16 target length and target, u32 chunk count, and per chunk a 32-byte id
-and a u32 length. Little-endian throughout. The encoding of a manifest is
-canonical (sorted, no choices), so equal snapshots give equal bytes and
-the same object id. The decoder checks every length against what is left
-before allocating, every path (relative, no empty, `.` or `..`
-component, no NUL), strict order, no entry below a symlink entry, and
-that a file's chunk lengths add up to its size.
+and a u32 length; then the entry's records, each a u8 tag, a u32 length
+and a value, ended by a 0 byte. Little-endian throughout. The tags are
+1 birth time, 2 change time, 3 device and inode, 4 rdev, 5 flags (u8
+kind, u64), 6 owner name, 7 group name, 8 xattr (u8 name length, name,
+value), 9 ACL (u8 kind, text), 10 subtree (32-byte id), and 11 sparse.
+They come in tag order; only xattrs (by name) and ACLs (by kind) repeat.
+A tag this library does not know is kept as the entry's `ext` bytes and
+written back, unless it has bit 0x80 set: that marks it critical, and
+the manifest is refused. `PCMF1` (4.2 and 4.3) is the same with no
+records or end byte, and only the first three entry types; it still
+decodes, and encodes as `PCMF2`.
+
+The encoding of a manifest is canonical (sorted, no choices), so equal
+snapshots give equal bytes and the same object id. The decoder checks
+every length against what is left before allocating, every path
+(relative, no empty, `.` or `..` component, no NUL), a hard link's
+target the same way, strict order, no entry below a symlink entry or a
+directory with a subtree, that a file's chunk lengths add up to its
+size, and that every record is well formed, in order and allowed for the
+entry's type. A manifest can hold a whole snapshot or one directory with
+single-component names, its subdirectories pointing at their own
+manifests; the library does not walk subtrees.
 
 `examples/backup/pcbackup.c` puts the pieces together: a key file holds
 the repository key, chunks and manifests are sealed objects named by

@@ -414,9 +414,26 @@ instead.
 A snapshot manifest: entries
 .Pq Vt pc_entry_t
 holding a relative path, type
-.Pq Dv PC_ENTRY_FILE , PC_ENTRY_DIR , PC_ENTRY_SYMLINK ,
-mode, owner, modification time, size, a symlink's target, and a file's
-chunk ids and lengths in order.
+.Pq Dv PC_ENTRY_FILE , PC_ENTRY_DIR , PC_ENTRY_SYMLINK , PC_ENTRY_HARDLINK ,
+.Dv PC_ENTRY_CHARDEV , PC_ENTRY_BLOCKDEV , PC_ENTRY_FIFO ,
+mode, owner, modification time, size, a symlink's or hard link's target,
+and a file's chunk ids and lengths in order.
+Since 4.4 an entry can also hold birth and change times, device and inode
+numbers (for change detection), a device's
+.Fa rdev ,
+file flags, owner and group names, extended attributes, ACLs in their
+system's text form, a sparse-file mark, and for a directory the id of
+another manifest holding its contents
+.Pq Fa subtree ,
+so that a tool can store a tree as one manifest per directory and reuse
+an unchanged directory by id.
+Records written by a newer library are kept in
+.Fa ext
+and written back unchanged.
+.Fn pc_manifest_encode
+writes format 2, which 4.3 and older cannot read;
+.Fn pc_manifest_decode
+reads formats 1 and 2.
 .Fn pc_manifest_add
 copies an entry, refusing absolute paths, empty, "." and ".."
 components, and chunk lengths that do not add up to the size.
@@ -431,7 +448,8 @@ writes the bytes to store (with
 .Fa buf
 NULL it only sets
 .Fa *len )
-and fails on duplicate paths or an entry under a symlink entry.
+and fails on duplicate paths or an entry under a symlink entry or under
+a directory with a subtree.
 .Fn pc_manifest_decode
 treats its input as hostile and also refuses unsorted entries and
 trailing bytes, so a restore that follows a decoded manifest cannot be

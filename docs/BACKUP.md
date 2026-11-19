@@ -44,7 +44,7 @@ plus a prune that removes objects nothing names any more.
 | Delete old data | delete the whole archive | forget a snapshot, then prune |
 | Fits object storage (S3, B2) | one large object, rewritten each time | many immutable objects, never rewritten |
 | Readable by `pcompress -d` | yes, any version that knows the format | no: needs the store's program |
-| New on-disk format | yes (`.pz` v11) | done (`PCK1`, `PCMF1`, `PCIDX1`, `PCKEY1`) |
+| New on-disk format | yes (`.pz` v11) | done (`PCK1`, `PCMF2`, `PCIDX1`, `PCKEY1`) |
 
 ## How the chunk store covers the Arq case
 
@@ -63,7 +63,7 @@ Each piece has a libpcompress equivalent:
 | chunker (`chunkerVersion`) | `pc_chunker_*` (content-defined, deterministic) |
 | blob id (SHA-256 of plaintext) | `pc_chunk_id`, keyed BLAKE2b-256: the store cannot confirm guessed content |
 | blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XSalsa20 + BLAKE2b (encrypt-then-MAC) |
-| tree / node | `pc_manifest_*` (one flat sorted list per snapshot) |
+| tree / node | `pc_manifest_*`, one per directory, linked by `subtree` ids |
 | encryptedkeyset.dat | `pc_keyfile_*` (scrypt-wrapped 256-bit key) |
 | local blob cache / "already uploaded?" | `pc_index_*` |
 | pack files, BlobLoc | **not provided**: the caller's choice (see Argh! below) |
@@ -90,7 +90,8 @@ falls on the tool, not the library.
   (detected with `st_dev`/`st_ino`/`st_nlink` at backup time) and an
   ordering rule at restore. Without it each link is restored as a
   separate copy: correct contents, more space, and no shared identity.
-  Needs a new entry type in `PCMF1` (types are a byte; there is room).
+  The manifest has a `PC_ENTRY_HARDLINK` type for the second and later
+  paths; pcbackup does not use it yet.
 - **Special files** (devices, FIFOs, sockets). Restoring a device node
   needs root and is rarely what a user wants; a FIFO or socket is
   meaningless out of context. pcbackup skips them with a warning, and
@@ -153,13 +154,16 @@ and the repository's lifecycle.
   index can be rebuilt by scanning.
 - **Storage backends:** local directory, SFTP, S3-compatible (S3, B2,
   R2, MinIO). The library never does network I/O.
-- **Tree structure:** per-folder manifests as above. For huge trees a
-  manifest per directory (Arq's tree of Nodes) would make an unchanged
-  subtree reusable by id. That is a change to the manifest's use, not
-  its format.
-- **Metadata policy:** owners, hard links (a new manifest entry type),
-  extended attributes and ACLs (stored as their own sealed objects),
-  macOS and Windows attributes.
+- **Tree structure:** a manifest per directory (Arq's tree of Nodes),
+  each directory entry's `subtree` naming its child manifest, so an
+  unchanged subtree is reused by id and a restore of one folder reads
+  only the manifests on its path. The tool walks the tree; the library
+  checks each manifest.
+- **Metadata policy:** the manifest stores owners by number and name,
+  hard links, birth times, file flags, extended attributes, ACLs (in the
+  system's own text form, SDDL on Windows), devices and FIFOs, and sparse
+  files. What to capture on each system, and what to restore where, is
+  the tool's policy.
 - **Concurrency and pruning:** a repository lock or a two-phase prune
   ("mark, wait longer than the longest backup, sweep"), because object
   stores have no locks.
@@ -173,7 +177,6 @@ These come from Argh!'s design, and none blocks starting it:
 - **Callback or buffer-based streaming for `pc_chunk_seal`** of large
   inputs. Today the caller holds each chunk in memory, which is fine up
   to the chunker's maximum (default 256 KB).
-- **A hard-link entry type** in `PCMF1`.
 - **A Windows port** (`docs/PLATFORMS.md`): Argh! must run on Windows 11,
   so libpcompress must first.
 - **Pack helpers**, only if two consumers turn out to want the same pack

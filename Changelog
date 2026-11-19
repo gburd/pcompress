@@ -13,6 +13,14 @@ Library: pc_chunk_seal() and pc_chunk_open() keep their codec set up in
   seals 43% faster, lzma about twice as fast), and lzma no longer sets up
   a dictionary much larger than the chunk. pc_chunk_id() called before
   any context now uses the CPU's fastest BLAKE2b code.
+Library: manifests are format 2 (PCMF2): entries gain birth and change
+  times, device and inode numbers, rdev, file flags, owner and group
+  names, extended attributes, ACLs, a sparse mark, a subtree id for a
+  manifest per directory, and hard link, device and FIFO types. Unknown
+  records from a newer writer are kept and written back; critical ones
+  are refused. PCMF1 manifests still decode. 4.3 and older cannot read
+  PCMF2. pc_entry_t grows; programs built against the 4.3 header keep
+  working through the _sz functions.
 Tests: bench_chunk measures the chunkers, ids, seal and open ("make bench").
 
 == 4.3.1 Release ==

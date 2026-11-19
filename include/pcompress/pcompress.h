@@ -253,17 +253,76 @@ int pc_index_close(pc_index_t *idx);
  */
 
 /**
- * Snapshot manifests: the entries of one backup (path, metadata and, for
- * files, the ids and lengths of their chunks in order), encoded to bytes
- * the caller stores as an object of its own (seal it to encrypt it).
- * Paths are relative and '/'-separated; entries are kept sorted by path.
- * pc_manifest_decode() treats its input as hostile: it refuses absolute
- * paths, "." and ".." components, duplicates, entries under a symlink
- * entry, chunk lengths that do not add up to the size, and trailing bytes.
+ * Snapshot manifests: the entries of one backup, or of one directory of
+ * it (path, metadata and, for files, the ids and lengths of their chunks
+ * in order), encoded to bytes the caller stores as an object of its own
+ * (seal it to encrypt it). Paths are relative and '/'-separated; entries
+ * are kept sorted by path. pc_manifest_decode() treats its input as
+ * hostile: it refuses absolute paths, "." and ".." components,
+ * duplicates, entries under a symlink entry or under a directory entry
+ * with a subtree, chunk lengths that do not add up to the size, malformed
+ * or out-of-order metadata, and trailing bytes.
+ *
+ * A manifest can hold a whole snapshot, or one directory: then entries
+ * have one-component names and each directory entry's subtree is the id
+ * of the manifest object holding its contents, so an unchanged directory
+ * is the same object in every snapshot and need not be stored or read
+ * again. The library does not walk subtrees; the caller does.
+ *
+ * pc_manifest_encode() writes format 2 (PCMF2), which 4.3 and older
+ * cannot read; pc_manifest_decode() reads both 1 and 2. The same entries
+ * always encode to the same bytes, so a manifest's id names its content.
+ *
  * A pc_entry_t from get/find points into the manifest: valid until it is
  * freed. One thread at a time per manifest.
  */
-enum { PC_ENTRY_FILE = 1, PC_ENTRY_DIR = 2, PC_ENTRY_SYMLINK = 3 };
+enum {
+	PC_ENTRY_FILE = 1, PC_ENTRY_DIR = 2, PC_ENTRY_SYMLINK = 3,
+	PC_ENTRY_HARDLINK = 4,	/* target: path, in the snapshot, of a file */
+	PC_ENTRY_CHARDEV = 5, PC_ENTRY_BLOCKDEV = 6,	/* rdev */
+	PC_ENTRY_FIFO = 7
+};
+
+/** pc_entry_t.have: which optional fields hold a value. */
+#define	PC_HAVE_BTIME	0x1	/* btime, btime_nsec */
+#define	PC_HAVE_CTIME	0x2	/* ctime, ctime_nsec */
+#define	PC_HAVE_INODE	0x4	/* dev, ino: for change detection only */
+#define	PC_HAVE_SPARSE	0x8	/* files: restore runs of zeros as holes */
+
+/** pc_entry_t.flags_kind: whose file flags flags holds. */
+enum {
+	PC_FLAGS_BSD = 1,	/* st_flags (chflags(2)): FreeBSD, macOS */
+	PC_FLAGS_LINUX = 2,	/* FS_IOC_GETFLAGS (chattr(1)) */
+	PC_FLAGS_WINDOWS = 3	/* FILE_ATTRIBUTE_* */
+};
+
+/** An extended attribute: name, 1-255 bytes, and value (may be empty). */
+typedef struct {
+	const char *name;
+	const void *value;
+	size_t len;
+} pc_xattr_t;
+
+/**
+ * An access control list in its system's own text form: acl_to_text() for
+ * POSIX.1e, NFSv4 and macOS ACLs, SDDL for a Windows security descriptor.
+ * At most one per kind.
+ */
+enum {
+	PC_ACL_POSIX_ACCESS = 1, PC_ACL_POSIX_DEFAULT = 2, PC_ACL_NFS4 = 3,
+	PC_ACL_DARWIN = 4, PC_ACL_WINDOWS_SD = 5
+};
+typedef struct {
+	int kind;		/* PC_ACL_* */
+	const void *data;
+	size_t len;		/* > 0 */
+} pc_acl_t;
+
+/*
+ * NB: a hardlink's target is a checked relative path, but it may pass
+ * through a symlink stored elsewhere (another directory's manifest). A
+ * restore must link only to a file it restored itself in the same run.
+ */
 typedef struct {
 	const char *path;
 	int type;		/* PC_ENTRY_* */
@@ -271,10 +330,30 @@ typedef struct {
 	int64_t mtime;
 	uint32_t mtime_nsec;
 	uint64_t size;		/* files: sum of lens[]; else 0 */
-	const char *target;	/* symlinks: the link text; else NULL */
+	const char *target;	/* symlinks, hardlinks: the target; else NULL */
 	size_t nchunks;
 	const uint8_t *ids;	/* nchunks * 32 bytes */
 	const uint32_t *lens;	/* nchunks lengths, each > 0 */
+	/* Since 4.4: read through the _sz functions; 0 or NULL when absent. */
+	uint32_t have;		/* PC_HAVE_* */
+	uint32_t btime_nsec, ctime_nsec;
+	int64_t btime, ctime;	/* birth time; status change time */
+	uint64_t dev, ino;
+	uint64_t rdev;		/* character and block devices: required */
+	int flags_kind;		/* PC_FLAGS_*, 0 if no flags */
+	uint64_t flags;
+	const char *owner, *group;	/* names, 1-255 bytes, for another host */
+	size_t nxattrs;
+	const pc_xattr_t *xattrs;	/* any order on add; by name on get */
+	size_t nacls;
+	const pc_acl_t *acls;	/* any order on add; by kind on get */
+	const uint8_t *subtree;	/* dirs: 32-byte id of their contents' manifest */
+	/*
+	 * Metadata from a newer library this one does not know, as encoded.
+	 * Pass it back unchanged when carrying an entry into a new manifest.
+	 */
+	const void *ext;
+	size_t extlen;
 } pc_entry_t;
 typedef struct pc_manifest pc_manifest_t;
 pc_manifest_t *pc_manifest_new(void);
@@ -303,8 +382,8 @@ int64_t pc_manifest_find_sz(pc_manifest_t *m, const char *path, pc_entry_t *e,
 #define	pc_manifest_add(m, e)	pc_manifest_add_sz((m), (e), sizeof (pc_entry_t))
 #define	pc_manifest_get(m, i, e)	pc_manifest_get_sz((m), (i), (e), sizeof (pc_entry_t))
 #define	pc_manifest_find(m, p, e)	pc_manifest_find_sz((m), (p), (e), sizeof (pc_entry_t))
-/** buf NULL: set *len to the size needed. -1 on duplicates or an entry
- *  under a symlink, or if *len is too small. */
+/** buf NULL: set *len to the size needed. -1 on duplicates, an entry
+ *  under a symlink or a subtree, or if *len is too small. */
 int pc_manifest_encode(pc_manifest_t *m, void *buf, size_t *len);
 pc_manifest_t *pc_manifest_decode(const void *buf, size_t len);
 

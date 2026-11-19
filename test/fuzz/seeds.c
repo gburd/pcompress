@@ -6,8 +6,8 @@
  *
  * writes <dir>/chunk/ (forged-mode and raw-mode inputs for every
  * algorithm this build has, an encrypted object, a key file) and
- * <dir>/manifest/ (an empty manifest and one with a file, a directory
- * and a symlink). A fuzzer that starts from valid inputs reaches the
+ * <dir>/manifest/ (an empty manifest, one with a file, a directory and
+ * a symlink, and one with every kind of metadata record). A fuzzer that starts from valid inputs reaches the
  * decoders' inner paths far sooner than one that must find the magic
  * bytes first. Run by "make fuzz-build".
  */
@@ -148,6 +148,52 @@ manifest_seeds(const char *dir)
 	put(dir, "three-entries", -1, b, len);
 	free(b);
 	pc_manifest_free(m);
+
+	/* Every record type, so mutations start from each. */
+	{
+		static const uint8_t sub[32] = { 3 };
+		static const uint8_t ext[7] = { 77, 2, 0, 0, 0, 'h', 'i' };
+		pc_xattr_t x[2] = { { "user.a", "1", 1 }, { "user.b", "", 0 } };
+		pc_acl_t a[1] = { { PC_ACL_NFS4, "owner@:rw::allow", 16 } };
+
+		e[1].have = PC_HAVE_BTIME | PC_HAVE_CTIME | PC_HAVE_INODE | PC_HAVE_SPARSE;
+		e[1].btime = 1;
+		e[1].ctime = 2;
+		e[1].dev = 3;
+		e[1].ino = 4;
+		e[1].flags_kind = PC_FLAGS_BSD;
+		e[1].flags = 0x20000;
+		e[1].owner = "root";
+		e[1].group = "wheel";
+		e[1].nxattrs = 2;
+		e[1].xattrs = x;
+		e[1].nacls = 1;
+		e[1].acls = a;
+		e[1].ext = ext;
+		e[1].extlen = sizeof (ext);
+		e[0].path = "a-dir";
+		e[0].subtree = sub;
+		e[2].path = "dir/hard";
+		e[2].type = PC_ENTRY_HARDLINK;
+		e[2].target = "dir/file";
+		m = pc_manifest_new();
+		for (i = 0; i < 3; i++)
+			if (pc_manifest_add(m, &e[i]) != 0)
+				exit(1);
+		e[0].path = "dev";
+		e[0].type = PC_ENTRY_BLOCKDEV;
+		e[0].subtree = NULL;
+		e[0].rdev = 0x801;
+		if (pc_manifest_add(m, &e[0]) != 0)
+			exit(1);
+		len = 0;
+		if (pc_manifest_encode(m, NULL, &len) != 0 || (b = malloc(len)) == NULL ||
+		    pc_manifest_encode(m, b, &len) != 0)
+			exit(1);
+		put(dir, "records", -1, b, len);
+		free(b);
+		pc_manifest_free(m);
+	}
 }
 
 int
