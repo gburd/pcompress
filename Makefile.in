@@ -660,8 +660,15 @@ coverage: all test-unit-build
 		--rc branch_coverage=1 --ignore-errors unused,empty
 	lcov --summary coverage.info --rc branch_coverage=1
 
-bench: bench-build
+bench: bench-build buildtmp/bench_chunk
 	buildtmp/bench_algos
+	buildtmp/bench_chunk
+
+# The chunk-store pipeline, through the public API like any other program.
+buildtmp/bench_chunk: test/performance/bench_chunk.c include/pcompress/pcompress.h $(LIB)
+	mkdir -p buildtmp
+	$(COMPILE) $(GEN_OPT) -Iinclude test/performance/bench_chunk.c -o buildtmp/bench_chunk.o
+	$(LINK.PROG) -o $@ buildtmp/bench_chunk.o -L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@
 
 fuzz-build: $(LIB)
 	@echo "Building fuzz harnesses (requires clang with libFuzzer or AFL++)..."
@@ -695,7 +702,7 @@ fuzz: fuzz-build
 topclean:
 	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER) $(PROG_LDFLAGS)
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
-	$(RM) buildtmp/test_* buildtmp/bench_algos*
+	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress
 	$(RM) buildtmp/fuzz_chunk buildtmp/fuzz_manifest buildtmp/fuzz_seeds
 	$(RM_RF) buildtmp/fuzz-seeds
