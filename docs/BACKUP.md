@@ -104,8 +104,10 @@ falls on the tool, not the library.
   real tools use a lock object with a lease, or a two-phase prune that
   only deletes objects unreferenced for longer than any backup can run).
   It is the store's design, not the library's.
-- Also not done: extended attributes, ACLs, sparse files, Windows
-  attributes, remote stores, scheduling, retention policies.
+- Also not done: capturing and restoring extended attributes, ACLs,
+  sparse files and Windows attributes (the manifest has room for all of
+  them; pcbackup does not fill it), remote stores, scheduling, retention
+  policies.
 
 ## Argh! (`argh`, `arghd`)
 
@@ -177,7 +179,29 @@ These come from Argh!'s design, and none blocks starting it:
 - **Callback or buffer-based streaming for `pc_chunk_seal`** of large
   inputs. Today the caller holds each chunk in memory, which is fine up
   to the chunker's maximum (default 256 KB).
-- **A Windows port** (`docs/PLATFORMS.md`): Argh! must run on Windows 11,
-  so libpcompress must first.
 - **Pack helpers**, only if two consumers turn out to want the same pack
   format.
+
+### A hosted service: what the server can check without the key
+
+The service stores objects it cannot read. It can still find damage,
+because a sealed object is opaque but its bytes are fixed once written:
+
+- **Scrub:** when a client uploads an object it also sends the unkeyed
+  `pc_chunk_id(object, len, NULL, 0, h)` (BLAKE2b-256) of the sealed
+  bytes. The server checks it on upload and records it, and a scrub later
+  rehashes the stored bytes and compares. This finds bit rot and lost
+  writes with no key, and needs no help from the client. It does not
+  prove the object decrypts: only the client, with the key, can check
+  that (`pc_chunk_open`, then the keyed id against the object's name).
+- **What the server learns:** object names (keyed ids, which reveal
+  nothing about content without the id key), object sizes (a sealed
+  object is its compressed size plus a fixed overhead), how many objects
+  each snapshot adds, and when. Sizes and timing are a known leak of
+  every deduplicating backup; padding objects to size classes before
+  sealing reduces it, at a cost in space.
+- **Keys:** the master key comes from the client's key file and never
+  reaches the server. Derive one key per purpose with `pc_derive_key`.
+  If the key file is stored with the service (so a user can restore
+  from a new machine with only a password), it is protected by scrypt
+  alone, and the password's strength is the whole defence.
