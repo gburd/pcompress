@@ -1604,8 +1604,14 @@ dec_archive_setup(pc_ctx_t *pctx, int compfd, int compfd2, const char *to_filena
 {
 	if (pctx->enable_rabin_global) {
 		char cwd[MAXPATHLEN];
+		int absolute = to_filename[0] == PATHSEP_CHAR;
 
-		if (to_filename[0] != PATHSEP_CHAR) {
+#ifdef _WIN32
+		/* "C:/x" and "C:\\x" are absolute too. */
+		absolute = absolute || (to_filename[0] != '\0' && to_filename[1] == ':' &&
+		    (to_filename[2] == '/' || to_filename[2] == '\\'));
+#endif
+		if (!absolute) {
 			if (getcwd(cwd, MAXPATHLEN) == NULL) {
 				log_msg(LOG_ERR, 1, "Cannot get current dir");
 				return (-1);

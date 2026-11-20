@@ -28,10 +28,17 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <termios.h>
+#include <ftw.h>
 
 /* This file defines the functions the macros in win32.h name. */
 #undef	open
 #undef	mkstemp
+#undef	stat
+#undef	nftw
+#undef	mkdir
+#undef	unlink
+#undef	rename
+#undef	fopen
 
 /*
  * Set errno from a Win32 error code, for the few that the CRT's own
@@ -66,11 +73,271 @@ set_errno_win32(DWORD err)
 }
 
 /*
+ * path, a UTF-8 string, as a newly allocated UTF-16 string for the ...W()
+ * calls, or NULL with errno set (ENOENT for bytes that are not UTF-8,
+ * ENOMEM). A path whose absolute form is longer than MAX_PATH is made
+ * absolute and gets the \\?\ prefix, which lifts the limit whatever the
+ * system's long path setting (LongPathsEnabled). The caller frees the
+ * result.
+ * shortcut: UNC paths (\\server\share) longer than MAX_PATH get no
+ * prefix and need LongPathsEnabled; add \\?\UNC\ when someone needs them.
+ */
+static wchar_t *
+utf8_to_wide(const char *path)
+{
+	wchar_t *w, *full, *p;
+	DWORD n;
+	int len;
+
+	len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+	if (len == 0) {
+		errno = ENOENT;
+		return (NULL);
+	}
+	if ((w = malloc((size_t)len * sizeof (wchar_t))) == NULL) {
+		errno = ENOMEM;
+		return (NULL);
+	}
+	(void) MultiByteToWideChar(CP_UTF8, 0, path, -1, w, len);
+	if (w[0] == L'\\' && w[1] == L'\\')
+		return (w);
+
+	/*
+	 * A relative path can be short while its absolute form is not: the
+	 * length that counts is the absolute one. Long: \\?\ and the
+	 * absolute path, which Windows will not normalize.
+	 */
+	n = GetFullPathNameW(w, 0, NULL, NULL);
+	if (n != 0 && n <= MAX_PATH)
+		return (w);
+	if (n == 0 || (full = malloc((n + 4) * sizeof (wchar_t))) == NULL) {
+		errno = n == 0 ? ENOENT : ENOMEM;
+		free(w);
+		return (NULL);
+	}
+	memcpy(full, L"\\\\?\\", 4 * sizeof (wchar_t));
+	if (GetFullPathNameW(w, n, full + 4, NULL) == 0) {
+		errno = ENOENT;
+		free(w);
+		free(full);
+		return (NULL);
+	}
+	free(w);
+	for (p = full + 4; *p != L'\0'; p++)
+		if (*p == L'/')
+			*p = L'\\';
+	return (full);
+}
+
+/*
+ * stat() on a UTF-8 path. With _FILE_OFFSET_BITS=64, struct stat is
+ * laid out as struct _stat64. Trailing separators are dropped, as
+ * MinGW's stat() does: the CRT's fails on "dir/".
+ */
+int
+pc_win32_stat(const char *path, struct stat *st)
+{
+	wchar_t *w;
+	size_t len;
+	int rv;
+
+	_Static_assert(sizeof (struct stat) == sizeof (struct _stat64), "struct stat is _stat64");
+	if ((w = utf8_to_wide(path)) == NULL)
+		return (-1);
+	len = wcslen(w);
+	while (len > 1 && (w[len - 1] == L'/' || w[len - 1] == L'\\') &&
+	    !(len == 3 && w[1] == L':'))
+		w[--len] = L'\0';
+	rv = _wstat64(w, (struct _stat64 *)st);
+	free(w);
+	return (rv);
+}
+
+int
+pc_win32_mkdir(const char *path)
+{
+	wchar_t *w;
+	int rv;
+
+	if ((w = utf8_to_wide(path)) == NULL)
+		return (-1);
+	rv = _wmkdir(w);
+	free(w);
+	return (rv);
+}
+
+int
+pc_win32_unlink(const char *path)
+{
+	wchar_t *w;
+	int rv;
+
+	if ((w = utf8_to_wide(path)) == NULL)
+		return (-1);
+	rv = _wunlink(w);
+	free(w);
+	return (rv);
+}
+
+int
+pc_win32_rename(const char *from, const char *to)
+{
+	wchar_t *wf, *wt;
+	int rv = -1;
+
+	wf = utf8_to_wide(from);
+	wt = wf == NULL ? NULL : utf8_to_wide(to);
+	if (wt != NULL)
+		rv = _wrename(wf, wt);
+	free(wf);
+	free(wt);
+	return (rv);
+}
+
+/* fopen(): mode is ASCII, so it widens byte by byte. */
+FILE *
+pc_win32_fopen(const char *path, const char *mode)
+{
+	wchar_t *w, wmode[16];
+	size_t i;
+	FILE *f;
+
+	for (i = 0; mode[i] != '\0' && i < 15; i++)
+		wmode[i] = (wchar_t)(unsigned char)mode[i];
+	wmode[i] = L'\0';
+	if ((w = utf8_to_wide(path)) == NULL)
+		return (NULL);
+	f = _wfopen(w, wmode);
+	free(w);
+	return (f);
+}
+
+/* The state of one pc_win32_nftw() walk: the path buffer and the callback. */
+struct pc_walk {
+	char *buf;
+	size_t cap;
+	int flags;
+	int (*fn)(const char *, const struct stat *, int, struct FTW *);
+};
+
+/* Append "/name" (UTF-16) to the path at w->buf[len]. 0, or -1 (ENOMEM). */
+static int
+walk_append(struct pc_walk *w, size_t len, const wchar_t *name)
+{
+	int n = WideCharToMultiByte(CP_UTF8, 0, name, -1, NULL, 0, NULL, NULL);
+	char *nb;
+
+	if (n == 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+	if (len + 1 + (size_t)n > w->cap) {
+		size_t nc = (len + 1 + (size_t)n) * 2;
+
+		if ((nb = realloc(w->buf, nc)) == NULL) {
+			errno = ENOMEM;
+			return (-1);
+		}
+		w->buf = nb;
+		w->cap = nc;
+	}
+	w->buf[len] = '/';
+	(void) WideCharToMultiByte(CP_UTF8, 0, name, -1, w->buf + len + 1, n, NULL, NULL);
+	return (0);
+}
+
+/*
+ * Visit w->buf (len bytes, base the offset of its last component) and,
+ * if it is a directory, everything under it. Returns the first non-zero
+ * callback result, -1 on an error of its own, or 0.
+ */
+static int
+walk_path(struct pc_walk *w, size_t len, int base, int level)
+{
+	struct FTW ftw = { base, level };
+	struct stat st = { 0 };
+	WIN32_FIND_DATAW fd;
+	HANDLE h;
+	wchar_t *pat;
+	int rv = 0;
+
+	if (pc_win32_stat(w->buf, &st) == -1)
+		return (w->fn(w->buf, &st, FTW_NS, &ftw));
+	if (!S_ISDIR(st.st_mode))
+		return (w->fn(w->buf, &st, FTW_F, &ftw));
+	if (!(w->flags & FTW_DEPTH) && (rv = w->fn(w->buf, &st, FTW_D, &ftw)) != 0)
+		return (rv);
+
+	/* The directory's entries, from a "<dir>/*" search. */
+	if (walk_append(w, len, L"*") == -1)
+		return (-1);
+	pat = utf8_to_wide(w->buf);
+	w->buf[len] = '\0';
+	if (pat == NULL)
+		return (-1);
+	h = FindFirstFileW(pat, &fd);
+	free(pat);
+	if (h == INVALID_HANDLE_VALUE)
+		return (w->fn(w->buf, &st, FTW_DNR, &ftw));
+	do {
+		if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0)
+			continue;
+		if (walk_append(w, len, fd.cFileName) == -1) {
+			rv = -1;
+			break;
+		}
+		rv = walk_path(w, len + 1 + strlen(w->buf + len + 1), (int)len + 1, level + 1);
+		w->buf[len] = '\0';
+	} while (rv == 0 && FindNextFileW(h, &fd));
+	FindClose(h);
+	if (rv == 0 && (w->flags & FTW_DEPTH))
+		rv = w->fn(w->buf, &st, FTW_DP, &ftw);
+	return (rv);
+}
+
+/*
+ * nftw() with the wide-character directory calls. Like MinGW's nftw(),
+ * entries are named "<dir>/<name>", and trailing separators of path are
+ * dropped. fdlimit has no meaning here (one search handle per level).
+ */
+int
+pc_win32_nftw(const char *path,
+    int (*fn)(const char *, const struct stat *, int, struct FTW *), int fdlimit, int flags)
+{
+	struct pc_walk w;
+	size_t len = strlen(path);
+	int base, rv;
+
+	(void) fdlimit;
+	if (len == 0) {
+		errno = ENOENT;
+		return (-1);
+	}
+	w.cap = len + 1024;
+	if ((w.buf = malloc(w.cap)) == NULL) {
+		errno = ENOMEM;
+		return (-1);
+	}
+	memcpy(w.buf, path, len + 1);
+	while (len > 1 && (w.buf[len - 1] == '/' || w.buf[len - 1] == '\\'))
+		w.buf[--len] = '\0';
+	for (base = (int)len; base > 0 && w.buf[base - 1] != '/' && w.buf[base - 1] != '\\'; base--)
+		;
+	w.flags = flags;
+	w.fn = fn;
+	rv = walk_path(&w, len, base, 0);
+	free(w.buf);
+	return (rv);
+}
+
+/*
  * Open path with CreateFile() and wrap the handle as a CRT descriptor.
  * The CRT's own open() denies delete sharing, so a file could not be
  * unlinked while open; pcompress does that with its temporary files, as
  * POSIX allows. Here every handle shares read, write, and delete, and
  * the descriptor is binary and not inherited by child processes.
+ * path is UTF-8, whatever the calling program's code page: the library
+ * takes UTF-8 paths on every platform (see pcompress.h).
  * "/dev/tty" opens the console input (CONIN$), in text mode so a line
  * ends in '\n' alone, for the password prompt.
  */
@@ -79,6 +346,7 @@ open_shared(const char *path, int flags)
 {
 	DWORD access, disp;
 	HANDLE h;
+	wchar_t *wpath;
 	int fd, crtflags = _O_BINARY;
 
 	switch (flags & (O_RDONLY | O_WRONLY | O_RDWR)) {
@@ -112,8 +380,11 @@ open_shared(const char *path, int flags)
 	if (flags & O_APPEND)
 		crtflags |= _O_APPEND;
 
-	h = CreateFileA(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	if ((wpath = utf8_to_wide(path)) == NULL)
+		return (-1);
+	h = CreateFileW(wpath, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 	    NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+	free(wpath);
 	if (h == INVALID_HANDLE_VALUE) {
 		set_errno_win32(GetLastError());
 		return (-1);
@@ -331,35 +602,52 @@ socketpair(int domain, int type, int protocol, int sv[2])
 }
 
 /*
- * realpath(): GetFullPathName() gives the absolute path; the file must
- * exist, as POSIX requires. Separators become '/', which Windows accepts
- * and pcompress's path handling (PATHSEP_CHAR) expects.
+ * realpath(): GetFullPathNameW() gives the absolute path; the file must
+ * exist, as POSIX requires. The result is UTF-8, without the \\?\ prefix
+ * utf8_to_wide() may add, and its separators are '/', which Windows
+ * accepts and pcompress's path handling (PATHSEP_CHAR) expects.
  */
 char *
 realpath(const char *path, char *resolved)
 {
-	char buf[PATH_MAX], *p;
+	wchar_t *w, *full;
+	char *buf, *p;
 	DWORD n;
+	int len, skip;
 	struct _stat64 st;
 
 	if (path == NULL || *path == '\0') {
 		errno = path == NULL ? EINVAL : ENOENT;
 		return (NULL);
 	}
-	n = GetFullPathNameA(path, sizeof (buf), buf, NULL);
-	if (n == 0 || n >= sizeof (buf)) {
-		errno = n == 0 ? ENOENT : ENAMETOOLONG;
+	if (pc_win32_stat(path, (struct stat *)&st) == -1 || (w = utf8_to_wide(path)) == NULL)
+		return (NULL);
+	n = GetFullPathNameW(w, 0, NULL, NULL);
+	if (n == 0 || (full = malloc(n * sizeof (wchar_t))) == NULL) {
+		errno = n == 0 ? ENOENT : ENOMEM;
+		free(w);
 		return (NULL);
 	}
-	if (_stat64(buf, &st) == -1)
+	n = GetFullPathNameW(w, n, full, NULL);
+	free(w);
+	skip = wcsncmp(full, L"\\\\?\\", 4) == 0 ? 4 : 0;
+	len = n == 0 ? 0 : WideCharToMultiByte(CP_UTF8, 0, full + skip, -1, NULL, 0, NULL, NULL);
+	if (len == 0 || (resolved != NULL && len > PATH_MAX)) {
+		errno = len == 0 ? ENOENT : ENAMETOOLONG;
+		free(full);
 		return (NULL);
+	}
+	if ((buf = resolved) == NULL && (buf = malloc((size_t)len)) == NULL) {
+		errno = ENOMEM;
+		free(full);
+		return (NULL);
+	}
+	(void) WideCharToMultiByte(CP_UTF8, 0, full + skip, -1, buf, len, NULL, NULL);
+	free(full);
 	for (p = buf; *p != '\0'; p++)
 		if (*p == '\\')
 			*p = '/';
-	if (resolved == NULL)
-		return (_strdup(buf));
-	memcpy(resolved, buf, n + 1);
-	return (resolved);
+	return (buf);
 }
 
 /*

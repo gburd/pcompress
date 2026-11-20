@@ -578,8 +578,10 @@ then
 	# also get utils/win32.h first (see Makefile.in, PLATFORM_CINCLUDE).
 	platform_cppflags="-DWIN32_LEAN_AND_MEAN -DNOMINMAX -I./utils/win32"
 	# The programs and tests open every file in binary mode (no CRLF
-	# translation, no stop at ^Z): see utils/win32_binmode.c.
-	prog_ldflags="utils/win32_binmode.o"
+	# translation, no stop at ^Z): see utils/win32_binmode.c. They also
+	# carry an application manifest that makes UTF-8 their code page and
+	# allows long paths: see utils/win32_utf8.rc.
+	prog_ldflags="utils/win32_binmode.o utils/win32_utf8.o"
 	# The MSYS config.guess would say x86_64 here even on ARM64. The
 	# static libarchive must not mark its API dllexport: our DLL would
 	# export it.
@@ -910,9 +912,26 @@ else
 	keccak_srcs='\$\(KECCAK_SRC_OPT64\)'
 fi
 
-if [ "$OS" = "MINGW" ] && [ $is_x86 -eq 1 ]; then
+# The x86 .s files use GNU as directives (.altmacro, .psize). clang's
+# integrated assembler rejects them, so clang hands them to the system
+# "as" (-fno-integrated-as), which must then be GNU as: FreeBSD's base
+# system has no "as" at all. Use the C code paths where they do not
+# assemble.
+x86_gas_ok=1
+if [ $is_x86 -eq 1 ] && [ "$OS" != "Darwin" ] && [ "$OS" != "MINGW" ]; then
+	for _s in crypto/skein/skein_block_x64.s crypto/keccak/KeccakF-1600-x86-64-gas.s; do
+		if ! ${GCC} ${gnu_as_flag} -c "$_s" -o .as_probe.o >/dev/null 2>&1; then
+			x86_gas_ok=0
+		fi
+	done
+	rm -f .as_probe.o
+	[ $x86_gas_ok -eq 0 ] && echo "  The x86 assembler sources do not assemble here (no GNU as): using C code"
+fi
+
+if [ $is_x86 -eq 1 ] && { [ "$OS" = "MINGW" ] || [ $x86_gas_ok -eq 0 ]; }; then
 	# The x86 .s and .asm files are ELF only (and assume the System V
-	# calling convention): use the C code paths, as on Intel Macs.
+	# calling convention) and need GNU as: use the C code paths, as on
+	# Intel Macs.
 	aes_asm_srcs=""
 	salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
 	salsa20_stream_asm=

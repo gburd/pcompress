@@ -25,6 +25,28 @@ Library: pc_index_* keeps only 32 bits of hash and a record number per
   id in memory, reading the id back from the file to confirm a match:
   11 to 21 bytes per id instead of about 45. The file format is unchanged.
 Tests: bench_chunk measures the chunkers, ids, seal and open ("make bench").
+Windows: file names are UTF-8 everywhere, so names the code page cannot
+  represent (Japanese, Greek, emoji on a Western code page) work, and so
+  do paths longer than 260 characters, without LongPathsEnabled.
+  pcompress.exe and the tests carry a manifest that makes UTF-8 their
+  code page and declares them long-path aware (Windows 10 1903 or
+  later). The library opens, creates, renames, removes, and walks files
+  through the UTF-16 calls, so pc_index_open() takes a UTF-8 path even
+  in a program without that manifest. All paths given to the library
+  are UTF-8, on every platform.
+Archives: entry names are stored as UTF-8 in the PAX headers. In the
+  "C" locale every non-ASCII name used to draw "Can't translate
+  pathname ... to UTF-8" and was stored as raw bytes (hdrcharset
+  BINARY). Archives made on Windows now extract with the same names on
+  Linux and the reverse; on Windows, names marked BINARY are read as
+  UTF-8.
+Archives: extracting an archive holding a sparse file failed ("Line too
+  long", "Fatal error aborting extraction") unless it was made with -T.
+  With the metadata stream on, sparse files are now archived as plain
+  data; extraction still recreates holes.
+Build: FreeBSD builds with the base clang (the x86 assembler fast paths
+  are skipped where there is no GNU as). CI runs FreeBSD 14.4 and OmniOS
+  (illumos x86_64) in VMs.
 
 == 4.3.1 Release ==
 Build: Alpine's GCC 15 on aarch64 crashed compiling 4.3.0 ("internal

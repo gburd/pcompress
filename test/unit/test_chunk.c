@@ -557,6 +557,39 @@ MU_TEST(test_index)
 }
 
 /*
+ * Paths given to the library are UTF-8 on every platform: an index whose
+ * name has Japanese, Greek, and emoji characters opens, reopens with its
+ * ids, and is found by that name.
+ */
+MU_TEST(test_index_utf8_path)
+{
+	char path[512];
+	const char *t = getenv("TMPDIR");
+	uint8_t id[32];
+	pc_index_t *x;
+	FILE *f;
+	int i = 7;
+
+	snprintf(path, sizeof (path), "%s/pc_idx_\xe6\x97\xa5\xe6\x9c\xac_"
+	    "\xce\x95\xce\xbb_\xf0\x9f\x98\x80_%d", t ? t : "/tmp", (int)getpid());
+	unlink(path);
+	pc_chunk_id(&i, sizeof (i), NULL, 0, id);
+	x = pc_index_open(path);
+	mu_assert(x != NULL, "open index with a UTF-8 name");
+	mu_assert_int_eq(1, pc_index_add(x, id));
+	mu_assert_int_eq(0, pc_index_close(x));
+	x = pc_index_open(path);
+	mu_assert(x != NULL && pc_index_count(x) == 1 && pc_index_has(x, id) == 1,
+	    "reopen index with a UTF-8 name");
+	mu_assert_int_eq(0, pc_index_close(x));
+	/* The file has that name (on Windows the test's manifest makes fopen() take UTF-8). */
+	f = fopen(path, "rb");
+	mu_assert(f != NULL, "index file not under its UTF-8 name");
+	fclose(f);
+	unlink(path);
+}
+
+/*
  * Object names are keyed chunk ids, so they are public: no chunk id may
  * equal a subkey. Before the fix, the id of a chunk holding exactly the
  * MAC-key label was the MAC key; forge with it, and it must not open.
@@ -702,6 +735,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_mutation_fuzz);
 	MU_RUN_TEST(test_ids_do_not_leak_subkeys);
 	MU_RUN_TEST(test_index);
+	MU_RUN_TEST(test_index_utf8_path);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
 	MU_RUN_TEST(test_derive_key);

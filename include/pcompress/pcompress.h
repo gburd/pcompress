@@ -35,6 +35,13 @@
  * Or with command-line style arguments, exactly as the pcompress program
  * does: create_pc_context(), init_pc_context(), start_pcompress(),
  * destroy_pc_context().
+ *
+ * Every path given to the library is UTF-8, on every platform, and the
+ * names stored in archives are UTF-8. On Windows the library converts
+ * the paths it opens itself to UTF-16; a program using the command-line
+ * style API there should also make UTF-8 its code page with an
+ * application manifest (activeCodePage), as pcompress.exe does, because
+ * some of the C runtime calls behind it take the process code page.
  */
 
 #ifndef PCOMPRESS_PUBLIC_H
@@ -231,7 +238,7 @@ int pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, ui
  * Persistent set of chunk ids (an append-only file), so a backup tool can
  * skip chunks it already stored without asking its object store.
  * pc_index_open() creates the file if needed (refusing a file that is not
- * an index) and loads it. pc_index_has() and pc_index_add() return 1 /
+ * an index) and loads it; path is UTF-8. pc_index_has() and pc_index_add() return 1 /
  * 0 (present / absent, added / already there) or -1. Adds are written by
  * pc_index_sync() and pc_index_close(); add an id only after its object is
  * durably stored, so a crash can only make the tool store a chunk twice.

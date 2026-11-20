@@ -146,6 +146,17 @@ process.
 One context must be used by one thread at a time.
 The library installs no signal handlers and never exits the process.
 .Pp
+Every path given to the library is UTF-8, on every platform, and archive
+entry names are stored as UTF-8.
+On Windows the library opens the files it names itself
+.Pq Fn pc_index_open
+through the UTF-16 calls; a program using the command-line style API
+there should also make UTF-8 its code page with an application manifest
+.Pq Li activeCodePage ,
+as
+.Nm pcompress.exe
+does.
+.Pp
 .Fn pc_new
 returns a context with default settings: zstd, level 6 (lz4: level 1),
 a chunk size chosen from the level, one thread per core, the BLAKE256

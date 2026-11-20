@@ -288,7 +288,8 @@ PC_OS=@PC_OS@
 EXEEXT=@EXEEXT@
 PLATFORM_CPPFLAGS = @PLATFORM_CPPFLAGS@
 PLATFORM_CINCLUDE = $(if $(PC_OS),-include utils/win32.h)
-# Programs and tests: binary file I/O by default (utils/win32_binmode.c).
+# Programs and tests: binary file I/O by default (utils/win32_binmode.c)
+# and the UTF-8, long-path manifest (utils/win32_utf8.rc).
 PROG_LDFLAGS = @PROG_LDFLAGS@
 RPATH=@RPATH@
 DTAGS=@DTAGS@
@@ -491,6 +492,9 @@ $(PROGOBJS): $(PROGSRCS) $(PROGHDRS)
 
 utils/win32_binmode.o: utils/win32_binmode.c
 	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) $(@:.o=.c) -o $@
+
+utils/win32_utf8.o: utils/win32_utf8.rc utils/win32_utf8.manifest
+	windres -O coff -o $@ utils/win32_utf8.rc
 
 # A stamp, not a phony target: a phony prerequisite made $(LIB) relink on
 # every make invocation, e.g. under 'make -j check' while tests ran it.
