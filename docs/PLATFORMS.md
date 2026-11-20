@@ -13,7 +13,8 @@ failure there stops the release.
 | Linux | NixOS / Nix | gated: CI `nix build` (gcc, clang), meh (NixOS) | gated: CI `nix build` | not tested | n/a |
 | macOS | | gated: CI (macos-15-intel) | gated: CI (macos-15) | n/a | n/a |
 | Windows 11 | MSYS2 / MinGW-w64 | gated: CI (windows-latest, CLANG64) | gated: CI (windows-11-arm, CLANGARM64) | n/a | n/a |
-| illumos | OpenIndiana | not tested | n/a | n/a | gated: sun (big-endian; also reachable as icarus) |
+| FreeBSD | | gated: CI (FreeBSD 14.4 VM, base clang) | not tested | not tested | n/a |
+| illumos | OpenIndiana / OmniOS | gated: CI (OmniOS r151060 VM, GCC, from the release tarball) | n/a | n/a | gated: sun (big-endian; also reachable as icarus) |
 | illumos | Solnix | not tested | not tested | not tested | not tested |
 
 "n/a": the OS does not ship on that CPU.
@@ -58,9 +59,17 @@ No build or test runs on a developer workstation.
   `examples/backup` (POSIX-only test scripts and file APIs); `test_sem`
   (no signals to interrupt a wait). Archives do not store or restore
   symbolic links, owners or POSIX permissions on Windows: links are
-  followed when archiving, and extraction keeps the default ACLs. The
-  program uses the ANSI (code page) Windows file APIs, so names the
-  current code page cannot represent are not supported. The x86
+  followed when archiving, and extraction keeps the default ACLs. File
+  names are UTF-8 throughout: the programs carry a manifest that makes
+  UTF-8 their code page and declares them long-path aware (Windows 10
+  1903 or later), and the library opens files, walks directories and
+  resolves paths through the UTF-16 calls, adding the `\\?\` prefix to
+  paths longer than MAX_PATH, so long paths work without
+  LongPathsEnabled. CI round-trips Japanese, Greek and emoji names and a
+  path over 260 characters (`ci/unicode-paths.sh`); archives made on
+  Windows extract with the same names on Linux and the reverse (checked
+  by hand between wina and meh). UNC paths longer than MAX_PATH still
+  need LongPathsEnabled. The x86
   assembler fast paths are not used (they are ELF-only), and the
   password prompt's echo control is not covered by CI (no console).
 - **Solnix (illumos on x86_64, aarch64, riscv64, sparcv9).** No Solnix
@@ -71,6 +80,11 @@ No build or test runs on a developer workstation.
 - **Only one SPARC host.** sun and icarus are the same machine (two
   names, one hostid), so big-endian coverage has a single point of
   failure.
+- **FreeBSD and illumos x86_64** run `ci/build-test.sh quick` (build,
+  unit and integration tests) in VMs (vmactions/freebsd-vm,
+  vmactions/omnios-vm); the feature matrix and the release gate do not
+  run there. On FreeBSD the x86 assembler fast paths are off: the base
+  system has no GNU as. No FreeBSD aarch64 or riscv64 host.
 - **Windows hosts** are wina (Windows 11 ARM64, formerly santorini) and
   wini (Windows 11 x64). `ci/gate.sh` has not been run on them; the gate
   for Windows is CI.
