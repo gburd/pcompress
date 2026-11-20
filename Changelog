@@ -1,4 +1,4 @@
-== Unreleased ==
+== 4.4.0 Release ==
 Library: pc_derive_key(master, purpose, out) derives one 256-bit key per
   named purpose from a master key, so a backup tool can name objects
   (pc_chunk_id) and seal them (pc_set_key) with different keys instead of
