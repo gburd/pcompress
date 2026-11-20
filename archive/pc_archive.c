@@ -59,6 +59,10 @@
 #include "meta_stream.h"
 
 #include <ftw.h>
+#include <locale.h>
+#if defined(__APPLE__)
+#include <xlocale.h>
+#endif
 #include <stdint.h>
 
 static int inited = 0;
@@ -1307,6 +1311,53 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
 }
 
 /*
+ * Archive entry names are UTF-8 on every platform: libarchive stores them
+ * as UTF-8 in the PAX headers and gives them to the file system calls in
+ * UTF-8. libarchive takes the character set of the names it is handed from
+ * the C locale (nl_langinfo(CODESET), or the code page in the Windows CRT
+ * locale), and the program's locale is usually "C", in which non-ASCII
+ * names cannot be converted. So the archiver and extractor threads, which
+ * are the library's own, run in a UTF-8 locale of their own; the rest of
+ * the process is not affected. Call at the start of the thread, before
+ * the thread's first libarchive call, and pass the result to
+ * arc_utf8_end() before the thread returns. Where no UTF-8 locale exists
+ * the locale is left alone (names then go out as raw bytes, as before).
+ */
+static void *
+arc_utf8_begin(void)
+{
+#ifdef _WIN32
+	(void) _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+	(void) setlocale(LC_CTYPE, ".UTF-8");
+	return (NULL);
+#else
+	static const char *names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
+	locale_t loc = (locale_t)0;
+	size_t i;
+
+	for (i = 0; i < sizeof (names) / sizeof (names[0]) && loc == (locale_t)0; i++)
+		loc = newlocale(LC_CTYPE_MASK, names[i], (locale_t)0);
+	if (loc != (locale_t)0)
+		(void) uselocale(loc);
+	return ((void *)loc);
+#endif
+}
+
+/* Undo arc_utf8_begin(), given what it returned. */
+static void
+arc_utf8_end(void *loc)
+{
+#ifdef _WIN32
+	(void) loc;
+#else
+	if (loc != NULL) {
+		(void) uselocale(LC_GLOBAL_LOCALE);
+		freelocale((locale_t)loc);
+	}
+#endif
+}
+
+/*
  * Thread function. Archive members and write to pipe. The dispatcher thread
  * reads from the other end and compresses.
  */
@@ -1316,9 +1367,13 @@ static void *extractor_thread_run(pc_ctx_t *pctx);
 static void *
 archiver_thread_func(void *dat) {
 	pc_ctx_t *pctx = (pc_ctx_t *)dat;
+	void *loc, *rv;
 
 	log_bind(&pctx->log);
-	return (archiver_thread_run(pctx));
+	loc = arc_utf8_begin();
+	rv = archiver_thread_run(pctx);
+	arc_utf8_end(loc);
+	return (rv);
 }
 
 static void *
@@ -1698,9 +1753,13 @@ prefix_entry(struct archive_entry *entry, const char *dir)
 static void *
 extractor_thread_func(void *dat) {
 	pc_ctx_t *pctx = (pc_ctx_t *)dat;
+	void *loc, *rv;
 
 	log_bind(&pctx->log);
-	return (extractor_thread_run(pctx));
+	loc = arc_utf8_begin();
+	rv = extractor_thread_run(pctx);
+	arc_utf8_end(loc);
+	return (rv);
 }
 
 static void *
@@ -1742,6 +1801,14 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	}
 	ctr = 1;
 	arc = (struct archive *)(pctx->archive_ctx);
+#ifdef _WIN32
+	/*
+	 * Names in headers marked BINARY (archives from earlier releases, or a
+	 * name that was not valid UTF-8) are taken as UTF-8 too; libarchive's
+	 * default reads them in the OEM code page. POSIX keeps the bytes.
+	 */
+	(void) archive_read_set_options(arc, "tar:hdrcharset=UTF-8");
+#endif
 	archive_read_open(arc, pctx, arc_open_callback, extract_read_callback, extract_close_callback);
 
 	/*
