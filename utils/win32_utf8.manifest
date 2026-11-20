@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest for every Windows program the build makes
+  (pcompress.exe, the tests, the examples): see utils/win32_utf8.rc.
+  activeCodePage UTF-8 makes the process ANSI code page UTF-8, so the C
+  runtime and the ...A() Win32 calls take UTF-8 file names and argv
+  arrives in UTF-8 (Windows 10 1903 and later). longPathAware lets those
+  calls take paths longer than MAX_PATH where the system enables long
+  paths (LongPathsEnabled).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>

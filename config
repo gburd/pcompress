@@ -578,8 +578,10 @@ then
 	# also get utils/win32.h first (see Makefile.in, PLATFORM_CINCLUDE).
 	platform_cppflags="-DWIN32_LEAN_AND_MEAN -DNOMINMAX -I./utils/win32"
 	# The programs and tests open every file in binary mode (no CRLF
-	# translation, no stop at ^Z): see utils/win32_binmode.c.
-	prog_ldflags="utils/win32_binmode.o"
+	# translation, no stop at ^Z): see utils/win32_binmode.c. They also
+	# carry an application manifest that makes UTF-8 their code page and
+	# allows long paths: see utils/win32_utf8.rc.
+	prog_ldflags="utils/win32_binmode.o utils/win32_utf8.o"
 	# The MSYS config.guess would say x86_64 here even on ARM64. The
 	# static libarchive must not mark its API dllexport: our DLL would
 	# export it.

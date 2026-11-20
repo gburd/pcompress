@@ -240,6 +240,9 @@ jobs:
           mkdir -p arc/sub && cp crlf.bin arc/sub/ && printf 'x\r\n' > arc/t.txt
           ./pcompress -a -c zstd -l6 arc arc && mkdir out && ./pcompress -d arc.pz out
           cmp crlf.bin out/arc/sub/crlf.bin && cmp arc/t.txt out/arc/t.txt
+      - name: Non-ASCII and long (over 260 characters) file names, file and archive mode
+        run: |
+          sh ci/unicode-paths.sh "$PWD/buildtmp/pcompress.exe" "$(cygpath -m "$RUNNER_TEMP")/uni"
 
   freebsd:
     # FreeBSD in a VM on a Linux runner: base clang (with OpenMP), base

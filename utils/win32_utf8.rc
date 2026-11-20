@@ -1,0 +1,7 @@
+/*
+ * The application manifest (resource type 24, id 1) linked into every
+ * Windows program the build makes, with utils/win32_binmode.o (see
+ * PROG_LDFLAGS in Makefile.in): UTF-8 as the process code page and long
+ * path support. The library cannot carry it; see utils/win32.h.
+ */
+1 24 "utils/win32_utf8.manifest"
