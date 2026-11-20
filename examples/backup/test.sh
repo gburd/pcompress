@@ -86,7 +86,10 @@ cp "$R/objects/$o" "$T/save"
 cp "$R/objects/$o2" "$R/objects/$o"
 check "swapped object detected" "! $B restore '$R' '$s4' '$T/out5' 2>/dev/null"
 cp "$T/save" "$R/objects/$o"
-printf 'x' | dd of="$R/objects/$o" bs=1 seek=50 conv=notrunc 2>/dev/null
+# Write a byte that differs from the one there (objects are random-looking).
+b=x; [ "$(dd if="$R/objects/$o" bs=1 skip=50 count=1 2>/dev/null)" = x ] && b=y
+printf '%s' "$b" | dd of="$R/objects/$o" bs=1 seek=50 conv=notrunc 2>/dev/null
+cmp -s "$R/objects/$o" "$T/save" && echo "test bug: object not modified" >&2
 check "modified object detected" "! $B restore '$R' '$s4' '$T/out6' 2>/dev/null"
 cp "$T/save" "$R/objects/$o"
 check "bad snapshot name refused" "! $B restore '$R' '../keyfile' '$T/out7' 2>/dev/null"
