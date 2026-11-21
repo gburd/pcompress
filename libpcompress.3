@@ -574,10 +574,12 @@ Once the library has allocated anything (the first
 .Fn pc_manifest_decode ,
 .Fn pc_keyfile_create ,
 .Fn pc_chunk_seal ,
-and so on), or for a struct whose
+and so on), while another thread is inside it, or for a struct whose
 .Fa size
 is too small or that lacks a function, it returns \-1 and changes
 nothing.
+A call that races the first allocation takes effect before it or is
+refused.
 .Pp
 Both structs only ever grow at the end.
 .Fa size

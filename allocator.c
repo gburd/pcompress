@@ -42,41 +42,62 @@
 #include "pc_alloc.h"
 
 /*
- * The process's allocator: malloc == NULL means the C library's. Written
- * only by pc_set_allocator() before anything is allocated (mem_used is
- * still 0), so the allocation calls read it without a lock.
+ * The process's allocator: malloc == NULL means the C library's. The
+ * state word guards it: MEM_UNSET while pc_set_allocator() may still
+ * change it, MEM_SETTING while one call copies a struct in, MEM_USED once
+ * the library has allocated (from then on it never changes, so the
+ * allocation calls read it without a lock).
  */
+#define	MEM_UNSET	0
+#define	MEM_SETTING	1
+#define	MEM_USED	2
 #define	ALLOCATOR_V1_SIZE	(offsetof(pc_allocator_t, ud) + sizeof (void *))
 
 static pc_allocator_t mem;
-static int mem_used;
+static int mem_state = MEM_UNSET;
 
-/* First allocation: from now on pc_set_allocator() refuses. */
+/*
+ * Called before every allocation: the first one moves the state to
+ * MEM_USED, which makes pc_set_allocator() refuse. One that races a
+ * pc_set_allocator() in progress waits out its copy (a few stores), so it
+ * never reads a half-written struct.
+ */
 static void
 mark_used(void)
 {
-	if (!__atomic_load_n(&mem_used, __ATOMIC_RELAXED))
-		__atomic_store_n(&mem_used, 1, __ATOMIC_RELAXED);
+	int st = MEM_UNSET;
+
+	if (__atomic_load_n(&mem_state, __ATOMIC_ACQUIRE) == MEM_USED)
+		return;
+	while (!__atomic_compare_exchange_n(&mem_state, &st, MEM_USED, 0,
+	    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+		if (st == MEM_USED)
+			return;
+		st = MEM_UNSET;	/* MEM_SETTING: retry until the copy is done */
+	}
 }
 
 /*
  * Install the process's allocator (a NULL a: the C library's). Refused,
- * with nothing changed, once the library has allocated anything, or for
- * a struct that is smaller than the first version's or lacks one of the
- * three functions. A larger struct (a newer caller's) is accepted and its
- * extra fields are ignored; a smaller one than this build's gets the
- * missing fields zeroed.
+ * with nothing changed, once the library has allocated anything, while
+ * another call installs one, or for a struct that is smaller than the
+ * first version's or lacks one of the three functions. A larger struct
+ * (a newer caller's) is accepted and its extra fields are ignored; a
+ * smaller one than this build's gets the missing fields zeroed.
  */
 int DLL_EXPORT
 pc_set_allocator(const pc_allocator_t *a)
 {
-	if (__atomic_load_n(&mem_used, __ATOMIC_ACQUIRE)) {
-		log_msg(LOG_ERR, 0, "pc_set_allocator: the library has already allocated memory");
-		return (-1);
-	}
+	int st = MEM_UNSET;
+
 	if (a != NULL && (a->size < ALLOCATOR_V1_SIZE || a->malloc == NULL ||
 	    a->realloc == NULL || a->free == NULL)) {
 		log_msg(LOG_ERR, 0, "pc_set_allocator: size too small or a function missing");
+		return (-1);
+	}
+	if (!__atomic_compare_exchange_n(&mem_state, &st, MEM_SETTING, 0,
+	    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+		log_msg(LOG_ERR, 0, "pc_set_allocator: the library has already allocated memory");
 		return (-1);
 	}
 	memset(&mem, 0, sizeof (mem));
@@ -84,6 +105,7 @@ pc_set_allocator(const pc_allocator_t *a)
 		memcpy(&mem, a, a->size < sizeof (mem) ? a->size : sizeof (mem));
 		mem.size = sizeof (mem);
 	}
+	__atomic_store_n(&mem_state, MEM_UNSET, __ATOMIC_RELEASE);
 	return (0);
 }
 

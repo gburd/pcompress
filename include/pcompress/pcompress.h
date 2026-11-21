@@ -115,7 +115,10 @@ typedef struct {
  * create_pc_context(), pc_chunker_new(), pc_index_open(), pc_manifest_*,
  * pc_keyfile_*, pc_chunk_*): once the library has allocated anything it
  * returns -1 and changes nothing, as it does for a struct smaller than
- * the first version's or that lacks a function. 0 on success.
+ * the first version's or that lacks a function, and while another thread
+ * is inside pc_set_allocator(). 0 on success. A call that races the
+ * library's first allocation either takes effect before it or is refused,
+ * never half applied.
  *
  * Not covered: libarchive (archive mode) and OpenSSL allocate on their own
  * (OpenSSL's CRYPTO_set_mem_functions() covers it), as do the C++ filters
