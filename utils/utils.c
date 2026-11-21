@@ -59,6 +59,9 @@ processor_cap_t proc_info;
 pthread_mutex_t f_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int cur_log_level = LOG_INFO;
 static log_dest_t ldest = {LOG_OUTPUT, LOG_INFO, NULL};
+/* pc_set_default_log(): the process sink, if set, ahead of ldest. */
+static pc_log_fn def_fn;
+static void *def_arg;
 
 struct RiffHdr {
     char ckID [4];
@@ -489,6 +492,23 @@ set_log_level(int level)
 		cur_log_level = level;
 }
 
+/*
+ * The process default sink and level: for every context without its own
+ * pc_set_log() sink or level, and for messages logged with no context
+ * bound. fn == NULL restores stderr. level is the highest level
+ * delivered, PC_LOG_NONE delivers nothing, and -1 keeps the current
+ * level (PC_LOG_INFO until changed). Plain globals: a host sets them
+ * before its threads use the library.
+ */
+void DLL_EXPORT
+pc_set_default_log(pc_log_fn fn, void *arg, int level)
+{
+	def_fn = fn;
+	def_arg = arg;
+	if (level == PC_LOG_NONE || (level >= PC_LOG_ERR && level <= PC_LOG_VERBOSE))
+		cur_log_level = level;
+}
+
 static __thread log_state_t *bound_log;
 
 void
@@ -576,7 +596,9 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 		}
 	}
 
-	if (ldest.type == LOG_OUTPUT) {
+	if (def_fn != NULL) {
+		def_fn(def_arg, log_level, msg);
+	} else if (ldest.type == LOG_OUTPUT) {
 		fputs(msg, stderr);
 
 	} else if (ldest.type == LOG_FILE) {

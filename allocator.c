@@ -64,15 +64,19 @@ mark_used(void)
 int DLL_EXPORT
 pc_set_allocator(const pc_allocator_t *a)
 {
-	if (__atomic_load_n(&mem_used, __ATOMIC_ACQUIRE))
+	if (__atomic_load_n(&mem_used, __ATOMIC_ACQUIRE)) {
+		log_msg(LOG_ERR, 0, "pc_set_allocator: the library has already allocated memory");
 		return (-1);
+	}
 	if (a == NULL) {
 		memset(&mem, 0, sizeof (mem));
 		return (0);
 	}
 	if (a->size < sizeof (pc_allocator_t) || a->malloc == NULL ||
-	    a->realloc == NULL || a->free == NULL)
+	    a->realloc == NULL || a->free == NULL) {
+		log_msg(LOG_ERR, 0, "pc_set_allocator: size too small or a function missing");
 		return (-1);
+	}
 	/* A newer caller's struct may be longer: take the fields we know. */
 	memcpy(&mem, a, sizeof (mem));
 	mem.size = sizeof (mem);

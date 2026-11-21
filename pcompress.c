@@ -3619,9 +3619,9 @@ create_pc_context(void)
 	if (ctx == NULL)
 		return (NULL);
 	if (ossl_check_version() != 0) {
-		fprintf(stderr, "FATAL: Incompatible OpenSSL version detected.\n"
+		log_msg(LOG_ERR, 0, "FATAL: Incompatible OpenSSL version detected.\n"
 		    "       Compiled with: %s\n"
-		    "       Runtime:       %s\n",
+		    "       Runtime:       %s",
 		    ossl_compiled_version(), ossl_runtime_version());
 		pc_mfree(ctx);
 		return (NULL);

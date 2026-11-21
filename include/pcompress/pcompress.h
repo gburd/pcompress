@@ -118,6 +118,18 @@ typedef struct {
  */
 int pc_set_allocator(const pc_allocator_t *a);
 
+/**
+ * The process's default log sink: messages from contexts without their
+ * own pc_set_log() sink, and messages logged outside any context, go to
+ * fn(arg, level, msg) instead of stderr. fn NULL restores stderr. level
+ * is the highest level delivered to the default sink, for contexts whose
+ * pc_set_log() level is -1 too; PC_LOG_NONE delivers nothing, and -1
+ * keeps the current level (PC_LOG_INFO at start). Set it before other
+ * threads use the library. fn may be called from library threads, and
+ * from several at once for different contexts.
+ */
+void pc_set_default_log(pc_log_fn fn, void *arg, int level);
+
 /** Library version string, e.g. "4.1.0". */
 const char *pc_version(void);
 

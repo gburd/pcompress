@@ -270,6 +270,71 @@ MU_TEST(test_pub_garbage_input)
 	pc_free(c);
 }
 
+struct deflog {
+	int n, errs, infos;
+	char first_err[256];
+};
+
+static void
+deflog_cb(void *a, int l, const char *m)
+{
+	struct deflog *d = (struct deflog *)a;
+
+	d->n++;
+	if (l == PC_LOG_INFO)
+		d->infos++;
+	if (l == PC_LOG_ERR && d->errs++ == 0)
+		snprintf(d->first_err, sizeof (d->first_err), "%s", m);
+}
+
+/*
+ * pc_set_default_log(): a context without its own sink, and a message
+ * logged outside any context, reach the process sink at their level; a
+ * context with its own sink does not. Runs last: the sink is process-wide.
+ */
+MU_TEST(test_pub_default_log)
+{
+	struct deflog d;
+	pc_ctx_t *c;
+	int in, o;
+
+	memset(&d, 0, sizeof (d));
+	pc_set_default_log(deflog_cb, &d, PC_LOG_INFO);
+	c = pc_new();
+	in = open(src, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert(pc_decompress_fd(c, in, o) != 0, "plain file decompressed");
+	close(in);
+	close(o);
+	mu_assert(d.errs >= 1, "context error not delivered");
+	mu_assert(strstr(d.first_err, pc_last_error(c)) != NULL, d.first_err);
+
+	/* A context's own sink takes its messages. */
+	memset(&d, 0, sizeof (d));
+	pc_set_log(c, quiet, NULL, PC_LOG_VERBOSE);
+	in = open(src, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert(pc_decompress_fd(c, in, o) != 0, "plain file decompressed");
+	close(in);
+	close(o);
+	mu_assert_int_eq(0, d.n);
+	pc_free(c);
+
+	/* No context: the allocator is already in use, which is logged. */
+	memset(&d, 0, sizeof (d));
+	mu_assert_int_eq(-1, pc_set_allocator(NULL));
+	mu_assert_int_eq(1, d.errs);
+	mu_assert(strstr(d.first_err, "pc_set_allocator") != NULL, d.first_err);
+
+	/* The level: PC_LOG_NONE delivers nothing; -1 keeps it. */
+	memset(&d, 0, sizeof (d));
+	pc_set_default_log(deflog_cb, &d, PC_LOG_NONE);
+	pc_set_default_log(deflog_cb, &d, -1);
+	mu_assert_int_eq(-1, pc_set_allocator(NULL));
+	mu_assert_int_eq(0, d.n);
+	pc_set_default_log(NULL, NULL, PC_LOG_INFO);
+}
+
 MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
@@ -281,6 +346,7 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_bad_settings);
 	MU_RUN_TEST(test_pub_fds_left_open);
 	MU_RUN_TEST(test_pub_garbage_input);
+	MU_RUN_TEST(test_pub_default_log);
 }
 
 int

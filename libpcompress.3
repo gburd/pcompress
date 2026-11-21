@@ -31,7 +31,8 @@
 .Nm pc_keyfile_create ,
 .Nm pc_keyfile_open ,
 .Nm pc_version ,
-.Nm pc_set_allocator
+.Nm pc_set_allocator ,
+.Nm pc_set_default_log
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
 libpcompress
@@ -76,6 +77,8 @@ libpcompress
 .Fn pc_version "void"
 .Ft int
 .Fn pc_set_allocator "const pc_allocator_t *a"
+.Ft void
+.Fn pc_set_default_log "pc_log_fn fn" "void *arg" "int level"
 .Ft pc_chunker_t *
 .Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
 .Ft pc_chunker_t *
@@ -544,6 +547,28 @@ libarchive (archive mode), OpenSSL (see
 .Xr CRYPTO_set_mem_functions 3 ) ,
 the C++ filters (packJPG, packPNM, dispack and the dictionary filter)
 and the OpenMP runtime allocate on their own.
+.Pp
+.Fn pc_set_default_log
+sets the process's default sink: messages from contexts without their
+own
+.Fn pc_set_log
+sink, and messages logged outside any context (for example by
+.Fn pc_set_allocator ) ,
+go to
+.Fn fn arg level msg
+instead of stderr.
+A NULL
+.Fa fn
+restores stderr.
+.Fa level
+is the highest level delivered to it, also for contexts whose own level
+is \-1;
+.Dv PC_LOG_NONE
+delivers nothing and \-1 keeps the current level
+.Pq Dv PC_LOG_INFO at start .
+.Fa fn
+is called from library threads, at the same time for different
+contexts.
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -596,6 +621,8 @@ The descriptor API, per-context logging and error classes appeared in
 pcompress 4.1; chunks, key files, the chunk index and manifests in 4.2.
 The command-line style API dates from 2.x.
 .Fn pc_set_allocator
+and
+.Fn pc_set_default_log
 appeared after 4.4.
 .Sh CAVEATS
 Only the symbols declared in

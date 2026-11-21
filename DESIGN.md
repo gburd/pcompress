@@ -169,6 +169,9 @@ the library, and does not change them while jobs run.
   library allocates outlives the object that holds it: the extension
   table is static, and `test_alloc` checks that no block is live once
   every object is freed.
+- `pc_set_default_log()`: the sink and level `log_msg()` uses when the
+  thread has no context bound, or the bound context has no sink or
+  level of its own (`utils/utils.c`, next to `log_msg()`).
 
 ## Deduplication
 
