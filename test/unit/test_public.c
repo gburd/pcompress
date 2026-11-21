@@ -556,6 +556,61 @@ MU_TEST(test_pub_progress_cancel_files)
 	unlink(pz);
 }
 
+#ifndef _WIN32
+/*
+ * Cancelling an archive compression, with the metadata stream and
+ * without it (-T): the archiver thread is released and joined, the call
+ * fails with PC_ERR_CANCELLED, and neither a descriptor nor the partial
+ * .pz is left behind.
+ */
+MU_TEST(test_pub_progress_cancel_archive)
+{
+	static const char *opts[] = { "", "-T" };
+	char args[1024], tree[260], f[300], target[320], pz[330];
+	struct prog p;
+	pc_ctx_t *c;
+	int i, fds = open_fds();
+
+	/* Four 2 MB files: 32 chunks of 256k. */
+	snprintf(tree, sizeof (tree), "%s/tree", dir);
+	mkdir(tree, 0700);
+	for (i = 0; i < 4; i++) {
+		FILE *fp;
+		size_t j;
+
+		snprintf(f, sizeof (f), "%s/f%d", tree, i);
+		mu_assert((fp = fopen(f, "wb")) != NULL, f);
+		for (j = 0; j < 2 * 1024 * 1024; j++)
+			fputc((j / 777) % 3 ? (int)("pcompress "[j % 10]) : (int)((j * 131 >> 3) + i), fp);
+		fclose(fp);
+	}
+	snprintf(target, sizeof (target), "%s/arc", dir);
+	snprintf(pz, sizeof (pz), "%s.pz", target);
+	for (i = 0; i < 2; i++) {
+		unlink(pz);
+		memset(&p, 0, sizeof (p));
+		p.stop_at = 2;
+		c = create_pc_context();
+		pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+		snprintf(args, sizeof (args), "pcompress -a %s -c lz4 -l1 -s 256k -t 4 %s %s",
+		    opts[i], tree, target);
+		mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+		pc_set_progress(c, prog_cb, &p);
+		mu_assert(start_pcompress(c) != 0, "cancelled archive succeeded");
+		mu_assert_int_eq(2, p.calls);
+		mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+		destroy_pc_context(c);
+		mu_assert(access(pz, F_OK) != 0, "partial archive left behind");
+		mu_assert_int_eq(fds, open_fds());
+	}
+	for (i = 0; i < 4; i++) {
+		snprintf(f, sizeof (f), "%s/f%d", tree, i);
+		unlink(f);
+	}
+	rmdir(tree);
+}
+#endif
+
 MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
@@ -569,6 +624,9 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_garbage_input);
 	MU_RUN_TEST(test_pub_progress_cancel);
 	MU_RUN_TEST(test_pub_progress_cancel_files);
+#ifndef _WIN32
+	MU_RUN_TEST(test_pub_progress_cancel_archive);
+#endif
 	MU_RUN_TEST(test_pub_thread_hooks);
 	MU_RUN_TEST(test_pub_default_log);
 }

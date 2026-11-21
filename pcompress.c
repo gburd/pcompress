@@ -3373,8 +3373,10 @@ comp_done:
 	if (pctx->meta_stream) {
 		meta_ctx_done(pctx->meta_ctx);
 		pctx->meta_ctx = NULL;
-		archiver_close(pctx);
 	}
+	/* Without it an archiver still in creat_write_callback() never exits. */
+	if (pctx->archive_mode)
+		archiver_close(pctx);
 
 	if (thread) {
 		for (i = 0; i < started; i++) {
