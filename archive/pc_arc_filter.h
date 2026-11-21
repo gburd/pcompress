@@ -115,6 +115,8 @@ struct type_data {
 };
 
 void add_filters_by_type(struct type_data *typetab, struct filter_flags *ff);
+/* Free the calling thread's filter scratch buffer: last thing an archive thread does. */
+void arc_filter_thread_done(void);
 int  type_tag_from_filter_name(struct type_data *typetab, const char *fname,
     size_t len);
 

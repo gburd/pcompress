@@ -551,9 +551,10 @@ thr_main(void *p)
 	struct thr_start t = *(struct thr_start *)p;
 	void *rv;
 
-	pc_mfree(p);
+	/* start() comes before anything else touches the host, the free too. */
 	if (t.hooks.start != NULL)
 		t.hooks.start(t.hooks.ud, t.name);
+	pc_mfree(p);
 	rv = t.fn(t.arg);
 	if (t.hooks.stop != NULL)
 		t.hooks.stop(t.hooks.ud);

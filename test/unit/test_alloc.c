@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,44 @@
 #define	MAGIC_DEAD	0x70634d454d444541ULL
 
 static long live, calls;
+
+/*
+ * pc_set_thread_hooks() is installed too: on a library thread every call
+ * into the allocator must come after its start hook and before its stop
+ * hook. thr_state is 0 on a thread the hooks never saw (main, OpenMP),
+ * 1 between start and stop, 2 after stop; thr_calls counts the thread's
+ * allocator calls.
+ */
+static __thread int thr_state;
+static __thread long thr_calls;
+static long thr_starts, thr_stops, thr_outside;
+
+static void
+thr_note_call(void)
+{
+	thr_calls++;
+	if (thr_state == 2)
+		__atomic_add_fetch(&thr_outside, 1, __ATOMIC_RELAXED);
+}
+
+static void
+t_thr_start(void *ud, const char *name)
+{
+	(void) ud;
+	(void) name;
+	if (thr_calls != 0)
+		__atomic_add_fetch(&thr_outside, 1, __ATOMIC_RELAXED);
+	thr_state = 1;
+	__atomic_add_fetch(&thr_starts, 1, __ATOMIC_RELAXED);
+}
+
+static void
+t_thr_stop(void *ud)
+{
+	(void) ud;
+	thr_state = 2;
+	__atomic_add_fetch(&thr_stops, 1, __ATOMIC_RELAXED);
+}
 static unsigned long long bytes;
 static char dir[200], src[300], cmp_[300], out[300];
 static unsigned char *data;
@@ -51,6 +90,7 @@ t_malloc(void *ud, size_t n)
 	unsigned long long *h;
 
 	(void) ud;
+	thr_note_call();
 	if ((h = malloc(HDR + n)) == NULL)
 		return (NULL);
 	h[0] = MAGIC_LIVE;
@@ -67,6 +107,7 @@ t_realloc(void *ud, void *p, size_t n)
 	unsigned long long *h = hdr_of(p), *nh;
 
 	(void) ud;
+	thr_note_call();
 	if ((nh = realloc(h, HDR + n)) == NULL)
 		return (NULL);
 	nh[1] = n;
@@ -81,6 +122,7 @@ t_free(void *ud, void *p)
 	unsigned long long *h = hdr_of(p);
 
 	(void) ud;
+	thr_note_call();
 	h[0] = MAGIC_DEAD;
 	__atomic_sub_fetch(&live, 1, __ATOMIC_RELAXED);
 	free(h);
@@ -173,6 +215,7 @@ MU_TEST(test_alloc_install)
 {
 	pc_allocator_t a = { sizeof (a), t_malloc, t_realloc, t_free, NULL };
 	pc_allocator_t bad = a;
+	pc_thread_hooks_t h = { sizeof (h), t_thr_start, t_thr_stop, NULL };
 
 	bad.size = sizeof (a) - 1;
 	mu_assert_int_eq(-1, pc_set_allocator(&bad));
@@ -184,6 +227,7 @@ MU_TEST(test_alloc_install)
 	mu_assert_int_eq(-1, pc_set_allocator(&bad));
 	mu_assert_int_eq(0, pc_set_allocator(NULL));
 	mu_assert_int_eq(0, pc_set_allocator(&a));
+	mu_assert_int_eq(0, pc_set_thread_hooks(&h));
 	mu_assert_int_eq(0, (int)calls);
 }
 
@@ -354,7 +398,7 @@ run(const char *fmt, const char *a, const char *b)
  */
 MU_TEST(test_alloc_cli)
 {
-	char base[320], pz[330], x[320], f[640];
+	char base[320], pz[330], x[320], f[640 + PATH_MAX], jpg[PATH_MAX];
 
 	snprintf(base, sizeof (base), "%s/cli", dir);
 	snprintf(pz, sizeof (pz), "%s.pz", base);
@@ -381,6 +425,25 @@ MU_TEST(test_alloc_cli)
 		rmdir(f);
 	}
 	mu_assert_int_eq(0, (int)nlive());
+
+	/*
+	 * A JPEG with packJPG (-j): the extractor thread decodes it in its
+	 * filter scratch buffer, which must go back before its stop hook.
+	 * The test runs from the top of the source tree.
+	 */
+	if (realpath("test/res/jpg/screen.jpg", jpg) != NULL) {
+		mu_assert_int_eq(0, run("pcompress -a -j -c lz4 -l1 %s %s", jpg, base));
+		mu_assert_int_eq(0, run("pcompress -d %s %s", pz, x));
+		snprintf(f, sizeof (f), "%s%s", x, jpg);
+		mu_assert(access(f, F_OK) == 0, "jpeg archive round trip");
+		unlink(f);
+		unlink(pz);
+		while (strlen(f) > strlen(x) && strrchr(f, '/') != NULL) {
+			*strrchr(f, '/') = '\0';
+			rmdir(f);
+		}
+		mu_assert_int_eq(0, (int)nlive());
+	}
 #endif
 }
 
@@ -393,6 +456,10 @@ MU_TEST(test_alloc_done)
 	mu_assert_int_eq(-1, pc_set_allocator(NULL));
 	/* Nothing the library allocated outlives the objects that hold it. */
 	mu_assert_int_eq(0, (int)nlive());
+	/* Library threads ran, and touched the allocator only between their hooks. */
+	mu_assert(thr_starts > 0, "no library thread started");
+	mu_assert_int_eq((int)thr_starts, (int)thr_stops);
+	mu_assert_int_eq(0, (int)thr_outside);
 	printf("test_alloc: %ld calls through the hook, %ld live at the end\n",
 	    calls, nlive());
 }

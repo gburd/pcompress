@@ -169,6 +169,24 @@ thread_scratch(void)
 	return (b);
 }
 
+/*
+ * Release the calling thread's scratch buffer, if it has one. The archiver
+ * and extractor threads call it last, so the memory goes back to the host
+ * allocator before their pc_set_thread_hooks() stop hook runs; the key's
+ * destructor, which runs after it, is only the fallback.
+ */
+void
+arc_filter_thread_done(void)
+{
+	struct scratch_buffer *b;
+
+	pthread_once(&scratch_once, scratch_key_init);
+	if ((b = pthread_getspecific(scratch_key)) != NULL) {
+		(void) pthread_setspecific(scratch_key, NULL);
+		scratch_free(b);
+	}
+}
+
 /* Returns this thread's scratch buffer with room for len bytes, or NULL. */
 static struct scratch_buffer *
 ensure_buffer(struct scratch_buffer *unused, uint64_t len)

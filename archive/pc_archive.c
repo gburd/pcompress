@@ -1375,6 +1375,7 @@ archiver_thread_func(void *dat) {
 	loc = arc_utf8_begin();
 	rv = archiver_thread_run(pctx);
 	arc_utf8_end(loc);
+	arc_filter_thread_done();
 	return (rv);
 }
 
@@ -1762,6 +1763,7 @@ extractor_thread_func(void *dat) {
 	loc = arc_utf8_begin();
 	rv = extractor_thread_run(pctx);
 	arc_utf8_end(loc);
+	arc_filter_thread_done();
 	return (rv);
 }
 
