@@ -31,6 +31,7 @@
 #include <libgen.h>
 #include <termios.h>
 #include <unistd.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -513,26 +514,28 @@ static __thread log_state_t *bound_log;
 
 /* pc_set_thread_hooks(): start/stop are NULL when none are installed. */
 static pc_thread_hooks_t thr_hooks;
+#define	THREAD_HOOKS_V1_SIZE	(offsetof(pc_thread_hooks_t, ud) + sizeof (void *))
 
 /*
  * Run start() and stop() of h around every thread the library creates
- * from now on; NULL removes them. -1 (nothing changed) for a struct whose
- * size is too small or that has neither function. Plain globals: a host
+ * from now on; NULL removes them. -1 (nothing changed) for a struct
+ * smaller than the first version's or that has neither function. Plain globals: a host
  * sets them before its threads use the library.
  */
 int DLL_EXPORT
 pc_set_thread_hooks(const pc_thread_hooks_t *h)
 {
-	if (h == NULL) {
-		memset(&thr_hooks, 0, sizeof (thr_hooks));
-		return (0);
-	}
-	if (h->size < sizeof (pc_thread_hooks_t) || (h->start == NULL && h->stop == NULL)) {
+	if (h != NULL && (h->size < THREAD_HOOKS_V1_SIZE ||
+	    (h->start == NULL && h->stop == NULL))) {
 		log_msg(LOG_ERR, 0, "pc_set_thread_hooks: size too small or no function");
 		return (-1);
 	}
-	memcpy(&thr_hooks, h, sizeof (thr_hooks));
-	thr_hooks.size = sizeof (thr_hooks);
+	memset(&thr_hooks, 0, sizeof (thr_hooks));
+	if (h != NULL) {
+		/* Longer (newer) structs: our fields; shorter: the rest stay zero. */
+		memcpy(&thr_hooks, h, h->size < sizeof (thr_hooks) ? h->size : sizeof (thr_hooks));
+		thr_hooks.size = sizeof (thr_hooks);
+	}
 	return (0);
 }
 

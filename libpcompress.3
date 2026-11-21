@@ -558,7 +558,10 @@ must be thread-safe.
 .Fa realloc
 and
 .Fa free
-are never passed NULL.
+are never passed NULL, and
+.Fa realloc
+never a size of 0 (the library frees the block instead).
+A NULL return means out of memory.
 A NULL
 .Fa a
 restores the C library's functions.
@@ -575,6 +578,14 @@ and so on), or for a struct whose
 .Fa size
 is too small or that lacks a function, it returns \-1 and changes
 nothing.
+.Pp
+Both structs only ever grow at the end.
+.Fa size
+may be anything from the first version's (the fields up to and
+including
+.Fa ud )
+up: fields the library does not know are ignored, and fields a shorter
+struct lacks count as zero.
 The library's own code, the bundled zstd, lz4 and libbsc, and the
 allocation hooks of lzma, PPMd, zlib and bzip2 use these functions.
 libarchive (archive mode), OpenSSL (see
@@ -625,7 +636,8 @@ is the first thing a new thread runs, with its name:
 or
 .Ql pc-extract .
 .Fa stop
-is the last thing it runs before it exits.
+is the last thing it runs before it exits; the thread calls the
+allocator only between the two.
 Either may be NULL, not both; a NULL
 .Fa h
 removes the hooks.

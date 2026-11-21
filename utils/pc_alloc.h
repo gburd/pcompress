@@ -31,6 +31,7 @@ extern "C" {
 void *pc_malloc(size_t n);
 /* Zeroed; NULL (and no call to the hook) if nmemb * size overflows. */
 void *pc_calloc(size_t nmemb, size_t size);
+/* n == 0 frees p and returns NULL; the hook never sees NULL or 0. */
 void *pc_realloc(void *p, size_t n);
 /* NULL is a no-op; the hook never sees NULL. */
 void pc_mfree(void *p);

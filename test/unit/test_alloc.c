@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,8 +218,14 @@ MU_TEST(test_alloc_install)
 	pc_allocator_t bad = a;
 	pc_thread_hooks_t h = { sizeof (h), t_thr_start, t_thr_stop, NULL };
 
-	bad.size = sizeof (a) - 1;
+	/* Any size from the first version's up; one byte less is refused. */
+	bad.size = offsetof(pc_allocator_t, ud) + sizeof (void *) - 1;
 	mu_assert_int_eq(-1, pc_set_allocator(&bad));
+	bad.size++;
+	mu_assert_int_eq(0, pc_set_allocator(&bad));
+	h.size = offsetof(pc_thread_hooks_t, ud) + sizeof (void *) - 1;
+	mu_assert_int_eq(-1, pc_set_thread_hooks(&h));
+	h.size++;
 	bad = a;
 	bad.free = NULL;
 	mu_assert_int_eq(-1, pc_set_allocator(&bad));

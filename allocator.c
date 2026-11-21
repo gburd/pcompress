@@ -31,6 +31,7 @@
  * functions below go through the allocator of pc_set_allocator().
  */
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -45,6 +46,8 @@
  * only by pc_set_allocator() before anything is allocated (mem_used is
  * still 0), so the allocation calls read it without a lock.
  */
+#define	ALLOCATOR_V1_SIZE	(offsetof(pc_allocator_t, ud) + sizeof (void *))
+
 static pc_allocator_t mem;
 static int mem_used;
 
@@ -59,7 +62,10 @@ mark_used(void)
 /*
  * Install the process's allocator (a NULL a: the C library's). Refused,
  * with nothing changed, once the library has allocated anything, or for
- * a struct that is too small or lacks one of the three functions.
+ * a struct that is smaller than the first version's or lacks one of the
+ * three functions. A larger struct (a newer caller's) is accepted and its
+ * extra fields are ignored; a smaller one than this build's gets the
+ * missing fields zeroed.
  */
 int DLL_EXPORT
 pc_set_allocator(const pc_allocator_t *a)
@@ -68,28 +74,33 @@ pc_set_allocator(const pc_allocator_t *a)
 		log_msg(LOG_ERR, 0, "pc_set_allocator: the library has already allocated memory");
 		return (-1);
 	}
-	if (a == NULL) {
-		memset(&mem, 0, sizeof (mem));
-		return (0);
-	}
-	if (a->size < sizeof (pc_allocator_t) || a->malloc == NULL ||
-	    a->realloc == NULL || a->free == NULL) {
+	if (a != NULL && (a->size < ALLOCATOR_V1_SIZE || a->malloc == NULL ||
+	    a->realloc == NULL || a->free == NULL)) {
 		log_msg(LOG_ERR, 0, "pc_set_allocator: size too small or a function missing");
 		return (-1);
 	}
-	/* A newer caller's struct may be longer: take the fields we know. */
-	memcpy(&mem, a, sizeof (mem));
-	mem.size = sizeof (mem);
+	memset(&mem, 0, sizeof (mem));
+	if (a != NULL) {
+		memcpy(&mem, a, a->size < sizeof (mem) ? a->size : sizeof (mem));
+		mem.size = sizeof (mem);
+	}
 	return (0);
 }
 
+/* NULL with errno ENOMEM on failure: log_msg() maps that to PC_ERR_NOMEM. */
 void *
 pc_malloc(size_t n)
 {
+	void *p;
+
 	mark_used();
 	if (mem.malloc == NULL)
-		return (malloc(n));
-	return (mem.malloc(mem.ud, n));
+		p = malloc(n);
+	else
+		p = mem.malloc(mem.ud, n);
+	if (p == NULL)
+		errno = ENOMEM;
+	return (p);
 }
 
 void *
@@ -106,15 +117,29 @@ pc_calloc(size_t nmemb, size_t size)
 	return (p);
 }
 
-/* The hook's realloc never sees NULL: that is a plain allocation. */
+/*
+ * The hook's realloc never sees NULL (that is a plain allocation) nor a
+ * size of 0: that frees p and returns NULL, with errno left alone. On a
+ * failure p is untouched and errno is ENOMEM.
+ */
 void *
 pc_realloc(void *p, size_t n)
 {
+	void *np;
+
 	if (p == NULL)
 		return (pc_malloc(n));
+	if (n == 0) {
+		pc_mfree(p);
+		return (NULL);
+	}
 	if (mem.malloc == NULL)
-		return (realloc(p, n));
-	return (mem.realloc(mem.ud, p, n));
+		np = realloc(p, n);
+	else
+		np = mem.realloc(mem.ud, p, n);
+	if (np == NULL)
+		errno = ENOMEM;
+	return (np);
 }
 
 void

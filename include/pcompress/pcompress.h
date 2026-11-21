@@ -93,7 +93,13 @@ typedef void (*pc_log_fn)(void *arg, int level, const char *msg);
  * sizeof (pc_allocator_t), set by the caller; all three functions are
  * required, and ud is passed to each. The library calls them from its own
  * threads, so they must be thread-safe. realloc and free are never given
- * NULL; calloc is malloc plus memset.
+ * NULL, and realloc never a size of 0 (the library frees instead);
+ * calloc is malloc plus memset. A NULL return is out of memory.
+ *
+ * Struct growth: fields are only ever appended. The library accepts any
+ * size from the first version's (the fields up to and including ud) up:
+ * fields it does not know are ignored, and fields a shorter (older)
+ * struct lacks count as zero.
  */
 typedef struct {
 	size_t size;
@@ -108,8 +114,8 @@ typedef struct {
  * C library's. Call it before anything that allocates (pc_new(),
  * create_pc_context(), pc_chunker_new(), pc_index_open(), pc_manifest_*,
  * pc_keyfile_*, pc_chunk_*): once the library has allocated anything it
- * returns -1 and changes nothing, as it does for a struct whose size is
- * too small or that lacks a function. 0 on success.
+ * returns -1 and changes nothing, as it does for a struct smaller than
+ * the first version's or that lacks a function. 0 on success.
  *
  * Not covered: libarchive (archive mode) and OpenSSL allocate on their own
  * (OpenSSL's CRYPTO_set_mem_functions() covers it), as do the C++ filters
@@ -138,7 +144,10 @@ void pc_set_default_log(pc_log_fn fn, void *arg, int level);
  * start(ud, name) is the first thing a new thread runs, with a short
  * name: "pc-compress", "pc-decompress", "pc-writer", "pc-meta",
  * "pc-archive" or "pc-extract". stop(ud) is the last thing it runs
- * before it exits. Either may be NULL, not both.
+ * before it exits: the thread calls the pc_set_allocator() functions
+ * only between the two. Either may be NULL, not both. Struct growth is
+ * as for pc_allocator_t: any size from the first version's (up to and
+ * including ud) is accepted.
  */
 typedef struct {
 	size_t size;
@@ -149,7 +158,8 @@ typedef struct {
 
 /**
  * Install h for the whole process; NULL removes the hooks. -1 (nothing
- * changed) for a struct whose size is too small or with neither function.
+ * changed) for a struct smaller than the first version's or with neither
+ * function.
  * Set them before other threads use the library: a thread runs the hooks
  * that were installed when it was created. Threads that OpenMP, zstd's
  * worker pool, lzmaMt or libbsc start are not covered.
