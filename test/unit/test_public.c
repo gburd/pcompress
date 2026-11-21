@@ -390,8 +390,16 @@ MU_TEST(test_pub_thread_hooks)
 	mu_assert_int_eq(0, pc_compress_fd(c, in, o));
 	close(in);
 	close(o);
-	/* 4 workers and the writer. */
-	mu_assert_int_eq(5, th_start);
+	/* The workers (4, or fewer on a smaller machine) and the writer. */
+	{
+#ifdef _WIN32
+		long ncpu = 4;	/* no sysconf(_SC_NPROCESSORS_ONLN); CI has 4 or more */
+#else
+		long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+
+		mu_assert_int_eq((ncpu > 0 && ncpu < 4 ? (int)ncpu : 4) + 1, th_start);
+	}
 	mu_assert_int_eq(th_start, th_stop);
 	in = open(cmp_, O_RDONLY);
 	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -435,9 +443,13 @@ open_fds(void)
 {
 	int n = 0, fd;
 
+#ifndef _WIN32
 	for (fd = 3; fd < 1024; fd++)
 		if (fcntl(fd, F_GETFD) != -1)
 			n++;
+#else
+	(void) fd;	/* no fcntl(): the check counts nothing */
+#endif
 	return (n);
 }
 
