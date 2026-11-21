@@ -44,6 +44,7 @@ This also decreases memory fragmentation, and freeing structures
 #ifndef STANDARD
 # include "standard.h"
 #endif
+#include "pc_alloc.h"
 #ifndef RECYCLE
 # include "recycle.h"
 #endif
@@ -68,10 +69,10 @@ refree(struct reroot *r)
       while (r->list)
       {
          temp = r->list->next;
-         free((char *)r->list);
+         pc_mfree((char *)r->list);
          r->list = temp;
       }
-   free((char *)r);
+   pc_mfree((char *)r);
    return;
 }
 
@@ -103,7 +104,7 @@ renewx(struct reroot *r)
 char *
 remalloc(size_t len, char *purpose)
 {
-  char *x = (char *)malloc(len);
+  char *x = (char *)pc_malloc(len);
   if (!x)
   {
     fprintf(stderr, "malloc of %zu failed for %s\n", 

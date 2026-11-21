@@ -233,7 +233,7 @@ salsa20_cleanup(salsa20_ctx_t *ctx)
 {
 	memset((void *)(&ctx->key), 0, sizeof (ctx->key));
 	memset(ctx->nonce, 0, XSALSA20_CRYPTO_NONCEBYTES);
-	free(ctx);
+	pc_mfree(ctx);
 }
 
 /* Restore warnings after OpenSSL 3.x deprecated API usage */

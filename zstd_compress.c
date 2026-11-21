@@ -31,6 +31,8 @@
 #include <utils.h>
 #include <pcompress.h>
 #include <allocator.h>
+/* ZSTD_customMem and the _advanced constructors: zstd is linked statically. */
+#define	ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <zstd_errors.h>
 
@@ -75,6 +77,23 @@ window_log_for_chunksize(uint64_t chunksize)
 		wlog++;
 	return (wlog);
 }
+
+/* zstd's allocations (contexts, worker pool, buffers) go through pc_malloc(). */
+static void *
+zstd_alloc(void *opaque, size_t n)
+{
+	(void) opaque;
+	return (pc_malloc(n));
+}
+
+static void
+zstd_free(void *opaque, void *p)
+{
+	(void) opaque;
+	pc_mfree(p);
+}
+
+static const ZSTD_customMem zstd_mem = { zstd_alloc, zstd_free, NULL };
 
 struct zstd_params {
 	ZSTD_CCtx *cctx;
@@ -137,7 +156,7 @@ zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	zdat->window_log = window_log_for_chunksize(chunksize);
 
 	if (op == COMPRESS) {
-		zdat->cctx = ZSTD_createCCtx();
+		zdat->cctx = ZSTD_createCCtx_advanced(zstd_mem);
 		if (!zdat->cctx) {
 			log_msg(LOG_ERR, 0, "ZSTD: Failed to create compression context\n");
 			slab_free(NULL, zdat);
@@ -156,7 +175,7 @@ zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
 		ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_windowLog,
 		    zdat->window_log);
 	} else {
-		zdat->dctx = ZSTD_createDCtx();
+		zdat->dctx = ZSTD_createDCtx_advanced(zstd_mem);
 		if (!zdat->dctx) {
 			log_msg(LOG_ERR, 0, "ZSTD: Failed to create decompression context\n");
 			slab_free(NULL, zdat);

@@ -140,6 +140,36 @@ with the caller's descriptors in place of stdin/stdout, in a fresh
 internal context built from the caller's settings, so one `pc_ctx_t` can
 run many jobs. Only the symbols in `libpcompress.map` are exported.
 
+## Embedding
+
+A host runtime (an event loop, a backup daemon) can give the library its
+own process-wide hooks before the first call. They are plain globals set
+once: a host sets them at start-up, before it creates threads that use
+the library, and does not change them while jobs run.
+
+- `pc_set_allocator()`: every allocation in the library's own code goes
+  through `pc_malloc()`, `pc_calloc()`, `pc_realloc()`, `pc_mfree()` and
+  `pc_strdup()` (`utils/pc_alloc.h`, in `allocator.c`), which call the
+  host's functions or the C library's. The `slab_*` wrappers the codecs
+  and the pipeline use call them too. zstd gets them through
+  `ZSTD_customMem`, libbsc through `bsc_init_full()`, lz4 through
+  `LZ4_USER_MEMORY_FUNCTIONS`; lzma, PPMd, zlib and bzip2 through their
+  allocator structs. Aligned memory (BLAKE2b and Keccak states, scrypt)
+  is over-allocated through `pc_malloc()` with the block's own address
+  stored below the aligned one, so there is no `posix_memalign()` /
+  `_aligned_malloc()` split. The first allocation sets a flag, and from
+  then on `pc_set_allocator()` refuses: a block must go back to the
+  allocator it came from.
+  Memory another library allocates goes back through that library:
+  `realpath()` results are copied (`pc_realpath()`) and `free()`d,
+  packJPG/packPNM output is copied into `pc_malloc()` memory
+  (`pc_adopt()`), OpenSSL HMAC contexts go to `HMAC_CTX_free()`.
+  Not covered: libarchive, OpenSSL, the C++ filters (packJPG, packPNM,
+  dispack, the dictionary filter) and the OpenMP runtime. Nothing the
+  library allocates outlives the object that holds it: the extension
+  table is static, and `test_alloc` checks that no block is live once
+  every object is freed.
+
 ## Deduplication
 
 `rabin/rabin_dedup.c` cuts a chunk into content-defined blocks with a
@@ -182,7 +212,8 @@ if the output would not fit it returns -1 and the chunk is stored raw.
 Two heap overflows (lz4, libbsc) came from compressors that sized their
 output from the input length instead of `*dstlen`.
 
-Buffers come from the system allocator. Pcompress used to ship a
+Buffers come from the system allocator, or the host's (see Embedding
+below). Pcompress used to ship a
 process-wide slab allocator; it was removed in 4.1 because it was not
 safe with several contexts in one process and measured no faster than
 `malloc` (within 2.5% on a 192-core Graviton4, within noise on a

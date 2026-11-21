@@ -30,7 +30,8 @@
 .Nm pc_chunk_open ,
 .Nm pc_keyfile_create ,
 .Nm pc_keyfile_open ,
-.Nm pc_version
+.Nm pc_version ,
+.Nm pc_set_allocator
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
 libpcompress
@@ -73,6 +74,8 @@ libpcompress
 .Fn pc_cleanup_tempfiles "void"
 .Ft const char *
 .Fn pc_version "void"
+.Ft int
+.Fn pc_set_allocator "const pc_allocator_t *a"
 .Ft pc_chunker_t *
 .Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
 .Ft pc_chunker_t *
@@ -496,6 +499,51 @@ is a small deduplicating store built on these calls;
 .Pa examples/backup/pcbackup.c
 a snapshot backup tool (backup, list, restore of everything or one file,
 forget, prune).
+.Ss Embedding
+These set process-wide behaviour for a program that hosts the library.
+Call them before anything else in the library, and before other threads
+use it.
+.Pp
+.Fn pc_set_allocator
+gives the library the host's memory functions:
+.Bd -literal -offset indent
+typedef struct {
+	size_t size;	/* sizeof (pc_allocator_t) */
+	void *(*malloc)(void *ud, size_t n);
+	void *(*realloc)(void *ud, void *p, size_t n);
+	void (*free)(void *ud, void *p);
+	void *ud;
+} pc_allocator_t;
+.Ed
+.Pp
+All three functions are required; library threads call them, so they
+must be thread-safe.
+.Fa realloc
+and
+.Fa free
+are never passed NULL.
+A NULL
+.Fa a
+restores the C library's functions.
+Once the library has allocated anything (the first
+.Fn pc_new ,
+.Fn create_pc_context ,
+.Fn pc_chunker_new ,
+.Fn pc_index_open ,
+.Fn pc_manifest_new ,
+.Fn pc_manifest_decode ,
+.Fn pc_keyfile_create ,
+.Fn pc_chunk_seal ,
+and so on), or for a struct whose
+.Fa size
+is too small or that lacks a function, it returns \-1 and changes
+nothing.
+The library's own code, the bundled zstd, lz4 and libbsc, and the
+allocation hooks of lzma, PPMd, zlib and bzip2 use these functions.
+libarchive (archive mode), OpenSSL (see
+.Xr CRYPTO_set_mem_functions 3 ) ,
+the C++ filters (packJPG, packPNM, dispack and the dictionary filter)
+and the OpenMP runtime allocate on their own.
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -547,6 +595,8 @@ a snapshot backup tool.
 The descriptor API, per-context logging and error classes appeared in
 pcompress 4.1; chunks, key files, the chunk index and manifests in 4.2.
 The command-line style API dates from 2.x.
+.Fn pc_set_allocator
+appeared after 4.4.
 .Sh CAVEATS
 Only the symbols declared in
 .In pcompress/pcompress.h

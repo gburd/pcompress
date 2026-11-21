@@ -229,22 +229,22 @@ ment_free(struct ment *e)
 {
 	size_t i;
 
-	free(e->path);
-	free(e->target);
-	free(e->ids);
-	free(e->lens);
-	free(e->owner);
-	free(e->group);
+	pc_mfree(e->path);
+	pc_mfree(e->target);
+	pc_mfree(e->ids);
+	pc_mfree(e->lens);
+	pc_mfree(e->owner);
+	pc_mfree(e->group);
 	for (i = 0; i < e->nx; i++) {
-		free((void *)e->x[i].name);
-		free((void *)e->x[i].value);
+		pc_mfree((void *)e->x[i].name);
+		pc_mfree((void *)e->x[i].value);
 	}
-	free(e->x);
+	pc_mfree(e->x);
 	for (i = 0; i < e->na; i++)
-		free((void *)e->a[i].data);
-	free(e->a);
-	free(e->subtree);
-	free(e->ext);
+		pc_mfree((void *)e->a[i].data);
+	pc_mfree(e->a);
+	pc_mfree(e->subtree);
+	pc_mfree(e->ext);
 }
 
 /* Byte order of (p, plen) against an entry's path; a prefix sorts first. */
@@ -314,7 +314,7 @@ check_tree(const pc_manifest_t *m)
 
 		if (l->type != PC_ENTRY_SYMLINK && l->subtree == NULL)
 			continue;
-		if ((k = malloc(kl)) == NULL)
+		if ((k = pc_malloc(kl)) == NULL)
 			return (0);
 		memcpy(k, l->path, l->plen);
 		k[l->plen] = '/';
@@ -327,7 +327,7 @@ check_tree(const pc_manifest_t *m)
 				hi = mid;
 		}
 		bad = lo < m->n && m->e[lo].plen > kl && memcmp(m->e[lo].path, k, kl) == 0;
-		free(k);
+		pc_mfree(k);
 		if (bad)
 			return (0);
 	}
@@ -346,7 +346,7 @@ msort(pc_manifest_t *m)
 pc_manifest_t DLL_EXPORT *
 pc_manifest_new(void)
 {
-	pc_manifest_t *m = calloc(1, sizeof (*m));
+	pc_manifest_t *m = pc_calloc(1, sizeof (*m));
 
 	if (m != NULL)
 		m->sorted = 1;
@@ -362,8 +362,8 @@ pc_manifest_free(pc_manifest_t *m)
 		return;
 	for (i = 0; i < m->n; i++)
 		ment_free(&m->e[i]);
-	free(m->e);
-	free(m);
+	pc_mfree(m->e);
+	pc_mfree(m);
 }
 
 static int
@@ -375,7 +375,7 @@ grow(pc_manifest_t *m)
 	if (m->n < m->cap)
 		return (0);
 	nc = m->cap ? m->cap * 2 : 64;
-	if (nc > SIZE_MAX / sizeof (*m->e) || (p = realloc(m->e, nc * sizeof (*m->e))) == NULL)
+	if (nc > SIZE_MAX / sizeof (*m->e) || (p = pc_realloc(m->e, nc * sizeof (*m->e))) == NULL)
 		return (-1);
 	m->e = p;
 	m->cap = nc;
@@ -385,7 +385,7 @@ grow(pc_manifest_t *m)
 static char *
 dupn(const char *s, size_t n)
 {
-	char *d = malloc(n + 1);
+	char *d = pc_malloc(n + 1);
 
 	if (d != NULL) {
 		memcpy(d, s, n);
@@ -428,7 +428,7 @@ dupmem(const void *s, size_t n)
 
 	if (s == NULL && n > 0)
 		return (NULL);
-	if ((d = malloc(n ? n : 1)) != NULL && n > 0)
+	if ((d = pc_malloc(n ? n : 1)) != NULL && n > 0)
 		memcpy(d, s, n);
 	return (d);
 }
@@ -474,7 +474,7 @@ copy_meta(struct ment *e, const pc_entry_t *in)
 	    in->nxattrs > SIZE_MAX / sizeof (pc_xattr_t) || in->nacls > SIZE_MAX / sizeof (pc_acl_t))
 		return (-1);
 	if (in->nxattrs > 0) {
-		if ((e->x = calloc(in->nxattrs, sizeof (*e->x))) == NULL)
+		if ((e->x = pc_calloc(in->nxattrs, sizeof (*e->x))) == NULL)
 			return (-1);
 		for (i = 0; i < in->nxattrs; i++, e->nx++) {
 			const pc_xattr_t *x = &in->xattrs[i];
@@ -491,7 +491,7 @@ copy_meta(struct ment *e, const pc_entry_t *in)
 		qsort(e->x, e->nx, sizeof (*e->x), xattr_cmp);
 	}
 	if (in->nacls > 0) {
-		if ((e->a = calloc(in->nacls, sizeof (*e->a))) == NULL)
+		if ((e->a = pc_calloc(in->nacls, sizeof (*e->a))) == NULL)
 			return (-1);
 		for (i = 0; i < in->nacls; i++, e->na++) {
 			e->a[i] = in->acls[i];
@@ -533,8 +533,8 @@ pc_manifest_add_sz(pc_manifest_t *m, const pc_entry_t *in, size_t esize)
 	e.path = dupn(in->path, e.plen);
 	e.target = e.tlen ? dupn(in->target, e.tlen) : NULL;
 	if (e.n > 0) {
-		e.ids = malloc(e.n * 32);
-		e.lens = malloc(e.n * sizeof (uint32_t));
+		e.ids = pc_malloc(e.n * 32);
+		e.lens = pc_malloc(e.n * sizeof (uint32_t));
 	}
 	if (e.path == NULL || (e.tlen && e.target == NULL) ||
 	    (e.n > 0 && (e.ids == NULL || e.lens == NULL)))
@@ -858,7 +858,7 @@ push(void *arr, size_t n, size_t sz)
 {
 	if (n >= SIZE_MAX / sz - 1)
 		return (NULL);
-	return (realloc(arr, (n + 1) * sz));
+	return (pc_realloc(arr, (n + 1) * sz));
 }
 
 /*
@@ -995,8 +995,8 @@ pc_manifest_decode(const void *buf, size_t len)
 	count = get(&r, 8);
 	if (count > r.left / PCM_MIN_ENTRY || (m = pc_manifest_new()) == NULL)
 		return (NULL);	/* the count cannot fit: refuse before allocating */
-	if (count > 0 && (m->e = calloc((size_t)count, sizeof (*m->e))) == NULL) {
-		free(m);
+	if (count > 0 && (m->e = pc_calloc((size_t)count, sizeof (*m->e))) == NULL) {
+		pc_mfree(m);
 		return (NULL);
 	}
 	m->cap = (size_t)count;
@@ -1022,8 +1022,8 @@ pc_manifest_decode(const void *buf, size_t len)
 		if (r.bad || e->n > r.left / 36 || (!v2 && e->type > PC_ENTRY_SYMLINK))
 			goto bad;
 		if (e->n > 0) {
-			if ((e->ids = malloc(e->n * 32)) == NULL ||
-			    (e->lens = malloc(e->n * sizeof (uint32_t))) == NULL)
+			if ((e->ids = pc_malloc(e->n * 32)) == NULL ||
+			    (e->lens = pc_malloc(e->n * sizeof (uint32_t))) == NULL)
 				goto bad;
 			for (j = 0; j < e->n; j++) {	/* 36 bytes each: checked above */
 				memcpy(e->ids[j], take(&r, 32), 32);

@@ -103,7 +103,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 	if ((algo != PC_CHUNKER_RABIN && algo != PC_CHUNKER_GEAR) ||
 	    a < 256 || min < 64 || min > a || max < a || max > PC_CHUNK_MAX_LIMIT)
 		return (NULL);
-	if ((c = calloc(1, sizeof (*c))) == NULL)
+	if ((c = pc_calloc(1, sizeof (*c))) == NULL)
 		return (NULL);
 	c->algo = algo;
 	c->min = min;
@@ -124,7 +124,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 void DLL_EXPORT
 pc_chunker_free(pc_chunker_t *c)
 {
-	free(c);
+	pc_mfree(c);
 }
 
 static void
@@ -460,18 +460,18 @@ codec_get(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op_
 		return (&c->k);
 	if (c != NULL) {
 		codec_close(&c->k);
-		free(c);
+		pc_mfree(c);
 		*slot = NULL;
 	}
 	while (cap < len && cap < ((uint64_t)1 << 30))
 		cap <<= 1;
 	if (cap < len)
 		cap = len;	/* past 1 GB: exact, codecs have limits near 2 GB */
-	if ((c = calloc(1, sizeof (*c))) == NULL)
+	if ((c = pc_calloc(1, sizeof (*c))) == NULL)
 		return (NULL);
 	if (codec_open(ctx, algo, level, cap, op, &c->k) != 0) {
 		codec_close(&c->k);
-		free(c);
+		pc_mfree(c);
 		return (NULL);
 	}
 	snprintf(c->algo, sizeof (c->algo), "%s", algo);
@@ -492,7 +492,7 @@ chunk_codecs_free(pc_ctx_t *ctx)
 
 		if (c != NULL) {
 			codec_close(&c->k);
-			free(c);
+			pc_mfree(c);
 			ctx->chunk_codec[i] = NULL;
 		}
 	}
@@ -705,7 +705,7 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 
 	/* 2. Decrypt (into a scratch copy: the input is const). */
 	if (encrypted) {
-		if ((buf = malloc(clen ? clen : 1)) == NULL) {
+		if ((buf = pc_malloc(clen ? clen : 1)) == NULL) {
 			why = PC_ERR_NOMEM;
 			msg = "pc_chunk_open: out of memory";
 			goto out;
@@ -742,7 +742,7 @@ out:
 	memset(mac, 0, sizeof (mac));
 	if (buf != NULL) {
 		memset(buf, 0, clen);
-		free(buf);
+		pc_mfree(buf);
 	}
 	if (rv != 0)
 		return (seal_err(ctx, why, msg));
@@ -983,10 +983,10 @@ pci_grow(pc_index_t *x)
 	uint32_t *h, *r;
 
 	/* Up to 2^32 slots: the hash is 32 bits (PCI_MAXREC keeps it there). */
-	if (ns > SIZE_MAX / sizeof (*h) || (h = malloc(ns * sizeof (*h))) == NULL)
+	if (ns > SIZE_MAX / sizeof (*h) || (h = pc_malloc(ns * sizeof (*h))) == NULL)
 		return (-1);
-	if ((r = calloc(ns, sizeof (*r))) == NULL) {
-		free(h);
+	if ((r = pc_calloc(ns, sizeof (*r))) == NULL) {
+		pc_mfree(h);
 		return (-1);
 	}
 	for (i = 0; i < x->nslots; i++) {
@@ -999,8 +999,8 @@ pci_grow(pc_index_t *x)
 		h[s] = x->hash[i];
 		r[s] = x->rec[i];
 	}
-	free(x->hash);
-	free(x->rec);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
 	x->hash = h;
 	x->rec = r;
 	x->nslots = ns;
@@ -1070,7 +1070,7 @@ pc_index_open(const char *path)
 	uchar_t hdr[PCI_HDR];
 	off_t sz, end, pos;
 
-	if (path == NULL || (x = calloc(1, sizeof (*x))) == NULL)
+	if (path == NULL || (x = pc_calloc(1, sizeof (*x))) == NULL)
 		return (NULL);
 	/* O_APPEND: whole-record appends from two processes cannot overlap. */
 	x->fd = -1;
@@ -1110,9 +1110,9 @@ pc_index_open(const char *path)
 fail:
 	if (x->fd != -1)
 		close(x->fd);
-	free(x->hash);
-	free(x->rec);
-	free(x);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
+	pc_mfree(x);
 	return (NULL);
 }
 
@@ -1167,8 +1167,8 @@ pc_index_close(pc_index_t *x)
 	rv = pc_index_sync(x);
 	if (close(x->fd) != 0)
 		rv = -1;
-	free(x->hash);
-	free(x->rec);
-	free(x);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
+	pc_mfree(x);
 	return (rv);
 }

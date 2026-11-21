@@ -67,6 +67,7 @@
 #include "sysendian.h"
 
 #include "crypto_scrypt.h"
+#include "pc_alloc.h"
 
 static void blkcpy(void *, void *, size_t);
 static void blkxor(void *, void *, size_t);
@@ -366,30 +367,16 @@ crypto_scrypt(const uint8_t * passwd, size_t passwdlen,
 	}
 
 	/* Allocate memory. */
-#ifdef HAVE_POSIX_MEMALIGN
-	if ((errno = posix_memalign(&B0, 64, 128 * r * p)) != 0)
+	if ((B0 = pc_aligned_alloc(64, 128 * r * p)) == NULL)
 		goto err0;
 	B = (uint8_t *)(B0);
-	if ((errno = posix_memalign(&XY0, 64, 256 * r + 64)) != 0)
+	if ((XY0 = pc_aligned_alloc(64, 256 * r + 64)) == NULL)
 		goto err1;
 	XY = (uint32_t *)(XY0);
 #ifndef MAP_ANON
-	if ((errno = posix_memalign(&V0, 64, 128 * r * N)) != 0)
+	if ((V0 = pc_aligned_alloc(64, 128 * r * N)) == NULL)
 		goto err2;
 	V = (uint32_t *)(V0);
-#endif
-#else
-	if ((B0 = malloc(128 * r * p + 63)) == NULL)
-		goto err0;
-	B = (uint8_t *)(((uintptr_t)(B0) + 63) & ~ (uintptr_t)(63));
-	if ((XY0 = malloc(256 * r + 64 + 63)) == NULL)
-		goto err1;
-	XY = (uint32_t *)(((uintptr_t)(XY0) + 63) & ~ (uintptr_t)(63));
-#ifndef MAP_ANON
-	if ((V0 = malloc(128 * r * N + 63)) == NULL)
-		goto err2;
-	V = (uint32_t *)(((uintptr_t)(V0) + 63) & ~ (uintptr_t)(63));
-#endif
 #endif
 #ifdef MAP_ANON
 	if ((V0 = mmap(NULL, 128 * r * N, PROT_READ | PROT_WRITE,
@@ -420,18 +407,18 @@ crypto_scrypt(const uint8_t * passwd, size_t passwdlen,
 	if (munmap(V0, 128 * r * N))
 		goto err2;
 #else
-	free(V0);
+	pc_aligned_free(V0);
 #endif
-	free(XY0);
-	free(B0);
+	pc_aligned_free(XY0);
+	pc_aligned_free(B0);
 
 	/* Success! */
 	return (0);
 
 err2:
-	free(XY0);
+	pc_aligned_free(XY0);
 err1:
-	free(B0);
+	pc_aligned_free(B0);
 err0:
 	/* Failure! */
 	return (-1);

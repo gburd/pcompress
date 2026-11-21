@@ -30,6 +30,7 @@
 #include <arpa/inet.h>
 /* Public types (pc_ctx_t, pc_error_t, pc_log_fn, PC_LOG_*): one definition. */
 #include "../include/pcompress/pcompress.h"
+#include "pc_alloc.h"
 #include <sys/types.h>
 
 #ifndef __STDC_FORMAT_MACROS

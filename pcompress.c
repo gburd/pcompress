@@ -1250,8 +1250,8 @@ dec_output_name(pc_ctx_t *pctx, const char *filename, char **to_filename)
 		char *real;
 
 		origf = *to_filename;
-		if ((real = realpath(origf, NULL)) != NULL) {
-			free(real);
+		if ((real = pc_realpath(origf)) != NULL) {
+			pc_mfree(real);
 			log_msg(LOG_ERR, 0, "File %s exists", origf);
 			return (-1);
 		}
@@ -1343,11 +1343,11 @@ dec_crypto_wipe(struct dec_crypto *c)
 {
 	if (c->salt1 != NULL) {
 		memset(c->salt1, 0, c->saltlen);
-		free(c->salt1);
+		pc_mfree(c->salt1);
 	}
 	if (c->salt2 != NULL) {
 		memset(c->salt2, 0, c->saltlen);
-		free(c->salt2);
+		pc_mfree(c->salt2);
 	}
 	memset(c, 0, sizeof (*c));
 }
@@ -1383,8 +1383,8 @@ dec_read_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h,
 		log_msg(LOG_ERR, 0, "Invalid salt length %d. File corrupt ?", c->saltlen);
 		return (-1);
 	}
-	c->salt1 = (uchar_t *)malloc(c->saltlen);
-	c->salt2 = (uchar_t *)malloc(c->saltlen);
+	c->salt1 = (uchar_t *)pc_malloc(c->saltlen);
+	c->salt2 = (uchar_t *)pc_malloc(c->saltlen);
 	if (c->salt1 == NULL || c->salt2 == NULL ||
 	    Read(compfd, c->salt1, c->saltlen) < c->saltlen) {
 		log_msg(LOG_ERR, 1, "Read: ");
@@ -2040,6 +2040,7 @@ dec_archive_done(pc_ctx_t *pctx, int err)
 	if (pctx->enable_rabin_global) {
 		close(pctx->archive_temp_fd);
 		unlink(pctx->archive_temp_file);
+		rm_fname(pctx->archive_temp_file);
 	}
 	Sem_Destroy(&(pctx->read_sem));
 	Sem_Destroy(&(pctx->write_sem));
@@ -2803,7 +2804,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 			}
 			tmp1 = get_temp_dir();
 			strcpy(tmpfile1, tmp1);
-			free(tmp1);
+			pc_mfree(tmp1);
 		}
 
 		tmp = getenv("PCOMPRESS_CACHE_DIR");
@@ -2864,7 +2865,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		 */
 		tmp = get_temp_dir();
 		strcpy(tmpdir, tmp);
-		free(tmp);
+		pc_mfree(tmp);
 	}
 
 	if (pctx->enable_rabin_global) {
@@ -3443,7 +3444,7 @@ comp_done:
 		while (fn) {
 			fn1 = fn;
 			fn = fn->next;
-			free(fn1->filename);
+			pc_mfree(fn1->filename);
 			slab_release(NULL, fn1);
 		}
 		Sem_Destroy(&(pctx->read_sem));
@@ -3613,7 +3614,7 @@ init_algo(pc_ctx_t *pctx, const char *algo, int bail)
 pc_ctx_t DLL_EXPORT * 
 create_pc_context(void)
 {
-	pc_ctx_t *ctx = (pc_ctx_t *)malloc(sizeof (pc_ctx_t));
+	pc_ctx_t *ctx = (pc_ctx_t *)pc_malloc(sizeof (pc_ctx_t));
 
 	if (ctx == NULL)
 		return (NULL);
@@ -3622,7 +3623,7 @@ create_pc_context(void)
 		    "       Compiled with: %s\n"
 		    "       Runtime:       %s\n",
 		    ossl_compiled_version(), ossl_runtime_version());
-		free(ctx);
+		pc_mfree(ctx);
 		return (NULL);
 	}
 	slab_init();
@@ -3630,7 +3631,7 @@ create_pc_context(void)
 	init_archive_mod();
 
 	memset(ctx, 0, sizeof (pc_ctx_t));
-	ctx->exec_name = (char *)malloc(NAME_MAX);
+	ctx->exec_name = (char *)pc_malloc(NAME_MAX);
 	ctx->hide_cmp_stats = 1;
 	ctx->enable_rabin_split = 1;
 	ctx->rab_blk_size = -1;
@@ -3649,19 +3650,19 @@ void DLL_EXPORT
 destroy_pc_context(pc_ctx_t *pctx)
 {
 	cleanup_crypto(&(pctx->crypto_ctx));
-	/* Always heap-owned (realpath() or strdup()), NULL for stdin. */
-	free((void *)(pctx->filename));
+	/* Always heap-owned (pc_realpath() or pc_strdup()), NULL for stdin. */
+	pc_mfree((void *)(pctx->filename));
 	if (pctx->pwd_file)
-		free(pctx->pwd_file);
-	free((void *)(pctx->exec_name));
+		pc_mfree(pctx->pwd_file);
+	pc_mfree((void *)(pctx->exec_name));
 	free_filters(pctx);
 	if (pctx->pw_copy != NULL) {
 		memset(pctx->pw_copy, 0, pctx->pw_copy_len);
-		free(pctx->pw_copy);
+		pc_mfree(pctx->pw_copy);
 	}
 	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
 	chunk_codecs_free(pctx);
-	free(pctx);
+	pc_mfree(pctx);
 }
 
 int DLL_EXPORT
@@ -3854,11 +3855,11 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 	memset(&g, 0, sizeof (g));
 	g.ind = 1;
 	g.prog = argv[0];
-	g.opts = malloc(argc * sizeof (char *));
-	g.ops = malloc(argc * sizeof (char *));
+	g.opts = pc_malloc(argc * sizeof (char *));
+	g.ops = pc_malloc(argc * sizeof (char *));
 	if (g.opts == NULL || g.ops == NULL) {
-		free(g.opts);
-		free(g.ops);
+		pc_mfree(g.opts);
+		pc_mfree(g.ops);
 		log_msg(LOG_ERR, 0, "Out of memory");
 		return (1);
 	}
@@ -3972,7 +3973,7 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'w':
-			pctx->pwd_file = strdup(oarg);
+			pctx->pwd_file = pc_strdup(oarg);
 			break;
 
 		    case 'F':
@@ -4062,8 +4063,8 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 opt_done:
 	/* On success the loop ended at -1: argv is permuted, g.ind = first operand. */
 	my_optind = g.ind;
-	free(g.opts);
-	free(g.ops);
+	pc_mfree(g.opts);
+	pc_mfree(g.ops);
 	if (err)
 		return (err);
 
@@ -4199,10 +4200,10 @@ opt_done:
 				while (num_rem > 0) {
 					char *filename;
 
-					if ((filename = realpath(argv[my_optind], NULL)) != NULL) {
-						free(filename);
+					if ((filename = pc_realpath(argv[my_optind])) != NULL) {
+						pc_mfree(filename);
 						*fn = slab_alloc(NULL, sizeof (struct fn_list));
-						(*fn)->filename = strdup(argv[my_optind]);
+						(*fn)->filename = pc_strdup(argv[my_optind]);
 						(*fn)->next = NULL;
 						fn = &((*fn)->next);
 						valid_paths++;
@@ -4225,9 +4226,9 @@ opt_done:
 					return (1);
 				}
 				if (valid_paths == 1)
-					pctx->filename = strdup(pctx->fn->filename);
+					pctx->filename = pc_strdup(pctx->fn->filename);
 			} else {
-				if ((pctx->filename = realpath(argv[my_optind], NULL)) == NULL) {
+				if ((pctx->filename = pc_realpath(argv[my_optind])) == NULL) {
 					log_msg(LOG_ERR, 1, "%s", argv[my_optind]);
 					return (1);
 				}
@@ -4244,13 +4245,13 @@ opt_done:
 					strcpy(apath, argv[my_optind]);
 					if (!endswith(apath, COMP_EXTN))
 						strcat(apath, COMP_EXTN);
-					pctx->to_filename = realpath(apath, NULL);
+					pctx->to_filename = pc_realpath(apath);
 
 					/* Check if compressed file exists */
 					if (pctx->to_filename != NULL) {
 						log_msg(LOG_ERR, 0, "Compressed file %s exists",
 						    pctx->to_filename);
-						free((void *)(pctx->to_filename));
+						pc_mfree((void *)(pctx->to_filename));
 						return (1);
 					}
 					pctx->to_filename = argv[my_optind];
@@ -4258,13 +4259,13 @@ opt_done:
 			} else {
 				strcpy(apath, pctx->filename);
 				strcat(apath, COMP_EXTN);
-				pctx->to_filename = realpath(apath, NULL);
+				pctx->to_filename = pc_realpath(apath);
 
 				/* Check if compressed file exists */
 				if (pctx->to_filename != NULL) {
 					log_msg(LOG_ERR, 0, "Compressed file %s exists",
 					    pctx->to_filename);
-					free((void *)(pctx->to_filename));
+					pc_mfree((void *)(pctx->to_filename));
 					return (1);
 				}
 			}
@@ -4275,7 +4276,7 @@ opt_done:
 			if (*(argv[my_optind]) == '-') {
 				pctx->filename = NULL;
 			} else {
-				if ((pctx->filename = realpath(argv[my_optind], NULL)) == NULL) {
+				if ((pctx->filename = pc_realpath(argv[my_optind])) == NULL) {
 					log_msg(LOG_ERR, 1, "%s", argv[my_optind]);
 					return (1);
 				}
@@ -4568,12 +4569,12 @@ pc_set_password(pc_ctx_t *ctx, const void *pw, size_t len)
 {
 	if (ctx->pw_copy != NULL) {
 		memset(ctx->pw_copy, 0, ctx->pw_copy_len);
-		free(ctx->pw_copy);
+		pc_mfree(ctx->pw_copy);
 		ctx->pw_copy = NULL;
 	}
 	if (pw == NULL || len == 0 || len > INT32_MAX)
 		return (bad_arg(ctx, "password", "empty"));
-	if ((ctx->pw_copy = malloc(len)) == NULL)
+	if ((ctx->pw_copy = pc_malloc(len)) == NULL)
 		return (bad_arg(ctx, "password", "out of memory"));
 	memcpy(ctx->pw_copy, pw, len);
 	ctx->pw_copy_len = len;
@@ -4651,7 +4652,7 @@ run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
 		j->out_fd = out_fd;
 		if (ctx->pw_copy != NULL) {
 			/* The job wipes what it is given: give it its own copy. */
-			if ((pw = malloc(ctx->pw_copy_len)) == NULL) {
+			if ((pw = pc_malloc(ctx->pw_copy_len)) == NULL) {
 				log_error_code(PC_ERR_NOMEM);
 				log_msg(LOG_ERR, 0, "Out of memory");
 				rv = 1;
@@ -4665,7 +4666,7 @@ run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
 			    start_decompress_impl(j, NULL, NULL);
 		if (pw != NULL) {
 			memset(pw, 0, ctx->pw_copy_len);
-			free(pw);
+			pc_mfree(pw);
 		}
 	}
 	log_bind(prev);

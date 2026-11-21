@@ -177,7 +177,7 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 		sz1 = (int)ntohl(I32_P(src));
 		if (sz1 <= 0 || sz1 > LZ4_compressBound(_dstlen) || _dstlen < 0)
 			return (-1);
-		if ((mid = malloc(sz1)) == NULL)
+		if ((mid = pc_malloc(sz1)) == NULL)
 			return (-1);
 		rv = LZ4_decompress_safe((const char *)src + sizeof (int), mid,
 		    (int)srclen - (int)sizeof (int), sz1);
@@ -185,7 +185,7 @@ lz4_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 			rv = LZ4_decompress_safe(mid, (char *)dst, sz1, _dstlen);
 		else
 			rv = -1;
-		free(mid);
+		pc_mfree(mid);
 		if (rv != _dstlen) {
 			return (-1);
 		}

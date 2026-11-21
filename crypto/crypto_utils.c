@@ -386,27 +386,10 @@ deserialize_checksum(uchar_t *checksum, uchar_t *buf, int cksum_bytes)
 /*
  * blake2b_state (64) and Keccak's hashState (32) are declared over-aligned
  * and their SIMD code relies on it; malloc() only guarantees 16 (SIGSEGV
- * with clang's AVX code). Contexts are released with free().
+ * with clang's AVX code). Contexts are released with aligned_ctx_free().
  */
-static void *
-aligned_ctx_alloc(size_t sz)
-{
-	void *p = NULL;
-
-#ifdef _WIN32
-	/* No posix_memalign(); this memory goes back through _aligned_free(). */
-	p = _aligned_malloc(sz, 64);
-#else
-	if (posix_memalign(&p, 64, sz) != 0)
-		return (NULL);
-#endif
-	return (p);
-}
-#ifdef _WIN32
-#define	aligned_ctx_free(p)	_aligned_free(p)
-#else
-#define	aligned_ctx_free(p)	free(p)
-#endif
+#define	aligned_ctx_alloc(sz)	pc_aligned_alloc(64, (sz))
+#define	aligned_ctx_free(p)	pc_aligned_free(p)
 #define	blake_state_alloc()	aligned_ctx_alloc(sizeof (blake2b_state))
 
 int
@@ -443,28 +426,28 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 		mctx->mac_ctx_reinit = ctx;
 
 	} else if (cksum == CKSUM_SKEIN256) {
-		Skein_512_Ctxt_t *ctx = (Skein_512_Ctxt_t *)malloc(sizeof (Skein_512_Ctxt_t));
+		Skein_512_Ctxt_t *ctx = (Skein_512_Ctxt_t *)pc_malloc(sizeof (Skein_512_Ctxt_t));
 		if (!ctx) return (-1);
 		Skein_512_InitExt(ctx, 256, SKEIN_CFG_TREE_INFO_SEQUENTIAL,
 				 cctx->pkey, cctx->keylen);
 		mctx->mac_ctx = ctx;
-		ctx = (Skein_512_Ctxt_t *)malloc(sizeof (Skein_512_Ctxt_t));
+		ctx = (Skein_512_Ctxt_t *)pc_malloc(sizeof (Skein_512_Ctxt_t));
 		if (!ctx) {
-			free(mctx->mac_ctx);
+			pc_mfree(mctx->mac_ctx);
 			return (-1);
 		}
 		memcpy(ctx, mctx->mac_ctx, sizeof (Skein_512_Ctxt_t));
 		mctx->mac_ctx_reinit = ctx;
 
 	} else if (cksum == CKSUM_SKEIN512) {
-		Skein_512_Ctxt_t *ctx = (Skein_512_Ctxt_t *)malloc(sizeof (Skein_512_Ctxt_t));
+		Skein_512_Ctxt_t *ctx = (Skein_512_Ctxt_t *)pc_malloc(sizeof (Skein_512_Ctxt_t));
 		if (!ctx) return (-1);
 		Skein_512_InitExt(ctx, 512, SKEIN_CFG_TREE_INFO_SEQUENTIAL,
 				  cctx->pkey, cctx->keylen);
 		mctx->mac_ctx = ctx;
-		ctx = (Skein_512_Ctxt_t *)malloc(sizeof (Skein_512_Ctxt_t));
+		ctx = (Skein_512_Ctxt_t *)pc_malloc(sizeof (Skein_512_Ctxt_t));
 		if (!ctx) {
-			free(mctx->mac_ctx);
+			pc_mfree(mctx->mac_ctx);
 			return (-1);
 		}
 		memcpy(ctx, mctx->mac_ctx, sizeof (Skein_512_Ctxt_t));
@@ -479,24 +462,24 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 
 			ctx = HMAC_CTX_new();
 			if (!ctx) {
-				free(mctx->mac_ctx);
+				HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 				return (-1);
 			}
 			if (!HMAC_CTX_copy(ctx, (HMAC_CTX *)(mctx->mac_ctx))) {
-				free(ctx);
-				free(mctx->mac_ctx);
+				HMAC_CTX_free(ctx);
+				HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 				return (-1);
 			}
 			mctx->mac_ctx_reinit = ctx;
 		} else {
-			HMAC_SHA512_Context *ctx = (HMAC_SHA512_Context *)malloc(sizeof (HMAC_SHA512_Context));
+			HMAC_SHA512_Context *ctx = (HMAC_SHA512_Context *)pc_malloc(sizeof (HMAC_SHA512_Context));
 			if (!ctx) return (-1);
 			opt_HMAC_SHA512t256_Init(ctx, cctx->pkey, cctx->keylen);
 			mctx->mac_ctx = ctx;
 
-			ctx = (HMAC_SHA512_Context *)malloc(sizeof (HMAC_SHA512_Context));
+			ctx = (HMAC_SHA512_Context *)pc_malloc(sizeof (HMAC_SHA512_Context));
 			if (!ctx) {
-				free(mctx->mac_ctx);
+				pc_mfree(mctx->mac_ctx);
 				return (-1);
 			}
 			memcpy(ctx, mctx->mac_ctx, sizeof (HMAC_SHA512_Context));
@@ -511,24 +494,24 @@ hmac_init(mac_ctx_t *mctx, int cksum, crypto_ctx_t *cctx)
 
 			ctx = HMAC_CTX_new();
 			if (!ctx) {
-				free(mctx->mac_ctx);
+				HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 				return (-1);
 			}
 			if (!HMAC_CTX_copy(ctx, (HMAC_CTX *)(mctx->mac_ctx))) {
-				free(ctx);
-				free(mctx->mac_ctx);
+				HMAC_CTX_free(ctx);
+				HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 				return (-1);
 			}
 			mctx->mac_ctx_reinit = ctx;
 		} else {
-			HMAC_SHA512_Context *ctx = (HMAC_SHA512_Context *)malloc(sizeof (HMAC_SHA512_Context));
+			HMAC_SHA512_Context *ctx = (HMAC_SHA512_Context *)pc_malloc(sizeof (HMAC_SHA512_Context));
 			if (!ctx) return (-1);
 			opt_HMAC_SHA512_Init(ctx, cctx->pkey, cctx->keylen);
 			mctx->mac_ctx = ctx;
 
-			ctx = (HMAC_SHA512_Context *)malloc(sizeof (HMAC_SHA512_Context));
+			ctx = (HMAC_SHA512_Context *)pc_malloc(sizeof (HMAC_SHA512_Context));
 			if (!ctx) {
-				free(mctx->mac_ctx);
+				pc_mfree(mctx->mac_ctx);
 				return (-1);
 			}
 			memcpy(ctx, mctx->mac_ctx, sizeof (HMAC_SHA512_Context));
@@ -699,12 +682,10 @@ hmac_cleanup(mac_ctx_t *mctx)
 	if (cksum == CKSUM_BLAKE256 || cksum == CKSUM_BLAKE512) {
 		memset(mctx->mac_ctx, 0, sizeof (blake2b_state));
 		memset(mctx->mac_ctx_reinit, 0, sizeof (blake2b_state));
-#ifdef _WIN32
-		/* _aligned_malloc() memory: not for the free() below. */
+		/* pc_aligned_alloc() memory: not for the pc_mfree() below. */
 		aligned_ctx_free(mctx->mac_ctx);
 		aligned_ctx_free(mctx->mac_ctx_reinit);
 		mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
-#endif
 
 	} else if (cksum == CKSUM_SKEIN256 || cksum == CKSUM_SKEIN512) {
 		memset(mctx->mac_ctx, 0, sizeof (Skein_512_Ctxt_t));
@@ -715,7 +696,7 @@ hmac_cleanup(mac_ctx_t *mctx)
 			/*
 			 * HMAC_CTX_free() releases the context allocated by
 			 * HMAC_CTX_new(); NULL the pointers so the trailing
-			 * free() below does not double-free them.
+			 * pc_mfree() below does not double-free them.
 			 */
 			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx));
 			HMAC_CTX_free((HMAC_CTX *)(mctx->mac_ctx_reinit));
@@ -728,18 +709,15 @@ hmac_cleanup(mac_ctx_t *mctx)
 	} else if (cksum == CKSUM_KECCAK256 || cksum == CKSUM_KECCAK512) {
 		memset(mctx->mac_ctx, 0, sizeof (hashState));
 		memset(mctx->mac_ctx_reinit, 0, sizeof (hashState));
-#ifdef _WIN32
-		/* _aligned_malloc() memory: not for the free() below. */
 		aligned_ctx_free(mctx->mac_ctx);
 		aligned_ctx_free(mctx->mac_ctx_reinit);
 		mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
-#endif
 	} else {
 		return (-1);
 	}
 	mctx->mac_cksum = 0;
-	free(mctx->mac_ctx);
-	free(mctx->mac_ctx_reinit);
+	pc_mfree(mctx->mac_ctx);
+	pc_mfree(mctx->mac_ctx_reinit);
 	mctx->mac_ctx = mctx->mac_ctx_reinit = NULL;
 	return (0);
 }
@@ -786,12 +764,12 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 		sctx = NULL;
 
 		if (crypto_alg == CRYPTO_ALG_AES) {
-			actx = (aes_ctx_t *)malloc(sizeof (aes_ctx_t));
+			actx = (aes_ctx_t *)pc_malloc(sizeof (aes_ctx_t));
 			actx->keylen = keylen;
 			cctx->pkey = actx->pkey;
 			aes_module_init(&proc_info);
 		} else {
-			sctx = (salsa20_ctx_t *)malloc(sizeof (salsa20_ctx_t));
+			sctx = (salsa20_ctx_t *)pc_malloc(sizeof (salsa20_ctx_t));
 			sctx->keylen = keylen;
 			cctx->pkey = sctx->pkey;
 		}
@@ -804,7 +782,7 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 			/*
 			 * Encryption init.
 			 */
-			cctx->salt = (uchar_t *)malloc(32);
+			cctx->salt = (uchar_t *)pc_malloc(32);
 			salt = cctx->salt;
 			cctx->saltlen = 32;
 			if (RAND_status() != 1 || RAND_bytes(salt, 32) != 1) {
@@ -859,13 +837,13 @@ init_crypto(crypto_ctx_t *cctx, uchar_t *pwd, int pwd_len, int crypto_alg,
 			if (saltlen > MAX_SALTLEN) {
 				log_msg(LOG_ERR, 0, "Salt too long. Max allowed length is %d\n",
 				    MAX_SALTLEN);
-				free(actx);
+				pc_mfree(actx);
 				return (-1);
 			}
-			cctx->salt = (uchar_t *)malloc(saltlen);
+			cctx->salt = (uchar_t *)pc_malloc(saltlen);
 			if (cctx->salt == NULL) {
-				free(actx);
-				free(sctx);
+				pc_mfree(actx);
+				pc_mfree(sctx);
 				return (-1);
 			}
 			memcpy(cctx->salt, salt, saltlen);
@@ -960,7 +938,7 @@ cleanup_crypto(crypto_ctx_t *cctx)
 	}
 	if (cctx->salt) {
 		memset(cctx->salt, 0, cctx->saltlen);
-		free(cctx->salt);
+		pc_mfree(cctx->salt);
 		cctx->salt = NULL;
 	}
 	cctx->pkey = NULL;
@@ -1060,8 +1038,8 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 	/* +2: the newline and the NUL, so PC_PW_MAX bytes fit. */
 	size_t sz = PC_PW_MAX + 2;
 
-	if ((pw1 = calloc(1, sz)) == NULL || (pw2 = calloc(1, sz)) == NULL) {
-		free(pw1);
+	if ((pw1 = pc_calloc(1, sz)) == NULL || (pw2 = pc_calloc(1, sz)) == NULL) {
+		pc_mfree(pw1);
 		return (-1);
 	}
 	// Try TTY first
@@ -1128,8 +1106,8 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 out:
 	memset(pw1, 0, sz);
 	memset(pw2, 0, sz);
-	free(pw1);
-	free(pw2);
+	pc_mfree(pw1);
+	pc_mfree(pw2);
 	if (input != stdin)
 		fclose(input);
 	return (rv);

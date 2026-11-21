@@ -254,7 +254,7 @@ aes_cleanup(aes_ctx_t *ctx)
 {
 	memset((void *)(&ctx->key), 0, sizeof (ctx->key));
 	ctx->nonce = 0;
-	free(ctx);
+	pc_mfree(ctx);
 }
 
 /* Restore warnings after OpenSSL 3.x deprecated API usage */

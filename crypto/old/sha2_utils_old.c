@@ -56,11 +56,11 @@ ossl_SHA256_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 	 * If not then just do a simple serial hashing.
 	 */
 	if (bytes / 2 <= SHA512_BLOCK_SIZE * 4) {
-		mctx = (SHA256_CTX *)malloc(sizeof (SHA256_CTX));
+		mctx = (SHA256_CTX *)pc_malloc(sizeof (SHA256_CTX));
 		SHA256_Init(mctx);
 		SHA256_Update(mctx, buf, bytes);
 		SHA256_Final(cksum_buf, mctx);
-		free(mctx);
+		pc_mfree(mctx);
 		return;
 	}
 	pos[0] = buf;
@@ -78,11 +78,11 @@ ossl_SHA256_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 		SHA256_Update(&ctx, pos[i], len[i]);
 		SHA256_Final(cksum[i], &ctx);
 	}
-	mctx = (SHA256_CTX *)malloc(sizeof (SHA256_CTX));
+	mctx = (SHA256_CTX *)pc_malloc(sizeof (SHA256_CTX));
 	SHA256_Init(mctx);
 	SHA256_Update(mctx, cksum, 2 * 32);
 	SHA256_Final(cksum_buf, mctx);
-	free(mctx);
+	pc_mfree(mctx);
 }
 
 void
@@ -99,11 +99,11 @@ ossl_SHA512_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 	 * If not then just do a simple hashing.
 	 */
 	if (bytes / 2 <= SHA512_BLOCK_SIZE * 4) {
-		mctx = (SHA512_CTX *)malloc(sizeof (SHA512_CTX));
+		mctx = (SHA512_CTX *)pc_malloc(sizeof (SHA512_CTX));
 		SHA512_Init(mctx);
 		SHA512_Update(mctx, buf, bytes);
 		SHA512_Final(cksum_buf, mctx);
-		free(mctx);
+		pc_mfree(mctx);
 		return;
 	}
 	pos[0] = buf;
@@ -120,11 +120,11 @@ ossl_SHA512_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 		SHA512_Update(&ctx, pos[i], len[i]);
 		SHA512_Final(cksum[i], &ctx);
 	}
-	mctx = (SHA512_CTX *)malloc(sizeof (SHA512_CTX));
+	mctx = (SHA512_CTX *)pc_malloc(sizeof (SHA512_CTX));
 	SHA512_Init(mctx);
 	SHA512_Update(mctx, cksum, 2 * 64);
 	SHA512_Final(cksum_buf, mctx);
-	free(mctx);
+	pc_mfree(mctx);
 }
 
 void
@@ -141,11 +141,11 @@ opt_SHA512t256_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 	 * If not then just do a simple serial hashing.
 	 */
 	if (bytes / 2 <= SHA512_BLOCK_SIZE * 4) {
-		mctx = (SHA512_Context *)malloc(sizeof (SHA512_Context));
+		mctx = (SHA512_Context *)pc_malloc(sizeof (SHA512_Context));
 		opt_SHA512t256_Init(mctx);
 		opt_SHA512t256_Update(mctx, buf, bytes);
 		opt_SHA512t256_Final(mctx, cksum_buf);
-		free(mctx);
+		pc_mfree(mctx);
 		return;
 	}
 	pos[0] = buf;
@@ -162,11 +162,11 @@ opt_SHA512t256_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 		opt_SHA512t256_Update(&ctx, pos[i], len[i]);
 		opt_SHA512t256_Final(&ctx, cksum[i]);
 	}
-	mctx = (SHA512_Context *)malloc(sizeof (SHA512_Context));
+	mctx = (SHA512_Context *)pc_malloc(sizeof (SHA512_Context));
 	opt_SHA512t256_Init(mctx);
 	opt_SHA512t256_Update(mctx, cksum, 2 * 32);
 	opt_SHA512t256_Final(mctx, cksum_buf);
-	free(mctx);
+	pc_mfree(mctx);
 }
 
 void
@@ -183,11 +183,11 @@ opt_SHA512_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 	 * If not then just do a simple serial hashing.
 	 */
 	if (bytes / 2 <= SHA512_BLOCK_SIZE * 4) {
-		mctx = (SHA512_Context *)malloc(sizeof (SHA512_Context));
+		mctx = (SHA512_Context *)pc_malloc(sizeof (SHA512_Context));
 		opt_SHA512_Init(mctx);
 		opt_SHA512_Update(mctx, buf, bytes);
 		opt_SHA512_Final(mctx, cksum_buf);
-		free(mctx);
+		pc_mfree(mctx);
 		return;
 	}
 	pos[0] = buf;
@@ -204,11 +204,11 @@ opt_SHA512_par_old(uchar_t *cksum_buf, uchar_t *buf, uint64_t bytes)
 		opt_SHA512_Update(&ctx, pos[i], len[i]);
 		opt_SHA512_Final(&ctx, cksum[i]);
 	}
-	mctx = (SHA512_Context *)malloc(sizeof (SHA512_Context));
+	mctx = (SHA512_Context *)pc_malloc(sizeof (SHA512_Context));
 	opt_SHA512_Init(mctx);
 	opt_SHA512_Update(mctx, cksum, 2 * 64);
 	opt_SHA512_Final(mctx, cksum_buf);
-	free(mctx);
+	pc_mfree(mctx);
 }
 
 /* Restore warnings after OpenSSL 3.x deprecated API usage */

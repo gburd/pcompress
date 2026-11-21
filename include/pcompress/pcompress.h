@@ -85,6 +85,39 @@ enum {
 /** Log callback: called from library threads, never concurrently for one context. */
 typedef void (*pc_log_fn)(void *arg, int level, const char *msg);
 
+/* --- Embedding: process-wide hooks, set before any other call --------- */
+
+/**
+ * Memory functions for the library's allocations. size is
+ * sizeof (pc_allocator_t), set by the caller; all three functions are
+ * required, and ud is passed to each. The library calls them from its own
+ * threads, so they must be thread-safe. realloc and free are never given
+ * NULL; calloc is malloc plus memset.
+ */
+typedef struct {
+	size_t size;
+	void *(*malloc)(void *ud, size_t n);
+	void *(*realloc)(void *ud, void *p, size_t n);
+	void (*free)(void *ud, void *p);
+	void *ud;
+} pc_allocator_t;
+
+/**
+ * Use a for the library's memory, for the whole process; NULL restores the
+ * C library's. Call it before anything that allocates (pc_new(),
+ * create_pc_context(), pc_chunker_new(), pc_index_open(), pc_manifest_*,
+ * pc_keyfile_*, pc_chunk_*): once the library has allocated anything it
+ * returns -1 and changes nothing, as it does for a struct whose size is
+ * too small or that lacks a function. 0 on success.
+ *
+ * Not covered: libarchive (archive mode) and OpenSSL allocate on their own
+ * (OpenSSL's CRYPTO_set_mem_functions() covers it), as do the C++ filters
+ * (packJPG, packPNM, dispack, the dictionary filter), the OpenMP runtime,
+ * and the internals of the system zlib and bzip2 beyond the allocation
+ * hooks the library gives them, which they honour.
+ */
+int pc_set_allocator(const pc_allocator_t *a);
+
 /** Library version string, e.g. "4.1.0". */
 const char *pc_version(void);
 

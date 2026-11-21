@@ -145,8 +145,8 @@ scratch_free(void *p)
 {
 	struct scratch_buffer *b = (struct scratch_buffer *)p;
 
-	free(b->in_buff);
-	free(b);
+	pc_mfree(b->in_buff);
+	pc_mfree(b);
 }
 
 static void
@@ -162,7 +162,7 @@ thread_scratch(void)
 
 	pthread_once(&scratch_once, scratch_key_init);
 	if ((b = pthread_getspecific(scratch_key)) == NULL) {
-		if ((b = calloc(1, sizeof (*b))) == NULL)
+		if ((b = pc_calloc(1, sizeof (*b))) == NULL)
 			return (NULL);
 		(void) pthread_setspecific(scratch_key, b);
 	}
@@ -179,9 +179,9 @@ ensure_buffer(struct scratch_buffer *unused, uint64_t len)
 	if (sdat == NULL)
 		return (NULL);
 	if (sdat->in_buff == NULL || sdat->in_bufflen < len) {
-		free(sdat->in_buff);
+		pc_mfree(sdat->in_buff);
 		sdat->in_bufflen = len;
-		sdat->in_buff = malloc(sdat->in_bufflen);
+		sdat->in_buff = pc_malloc(sdat->in_bufflen);
 		if (sdat->in_buff == NULL)
 			sdat->in_bufflen = 0;
 	}
@@ -281,7 +281,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * version number. We also check if it is supported.
 		 */
 		if (mapbuf[0] != 'J' || mapbuf[1] != 'S' || !pjg_version_supported(mapbuf[2])) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -299,7 +299,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		len = packjpg_filter_process(mapbuf, len, &out);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -325,9 +325,9 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -400,7 +400,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * Write the raw data and skip.
 		 */
 		if (identify_pnm_type(mapbuf, len - 8) != 2) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -418,7 +418,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		len = packpnm_filter_process(mapbuf, len, &out);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -444,9 +444,9 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -524,7 +524,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 */
 		wpkstr = (char *)mapbuf;
 		if (strncmp(wpkstr, "wvpk", 4) != 0) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -542,7 +542,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		len = wavpack_filter_encode(mapbuf, len, &out, fi->cmp_level);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -568,9 +568,9 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -644,7 +644,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		len = dispack_filter_encode(mapbuf, len, &out);
 		if (len == 0) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -670,9 +670,9 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);

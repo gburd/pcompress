@@ -1,3 +1,15 @@
+== Unreleased ==
+Library: pc_set_allocator() gives the library a host program's memory
+  functions (malloc, realloc, free and a user pointer), process-wide,
+  before its first allocation. The library's own code, the bundled zstd,
+  lz4 and libbsc, and the lzma, PPMd, zlib and bzip2 allocation hooks use
+  them; libarchive, OpenSSL, the C++ filters and OpenMP do not. Archive
+  jobs no longer leave their temporary file names registered for
+  pc_cleanup_tempfiles() after they end.
+Tests: test_alloc installs an allocator that tags every block and checks
+  each free, so a block freed by the wrong allocator fails, and checks
+  that no block is left once everything is freed.
+
 == 4.4.0 Release ==
 Library: pc_derive_key(master, purpose, out) derives one 256-bit key per
   named purpose from a master key, so a backup tool can name objects

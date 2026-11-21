@@ -84,7 +84,7 @@ char    *renewx(/*_ struct reroot *r _*/);
 }
 
 /* malloc, but complain to stderr and exit program if no joy */
-/* use plain free() to free memory allocated by remalloc() */
+/* use pc_mfree() to free memory allocated by remalloc() */
 char    *remalloc(/*_ size_t len, char *purpose _*/);
 
 #endif  /* RECYCLE */

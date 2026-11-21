@@ -61,7 +61,7 @@ dispack_filter_encode(uchar_t *inData, size_t len, uchar_t **out_buf)
 	FileHeader hdr;
 	sU32 sizeNow;
 
-	*out_buf = (uchar_t *)malloc(len);
+	*out_buf = (uchar_t *)pc_malloc(len);
 	if (*out_buf == NULL)
 		return (0);
 
@@ -153,7 +153,7 @@ dispack_filter_decode(uchar_t *inData, size_t len, uchar_t **out_buf)
 	sU8 *after = before + hdr->SizeBefore;
 
 	// alloc buffer for unfiltered code
-	*out_buf = (uchar_t *)malloc(len);
+	*out_buf = (uchar_t *)pc_malloc(len);
 	if (*out_buf == NULL)
 		return (0);
 

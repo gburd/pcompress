@@ -607,7 +607,7 @@ get_temp_dir(void)
 			}
 		}
 	}
-	return (strdup(tmp));
+	return (pc_strdup(tmp));
 }
 
 /*
@@ -642,7 +642,7 @@ pc_cleanup_tempfiles(void)
 void
 add_fname(char *fn)
 {
-	char *c = strdup(fn);
+	char *c = pc_strdup(fn);
 	int i;
 
 	if (c == NULL)
@@ -656,7 +656,7 @@ add_fname(char *fn)
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
-	free(c);	/* list full: not registered */
+	pc_mfree(c);	/* list full: not registered */
 }
 
 /* Was: overwrote the first used slot with fn instead of clearing fn's. */
@@ -675,7 +675,7 @@ rm_fname(char *fn)
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
-	free(c);
+	pc_mfree(c);
 }
 
 int

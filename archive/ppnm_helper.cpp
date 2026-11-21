@@ -69,6 +69,26 @@ typedef unsigned char uchar_t;
 static pthread_mutex_t codec_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
+ * The codec's result: its length, or 0 if it failed or did not shrink the
+ * data. Its buffer comes from the C library (malloc() inside the C++
+ * codec); the caller releases *out_buf with pc_mfree(), so it is moved
+ * into pc_malloc() memory.
+ */
+static size_t
+codec_output(bool ok, unsigned int len1, size_t len, uchar_t **out_buf)
+{
+	if (!ok)
+		return (0);
+	if (len1 == len) {
+		free(*out_buf);
+		*out_buf = NULL;
+		return (0);
+	}
+	*out_buf = (uchar_t *)pc_adopt(*out_buf, len1);
+	return (*out_buf != NULL ? len1 : 0);
+}
+
+/*
  * Helper routine to bridge to packPNM C++ lib, without changing packJPG itself.
  * packPNM has same API interface as packJPG. Just the function names are different.
  */
@@ -84,9 +104,7 @@ packpnm_filter_process(uchar_t *in_buf, size_t len, uchar_t **out_buf)
 	len1 = len;
 	ok = ppnlib_convert_stream2mem(out_buf, &len1, NULL);
 	pthread_mutex_unlock(&codec_lock);
-	if (!ok || len1 == len)
-		return (0);
-	return (len1);
+	return (codec_output(ok, len1, len, out_buf));
 }
 
 #ifdef	__cplusplus

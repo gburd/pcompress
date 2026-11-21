@@ -233,7 +233,7 @@ pack_audio(WavpackContext *wpc, read_data *rdat)
 
 	WavpackPackInit(wpc);
 	bytes_per_sample = WavpackGetBytesPerSample(wpc) * WavpackGetNumChannels(wpc);
-	sample_buffer = malloc(input_samples * sizeof (int32_t) * WavpackGetNumChannels(wpc));
+	sample_buffer = pc_malloc(input_samples * sizeof (int32_t) * WavpackGetNumChannels(wpc));
 	samples_remaining = WavpackGetNumSamples(wpc);
 
 	while (1) {
@@ -289,12 +289,12 @@ pack_audio(WavpackContext *wpc, read_data *rdat)
 		}
 
 		if (!WavpackPackSamples(wpc, sample_buffer, sample_count)) {
-			free(sample_buffer);
+			pc_mfree(sample_buffer);
 			return (0);
 		}
 	}
 
-	free(sample_buffer);
+	pc_mfree(sample_buffer);
 	if (!WavpackFlushSamples(wpc)) {
 		return (0);
 	}
@@ -331,7 +331,7 @@ wavpack_filter_encode(uchar_t *in_buf, size_t len, uchar_t **out_buf, int cmp_le
 		loc_config.flags |= CONFIG_HIGH_FLAG;
 	}
 
-	*out_buf = (uchar_t *)malloc(len);
+	*out_buf = (uchar_t *)pc_malloc(len);
 	if (*out_buf == NULL) {
 		log_msg(LOG_ERR, 1, "malloc failed.");
 		return (0);
@@ -584,7 +584,7 @@ wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_buf, ssize_t ou
 	bps = WavpackGetBytesPerSample(wpc);
 	bytes_per_sample = num_channels * bps;
 
-	*out_buf = (uchar_t *)malloc(out_len);
+	*out_buf = (uchar_t *)pc_malloc(out_len);
 	if (*out_buf == NULL) {
 		log_msg(LOG_ERR, 1, "malloc failed.");
 		return (0);
@@ -614,9 +614,9 @@ wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_buf, ssize_t ou
 	}
 
 	result = TRUE;
-	temp_buffer = malloc (4096L * num_channels * 4);
+	temp_buffer = pc_malloc(4096L * num_channels * 4);
 	output_buffer_size = 1024 * 256;
-	output_buffer = malloc(output_buffer_size);
+	output_buffer = pc_malloc(output_buffer_size);
 	output_ptr = output_buffer;
 
 	while (result) {
@@ -639,7 +639,7 @@ wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_buf, ssize_t ou
 			if (!write_block(&wr_dat, output_buffer,
 			    (uint32_t)(output_ptr - output_buffer))) {
 				if (temp_buffer)
-					free(temp_buffer);
+					pc_mfree(temp_buffer);
 				WavpackCloseFile(wpc);
 				log_msg(LOG_ERR, 0, "Wavpack: Writing samples failed.");
 				return (0);
@@ -652,13 +652,13 @@ wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_buf, ssize_t ou
 	}
 
 	if (output_buffer)
-		free(output_buffer);
+		pc_mfree(output_buffer);
 
 	while (WavpackGetWrapperBytes(wpc)) {
 		if (!write_block(&wr_dat, WavpackGetWrapperData(wpc),
 		    WavpackGetWrapperBytes(wpc))) {
 			if (temp_buffer)
-				free(temp_buffer);
+				pc_mfree(temp_buffer);
 			WavpackCloseFile(wpc);
 			log_msg(LOG_ERR, 0, "Wavpack: Writing trailing data failed.");
 			return (0);
@@ -667,7 +667,7 @@ wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_buf, ssize_t ou
 		WavpackUnpackSamples(wpc, temp_buffer, 1); // perhaps there's more RIFF info...
 	}
 
-	free(temp_buffer);
+	pc_mfree(temp_buffer);
 	WavpackCloseFile(wpc);
 
 	return (wr_dat.bytes_written);

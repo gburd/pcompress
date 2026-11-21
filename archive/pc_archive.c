@@ -67,10 +67,11 @@
 
 static int inited = 0;
 static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* A static table: a process-wide allocation would outlive every context. */
 static struct ext_hash_entry {
 	uint64_t extnum;
 	int type;
-} *exthtab = NULL;
+} exthtab[PHASHNKEYS];
 
 /* No filters: used when a context has no table. */
 static struct type_data no_filters[NUM_SUB_TYPES+1];
@@ -543,10 +544,10 @@ read_next_path(pc_ctx_t *pctx, char *fpath, char **namechars, int *fpathlen)
 		if (srt1->pos > srt1->max) {
 			if (srt1 == pctx->archive_sort_buf) {
 				pctx->archive_sort_buf = srt1->next;
-				free(srt1);
+				pc_mfree(srt1);
 			} else {
 				psrt1->next = srt1->next;
-				free(srt1);
+				pc_mfree(srt1);
 			}
 		}
 	}
@@ -697,14 +698,14 @@ add_pathname(const char *fpath, const struct stat *sb,
 			 * Sort Buffer is full so sort it. Sorting is done by file extension and size.
 			 * If file has no extension then an algorithm is used, described below.
 			 */
-			srt = (struct sort_buf *)malloc(sizeof (struct sort_buf));
+			srt = (struct sort_buf *)pc_malloc(sizeof (struct sort_buf));
 			if (srt == NULL) {
 				log_msg(LOG_WARN, 0, "Out of memory for sort buffer. Continuing without sorting.");
 				a_state.srt = a_state.head;
 				while (a_state.srt) {
 					struct sort_buf *srt;
 					srt = a_state.srt->next;
-					free(a_state.srt);
+					pc_mfree(a_state.srt);
 					a_state.srt = srt;
 					goto cont;
 				}
@@ -732,7 +733,7 @@ add_pathname(const char *fpath, const struct stat *sb,
 			while (a_state.srt) {
 				struct sort_buf *srt;
 				srt = a_state.srt->next;
-				free(a_state.srt);
+				pc_mfree(a_state.srt);
 				a_state.srt = srt;
 				goto cont;
 			}
@@ -862,7 +863,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	 */
 	if (pctx->enable_archive_sort) {
 		struct sort_buf *srt;
-		srt = (struct sort_buf *)malloc(sizeof (struct sort_buf));
+		srt = (struct sort_buf *)pc_malloc(sizeof (struct sort_buf));
 		if (srt == NULL) {
 			log_msg(LOG_ERR, 0, "Out of memory.");
 			return (-1);
@@ -879,7 +880,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	tmpfile = pctx->archive_members_file;
 	tmp = get_temp_dir();
 	strcpy(tmpfile, tmp);
-	free(tmp);
+	pc_mfree(tmp);
 
 	strcat(tmpfile, "/.pcompXXXXXX");
 	if ((fd = mkstemp(tmpfile)) == -1) {
@@ -888,10 +889,10 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	}
 
 	add_fname(tmpfile);
-	pbuf = malloc(pctx->chunksize);
+	pbuf = pc_malloc(pctx->chunksize);
 	if (pbuf == NULL) {
 		log_msg(LOG_ERR, 0, "Out of memory.");
-		close(fd);  unlink(tmpfile);
+		close(fd);  unlink(tmpfile);  rm_fname(tmpfile);
 		return (-1);
 	}
 
@@ -963,7 +964,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 			ssize_t wrtn = Write(a_state.fd, a_state.pbuf, a_state.bufpos);
 			if (wrtn < a_state.bufpos) {
 				log_msg(LOG_ERR, 1, "Write failed.");
-				close(fd);  unlink(tmpfile);
+				close(fd);  unlink(tmpfile);  rm_fname(tmpfile);
 				return (-1);
 			}
 			a_state.bufpos = 0;
@@ -986,7 +987,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 
 	sbuf->st_size = pctx->archive_size;
 	lseek(fd, 0, SEEK_SET);
-	free(pbuf);
+	pc_mfree(pbuf);
 	sbuf->st_uid = geteuid();
 	sbuf->st_gid = getegid();
 	sbuf->st_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
@@ -996,6 +997,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 		log_msg(LOG_ERR, 1, "Unable to create libarchive context.\n");
 		close(fd);
 		unlink(tmpfile);
+		rm_fname(tmpfile);
 		return (-1);
 	}
 
@@ -1159,7 +1161,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 					}
 					rv = archive_write_data(arc, fout.out,
 								fout.out_size);
-					free(fout.out);
+					pc_mfree(fout.out);
 					close(fd);
 					if (rv != fout.out_size)
 						return (ARCHIVE_FATAL);
@@ -1238,7 +1240,7 @@ do_map:
 							}
 							rv = archive_write_data(arc, fout.out,
 										fout.out_size);
-							free(fout.out);
+							pc_mfree(fout.out);
 							close(fd);
 							if (rv != fout.out_size)
 								return (ARCHIVE_FATAL);
@@ -1521,6 +1523,7 @@ done:
 	archive_write_free(arc);
 	close(pctx->archive_members_fd);
 	unlink(pctx->archive_members_file);
+	rm_fname(pctx->archive_members_file);
 	return (NULL);
 }
 
@@ -1583,7 +1586,7 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 			if (fout.output_type == FILTER_OUTPUT_MEM) {
 				int rv;
 				rv = archive_write_data(aw, fout.out, fout.out_size);
-				free(fout.out);
+				pc_mfree(fout.out);
 				if (rv < ret)
 					ret = rv;
 				return (ret);
@@ -1952,28 +1955,22 @@ init_archive_mod(void) {
 	if (!inited) {
 		int i, j;
 
-		exthtab = malloc(PHASHNKEYS * sizeof (struct ext_hash_entry));
-		if (exthtab != NULL) {
-			for (i = 0; i < PHASHNKEYS; i++) {
-				uint64_t extnum;
-				ub4 slot = phash(extlist[i].ext, extlist[i].len);
-				extnum = 0;
+		for (i = 0; i < PHASHNKEYS; i++) {
+			uint64_t extnum;
+			ub4 slot = phash(extlist[i].ext, extlist[i].len);
+			extnum = 0;
 
-				/*
-				 * Since extensions are less than 8 bytes (or truncated otherwise),
-				 * each extension string is packed into a 64-bit integer for quick
-				 * comparison.
-				 */
-				for (j = 0; j < extlist[i].len; j++)
-					extnum = (extnum << 8) | extlist[i].ext[j];
-				exthtab[slot].extnum = extnum;
-				exthtab[slot].type = extlist[i].type;
-			}
-
-			inited = 1;
-		} else {
-			rv = 1;
+			/*
+			 * Since extensions are less than 8 bytes (or truncated otherwise),
+			 * each extension string is packed into a 64-bit integer for quick
+			 * comparison.
+			 */
+			for (j = 0; j < extlist[i].len; j++)
+				extnum = (extnum << 8) | extlist[i].ext[j];
+			exthtab[slot].extnum = extnum;
+			exthtab[slot].type = extlist[i].type;
 		}
+		inited = 1;
 	}
 	pthread_mutex_unlock(&init_mutex);
 	return (rv);
@@ -1982,7 +1979,7 @@ init_archive_mod(void) {
 void
 free_filters(pc_ctx_t *pctx)
 {
-	free(pctx->filter_table);
+	pc_mfree(pctx->filter_table);
 	pctx->filter_table = NULL;
 }
 
@@ -1997,7 +1994,7 @@ init_filters(pc_ctx_t *pctx, struct filter_flags *ff)
 	struct type_data *t;
 
 	free_filters(pctx);
-	t = calloc(NUM_SUB_TYPES + 1, sizeof (struct type_data));
+	t = pc_calloc(NUM_SUB_TYPES + 1, sizeof (struct type_data));
 	if (t == NULL)
 		return;	/* no filters: entries are stored unfiltered */
 	add_filters_by_type(t, ff);
