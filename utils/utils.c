@@ -622,7 +622,7 @@ pc_strerror(pc_error_t code)
 	static const char *s[] = { "no error", "invalid argument", "I/O error",
 	    "out of memory", "not a pcompress file or unsupported version",
 	    "corrupt data", "verification failed (checksum, HMAC or password)",
-	    "encryption setup failed", "internal error" };
+	    "encryption setup failed", "internal error", "cancelled" };
 
 	return ((unsigned)code < sizeof (s) / sizeof (s[0]) ? s[code] : "unknown error");
 }

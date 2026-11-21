@@ -13,6 +13,13 @@ Library: pc_set_thread_hooks() runs a host program's start(name) and
   stop() hooks in every thread the library creates (workers, writer,
   archive, extract and metadata threads), so a host can register them
   with its runtime.
+Library: pc_set_progress(ctx, fn, arg) reports input consumed and output
+  written after each chunk of pc_compress_fd(), pc_decompress_fd() and
+  start_pcompress(); a non-zero return cancels the job cleanly, with
+  the new error class PC_ERR_CANCELLED.
+Fix: a failed compress to a named output (pcompress file target, or the
+  command-line style API with a target name) left the partial .pz file
+  behind; it is removed now, as the temporary file is otherwise.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.

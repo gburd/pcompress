@@ -412,6 +412,138 @@ MU_TEST(test_pub_thread_hooks)
 	mu_assert_int_eq(0, th_start);
 }
 
+struct prog {
+	int calls, stop_at;
+	uint64_t last_in, last_out, backwards;
+};
+
+static int
+prog_cb(void *a, uint64_t in, uint64_t out)
+{
+	struct prog *p = (struct prog *)a;
+
+	if (in < p->last_in || out < p->last_out)
+		p->backwards++;
+	p->last_in = in;
+	p->last_out = out;
+	return (++p->calls == p->stop_at);
+}
+
+/* Descriptors above stderr that are open (fcntl() fails on a closed one). */
+static int
+open_fds(void)
+{
+	int n = 0, fd;
+
+	for (fd = 3; fd < 1024; fd++)
+		if (fcntl(fd, F_GETFD) != -1)
+			n++;
+	return (n);
+}
+
+/* One descriptor job on c, src to cmp_ or cmp_ to out. */
+static int
+fd_job(pc_ctx_t *c, int compress)
+{
+	int in = open(compress ? src : cmp_, O_RDONLY);
+	int o = open(compress ? cmp_ : out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	int rv = compress ? pc_compress_fd(c, in, o) : pc_decompress_fd(c, in, o);
+
+	close(in);
+	close(o);
+	return (rv);
+}
+
+/*
+ * pc_set_progress(): progress is reported per chunk and never goes back;
+ * a callback that returns non-zero on its 3rd call stops a multi-chunk
+ * job with 4 threads in either direction, cleanly: -1, PC_ERR_CANCELLED,
+ * no descriptor left open, and the context can run the next job.
+ */
+MU_TEST(test_pub_progress_cancel)
+{
+	struct prog p;
+	pc_ctx_t *c = pc_new();
+	int fds = open_fds(), dir_;
+
+	pc_set_algorithm(c, "lz4");
+	pc_set_threads(c, 4);
+	pc_set_chunk_size(c, 128 * 1024);	/* src is 17 chunks */
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+
+	/* Not cancelled: every chunk reported, in last = the input size. */
+	memset(&p, 0, sizeof (p));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert_int_eq(0, fd_job(c, 1));
+	mu_assert(p.calls >= 17 && p.last_in == src_len && p.backwards == 0, "compress progress");
+	memset(&p, 0, sizeof (p));
+	mu_assert_int_eq(0, fd_job(c, 0));
+	mu_assert(same(src, out), "round trip with progress");
+	mu_assert(p.calls >= 17 && p.backwards == 0, "decompress progress");
+
+	for (dir_ = 1; dir_ >= 0; dir_--) {
+		memset(&p, 0, sizeof (p));
+		p.stop_at = 3;
+		mu_assert_int_eq(-1, fd_job(c, dir_));
+		mu_assert_int_eq(3, p.calls);
+		mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+		mu_assert(strcmp(pc_strerror(PC_ERR_CANCELLED), "cancelled") == 0, "strerror");
+		mu_assert_int_eq(fds, open_fds());
+		if (dir_) {
+			/* The cancelled compress left a partial stream: make a full one. */
+			pc_set_progress(c, NULL, NULL);
+			mu_assert_int_eq(0, fd_job(c, 1));
+			pc_set_progress(c, prog_cb, &p);
+		}
+	}
+	pc_free(c);
+}
+
+/*
+ * The command-line style API: a cancelled compress removes the .pz it
+ * was writing, and a cancelled decompress the file it was writing.
+ */
+MU_TEST(test_pub_progress_cancel_files)
+{
+	char args[1024], pz[330], target[320];
+	struct prog p;
+	pc_ctx_t *c;
+
+	snprintf(target, sizeof (target), "%s/cancelled", dir);
+	snprintf(pz, sizeof (pz), "%s.pz", target);
+	unlink(pz);
+	memset(&p, 0, sizeof (p));
+	p.stop_at = 3;
+	c = create_pc_context();
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l1 -s 128k -t 4 %s %s", src, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert(start_pcompress(c) != 0, "cancelled compress succeeded");
+	mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+	destroy_pc_context(c);
+	mu_assert(access(pz, F_OK) != 0, "partial .pz left behind");
+
+	/* A whole one to decompress (the args string was split in place). */
+	c = create_pc_context();
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l1 -s 128k -t 4 %s %s", src, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	mu_assert_int_eq(0, start_pcompress(c));
+	destroy_pc_context(c);
+	memset(&p, 0, sizeof (p));
+	p.stop_at = 3;
+	c = create_pc_context();
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+	snprintf(args, sizeof (args), "pcompress -d -t 4 %s %s", pz, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert(start_pcompress(c) != 0, "cancelled decompress succeeded");
+	mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+	destroy_pc_context(c);
+	mu_assert(access(target, F_OK) != 0, "partial output left behind");
+	unlink(pz);
+}
+
 MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
@@ -423,6 +555,8 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_bad_settings);
 	MU_RUN_TEST(test_pub_fds_left_open);
 	MU_RUN_TEST(test_pub_garbage_input);
+	MU_RUN_TEST(test_pub_progress_cancel);
+	MU_RUN_TEST(test_pub_progress_cancel_files);
 	MU_RUN_TEST(test_pub_thread_hooks);
 	MU_RUN_TEST(test_pub_default_log);
 }

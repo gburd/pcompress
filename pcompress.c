@@ -1930,6 +1930,30 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 }
 
 /*
+ * Report progress after the calling thread hands out a chunk: in bytes of
+ * input so far, and what the writer has written. If the pc_set_progress()
+ * callback asks to stop, record PC_ERR_CANCELLED and cancel the job the
+ * way a failing thread does (main_cancel); the caller then leaves its
+ * feed loop, and the teardown releases and joins every thread. Returns 1
+ * if the job is cancelled.
+ */
+static int
+report_progress(pc_ctx_t *pctx, uint64_t in)
+{
+	uint64_t out = __atomic_load_n(&pctx->prog_out, __ATOMIC_RELAXED);
+
+	if (pctx->progress_fn == NULL || pctx->cancelled)
+		return (pctx->cancelled);
+	if (pctx->progress_fn(pctx->progress_arg, in, out) == 0)
+		return (0);
+	pctx->cancelled = 1;
+	log_error_code(PC_ERR_CANCELLED);
+	log_msg(LOG_ERR, 0, "Cancelled by the progress callback.");
+	__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+	return (1);
+}
+
+/*
  * Hand chunks to the workers in turn until the end of the stream, an
  * error, or a cancel. Chunk sequencing is ensured: a slot is reused only
  * after the writer has written its previous chunk. *np is the slot that
@@ -1940,6 +1964,7 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
     uint32_t *np)
 {
 	struct cmp_data *tdat;
+	uint64_t in = 0;
 	uint32_t p;
 	int rv;
 
@@ -1966,8 +1991,12 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 				return (0);
 			if (rv == 2)
 				break;
+			/* The length field and the chunk; the worker changes rbytes. */
+			in += sizeof (uint64_t) + (uint64_t)tdat->rbytes;
 			Sem_Post(&tdat->start_sem);
 			++(pctx->chunk_num);
+			if (report_progress(pctx, in))
+				return (0);
 		}
 	}
 }
@@ -2071,6 +2100,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 
 	init_algo_props(&props);
 	memset(&h, 0, sizeof (h));
+	pctx->cancelled = 0;
+	pctx->prog_out = 0;
 	if ((rv = dec_open_input(pctx, filename, &compfd, &sbuf)) == 1)
 		return (1);
 	if (rv != 0 || dec_read_header(pctx, compfd, filename, algorithm, &h) != 0) {
@@ -2228,6 +2259,7 @@ uncomp_done:
 	 * truncated output (~0.5% of runs).
 	 */
 	if (pctx->t_errored) err = pctx->t_errored;	/* threads joined: plain read is fine */
+	if (pctx->cancelled) err = 1;
 
 	/*
 	 * Ownership and mode of target should be same as original.
@@ -2244,6 +2276,9 @@ uncomp_done:
 		/* stdout or the caller's out_fd (decompress to a stream): not ours. */
 		if (uncompfd != -1 && own_uncompfd) close(uncompfd);
 	}
+	/* A cancelled job leaves no partial file it created itself. */
+	if (pctx->cancelled && own_uncompfd)
+		unlink(to_filename);
 	if (pctx->archive_mode)
 		dec_archive_done(pctx, err);
 	/* The metadata thread reads compfd2 until meta_ctx_done() above. */
@@ -2603,6 +2638,7 @@ do_cancel:
 				Sem_Post(&w->dary[p]->write_done_sem);
 			return (0);
 		}
+		__atomic_add_fetch(&pctx->prog_out, (uint64_t)wbytes, __ATOMIC_RELAXED);
 		if (tdat->decompressing && tdat->rctx && pctx->enable_rabin_global) {
 			Sem_Post(tdat->rctx->index_sem_next);
 		}
@@ -2649,6 +2685,8 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	thread = 0;
 	dedupe_flag = RABIN_DEDUPE_SEGMENTED; // Silence the compiler
 	compressed_chunksize = 0;
+	pctx->cancelled = 0;
+	pctx->prog_out = 0;
 
 	if (pctx->encrypt_type) {
 		uchar_t pw[PC_PW_MAX + 1];
@@ -3284,6 +3322,8 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 			/* Signal the compression thread to start */
 			Sem_Post(&tdat->start_sem);
 			++(pctx->chunk_num);
+			if (report_progress(pctx, file_offset))
+				break;
 
 			if (single_chunk) {
 				rbytes = 0;
@@ -3354,11 +3394,15 @@ comp_done:
 	}
 	/* After the joins, as in start_decompress(): workers set t_errored. */
 	if (pctx->t_errored) err = pctx->t_errored;	/* threads joined: plain read is fine */
+	if (pctx->cancelled) err = 1;
 
 	if (err) {
 		if (compfd != -1 && !pctx->pipe_mode && !pctx->pipe_out) {
-			unlink(tmpfile1);
-			rm_fname(tmpfile1);
+			/* The file it opened: the temporary one, or the named target. */
+			const char *made = pctx->to_filename == NULL ? tmpfile1 : to_filename;
+
+			unlink(made);
+			rm_fname((char *)made);
 		}
 		if (filename)
 			log_msg(LOG_ERR, 0, "Error compressing file: %s", filename);
@@ -4332,6 +4376,14 @@ pc_set_log(pc_ctx_t *pctx, pc_log_fn fn, void *arg, int level)
 	pctx->log.level = level;
 }
 
+/* See include/pcompress/pcompress.h; the job reads it from the calling thread. */
+void DLL_EXPORT
+pc_set_progress(pc_ctx_t *pctx, pc_progress_fn fn, void *arg)
+{
+	pctx->progress_fn = fn;
+	pctx->progress_arg = arg;
+}
+
 /* The first line of the first error in the last call on this context, or "". */
 const char DLL_EXPORT *
 pc_last_error(pc_ctx_t *pctx)
@@ -4610,6 +4662,8 @@ run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
 	j->log.fn = ctx->log.fn;
 	j->log.arg = ctx->log.arg;
 	j->log.level = ctx->log.level;
+	j->progress_fn = ctx->progress_fn;
+	j->progress_arg = ctx->progress_arg;
 	j->nthreads = ctx->nthreads;
 	j->do_compress = compress;
 	j->do_uncompress = !compress;

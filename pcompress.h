@@ -421,6 +421,10 @@ struct pc_ctx {
 	int chunk_key_set;
 	void *chunk_codec[2];	/* chunk.c: codec state reused by seal/open */
 	char algo_name[ALGO_SZ + 1];	/* pc_set_algorithm() copy; algo points here */
+	pc_progress_fn progress_fn;	/* pc_set_progress(); NULL: none */
+	void *progress_arg;
+	int cancelled;		/* progress_fn asked to stop this job */
+	uint64_t prog_out;	/* chunk bytes the writer wrote (atomic) */
 };
 
 /**

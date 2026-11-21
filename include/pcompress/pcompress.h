@@ -70,7 +70,8 @@ typedef enum {
 	PC_ERR_CORRUPT = 5,	/**< damaged data: bad length, header, dedupe index */
 	PC_ERR_VERIFY = 6,	/**< checksum, CRC or HMAC mismatch; wrong password */
 	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
-	PC_ERR_INTERNAL = 8	/**< anything else */
+	PC_ERR_INTERNAL = 8,	/**< anything else */
+	PC_ERR_CANCELLED = 9	/**< the pc_set_progress() callback stopped the job */
 } pc_error_t;
 
 /** Log levels for pc_set_log(). */
@@ -489,6 +490,24 @@ int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *
  * object. 0 is a valid size.
  */
 size_t pc_chunk_open_size(const void *obj, size_t len);
+
+/**
+ * Progress callback: in is the input bytes the job has consumed so far,
+ * out the chunk bytes it has written (the stream header is not counted).
+ * Return 0 to go on, anything else to cancel the job.
+ */
+typedef int (*pc_progress_fn)(void *arg, uint64_t in, uint64_t out);
+
+/**
+ * Call fn(arg, in, out) from the calling thread during pc_compress_fd(),
+ * pc_decompress_fd() and start_pcompress() on ctx, after each chunk is
+ * handed to a worker. A non-zero return cancels the job: the call stops
+ * its threads, frees what it allocated, removes the output file it
+ * created (not a caller's descriptor, nor files an archive extraction
+ * already wrote), and returns -1 (start_pcompress(): non-zero) with
+ * pc_last_error_code() PC_ERR_CANCELLED. fn NULL removes it.
+ */
+void pc_set_progress(pc_ctx_t *ctx, pc_progress_fn fn, void *arg);
 
 /* --- Diagnostics -------------------------------------------------------- */
 

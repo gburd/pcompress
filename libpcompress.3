@@ -33,7 +33,8 @@
 .Nm pc_version ,
 .Nm pc_set_allocator ,
 .Nm pc_set_default_log ,
-.Nm pc_set_thread_hooks
+.Nm pc_set_thread_hooks ,
+.Nm pc_set_progress
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
 libpcompress
@@ -64,6 +65,8 @@ libpcompress
 .Fn pc_compress_fd "pc_ctx_t *ctx" "int in_fd" "int out_fd"
 .Ft int
 .Fn pc_decompress_fd "pc_ctx_t *ctx" "int in_fd" "int out_fd"
+.Ft void
+.Fn pc_set_progress "pc_ctx_t *ctx" "pc_progress_fn fn" "void *arg"
 .Ft void
 .Fn pc_set_log "pc_ctx_t *ctx" "pc_log_fn fn" "void *arg" "int level"
 .Ft const char *
@@ -260,6 +263,30 @@ Archives
 and files written with global deduplication need
 .Xr pcompress 1
 or the command-line style API.
+.Ss Progress
+.Fn pc_set_progress
+has
+.Fn pc_compress_fd ,
+.Fn pc_decompress_fd
+and
+.Fn start_pcompress
+call
+.Fn fn arg in out
+from the calling thread each time they hand a chunk to a worker.
+.Fa in
+is the input consumed so far and
+.Fa out
+the chunk bytes written so far, without the stream header.
+If
+.Fa fn
+returns non-zero, the job stops: its threads are joined, what it
+allocated is freed, an output file it created is removed (a caller's
+descriptor is left alone, and an archive extraction keeps the files it
+has written), and the call fails with
+.Dv PC_ERR_CANCELLED .
+A NULL
+.Fa fn
+removes the callback.
 .Ss Diagnostics
 Messages from all threads working for a context go to stderr, or to
 .Fa fn
@@ -306,6 +333,10 @@ a checksum, CRC or HMAC did not match, or the password is wrong
 key setup failed or no password was given
 .It Dv PC_ERR_INTERNAL
 anything else
+.It Dv PC_ERR_CANCELLED
+the
+.Fn pc_set_progress
+callback stopped the job
 .El
 .Fn pc_strerror
 names a class.
@@ -653,9 +684,10 @@ The descriptor API, per-context logging and error classes appeared in
 pcompress 4.1; chunks, key files, the chunk index and manifests in 4.2.
 The command-line style API dates from 2.x.
 .Fn pc_set_allocator ,
-.Fn pc_set_default_log
-and
+.Fn pc_set_default_log ,
 .Fn pc_set_thread_hooks
+and
+.Fn pc_set_progress
 appeared after 4.4.
 .Sh CAVEATS
 Only the symbols declared in

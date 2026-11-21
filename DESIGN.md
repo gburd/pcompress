@@ -114,6 +114,14 @@ Before logging an error, a failure site may call
 `pc_last_error_code()` returns. An error logged with `errno` counts as
 `PC_ERR_IO` unless a site said otherwise.
 
+`pc_set_progress()` cancels the same way, from the calling thread: after
+it hands a chunk to a worker, `report_progress()` calls the host's
+callback, and a non-zero return records `PC_ERR_CANCELLED`, sets
+`pctx->cancelled` and `main_cancel`, and leaves the feed loop. The usual
+teardown then releases and joins every thread; `cancelled` makes the
+job fail (a cancel is not a worker failure, so `t_errored` stays 0) and
+removes the output file the job created.
+
 ## Library and contexts
 
 One `pc_ctx_t` is one job; the struct is private (`pcompress.h`) and
