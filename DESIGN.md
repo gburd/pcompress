@@ -172,6 +172,11 @@ the library, and does not change them while jobs run.
 - `pc_set_default_log()`: the sink and level `log_msg()` uses when the
   thread has no context bound, or the bound context has no sink or
   level of its own (`utils/utils.c`, next to `log_msg()`).
+- `pc_set_thread_hooks()`: every thread the library creates goes through
+  `pc_thread_create()` (`utils/utils.c`), which runs the host's start
+  hook with the thread's name, the thread function, then the stop hook.
+  A thread keeps the hooks that were set when it was created. Threads
+  started inside OpenMP, zstd's pool, lzmaMt and libbsc are not covered.
 
 ## Deduplication
 

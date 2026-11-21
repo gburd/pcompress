@@ -32,7 +32,8 @@
 .Nm pc_keyfile_open ,
 .Nm pc_version ,
 .Nm pc_set_allocator ,
-.Nm pc_set_default_log
+.Nm pc_set_default_log ,
+.Nm pc_set_thread_hooks
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
 libpcompress
@@ -79,6 +80,8 @@ libpcompress
 .Fn pc_set_allocator "const pc_allocator_t *a"
 .Ft void
 .Fn pc_set_default_log "pc_log_fn fn" "void *arg" "int level"
+.Ft int
+.Fn pc_set_thread_hooks "const pc_thread_hooks_t *h"
 .Ft pc_chunker_t *
 .Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
 .Ft pc_chunker_t *
@@ -569,6 +572,35 @@ delivers nothing and \-1 keeps the current level
 .Fa fn
 is called from library threads, at the same time for different
 contexts.
+.Pp
+.Fn pc_set_thread_hooks
+runs host code in every thread the library creates:
+.Bd -literal -offset indent
+typedef struct {
+	size_t size;	/* sizeof (pc_thread_hooks_t) */
+	void (*start)(void *ud, const char *name);
+	void (*stop)(void *ud);
+	void *ud;
+} pc_thread_hooks_t;
+.Ed
+.Pp
+.Fa start
+is the first thing a new thread runs, with its name:
+.Ql pc-compress ,
+.Ql pc-decompress ,
+.Ql pc-writer ,
+.Ql pc-meta ,
+.Ql pc-archive
+or
+.Ql pc-extract .
+.Fa stop
+is the last thing it runs before it exits.
+Either may be NULL, not both; a NULL
+.Fa h
+removes the hooks.
+It returns 0, or \-1 for a struct that is too small or has no function.
+Threads that OpenMP, zstd's worker pool, lzmaMt or libbsc start are not
+covered.
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -620,9 +652,10 @@ a snapshot backup tool.
 The descriptor API, per-context logging and error classes appeared in
 pcompress 4.1; chunks, key files, the chunk index and manifests in 4.2.
 The command-line style API dates from 2.x.
-.Fn pc_set_allocator
-and
+.Fn pc_set_allocator ,
 .Fn pc_set_default_log
+and
+.Fn pc_set_thread_hooks
 appeared after 4.4.
 .Sh CAVEATS
 Only the symbols declared in

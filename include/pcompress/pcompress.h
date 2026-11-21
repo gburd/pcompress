@@ -130,6 +130,31 @@ int pc_set_allocator(const pc_allocator_t *a);
  */
 void pc_set_default_log(pc_log_fn fn, void *arg, int level);
 
+/**
+ * Hooks around the threads the library creates (the compress and
+ * decompress workers, the writer, and the archive, extract and metadata
+ * threads). size is sizeof (pc_thread_hooks_t), set by the caller.
+ * start(ud, name) is the first thing a new thread runs, with a short
+ * name: "pc-compress", "pc-decompress", "pc-writer", "pc-meta",
+ * "pc-archive" or "pc-extract". stop(ud) is the last thing it runs
+ * before it exits. Either may be NULL, not both.
+ */
+typedef struct {
+	size_t size;
+	void (*start)(void *ud, const char *name);
+	void (*stop)(void *ud);
+	void *ud;
+} pc_thread_hooks_t;
+
+/**
+ * Install h for the whole process; NULL removes the hooks. -1 (nothing
+ * changed) for a struct whose size is too small or with neither function.
+ * Set them before other threads use the library: a thread runs the hooks
+ * that were installed when it was created. Threads that OpenMP, zstd's
+ * worker pool, lzmaMt or libbsc start are not covered.
+ */
+int pc_set_thread_hooks(const pc_thread_hooks_t *h);
+
 /** Library version string, e.g. "4.1.0". */
 const char *pc_version(void);
 

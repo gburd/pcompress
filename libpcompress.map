@@ -21,7 +21,7 @@ PCOMPRESS_1 {
 		pc_manifest_new; pc_manifest_free; pc_manifest_add; pc_manifest_count;
 		pc_manifest_get; pc_manifest_find; pc_manifest_encode; pc_manifest_decode;
 		pc_manifest_add_sz; pc_manifest_get_sz; pc_manifest_find_sz;
-		pc_set_allocator; pc_set_default_log;
+		pc_set_allocator; pc_set_default_log; pc_set_thread_hooks;
 	local:
 		*;
 };

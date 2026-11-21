@@ -586,7 +586,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 	if (rv != 0) {
 		log_msg(LOG_ERR, 0, "Metadata compressor init failed.");
-	} else if (pthread_create(&(mctx->meta_thread), NULL,
+	} else if (pc_thread_create(&(mctx->meta_thread), "pc-meta",
 	    pctx->do_compress ? metadata_compress : metadata_decompress,
 	    (void *)mctx) != 0) {
 		log_msg(LOG_ERR, 1, "Unable to create metadata thread.");

@@ -9,6 +9,10 @@ Library: pc_set_allocator() gives the library a host program's memory
 Library: pc_set_default_log(fn, arg, level) sends the messages of
   contexts without their own pc_set_log() sink, and messages logged
   outside any context, to a callback instead of stderr.
+Library: pc_set_thread_hooks() runs a host program's start(name) and
+  stop() hooks in every thread the library creates (workers, writer,
+  archive, extract and metadata threads), so a host can register them
+  with its runtime.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.

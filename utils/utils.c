@@ -511,6 +511,83 @@ pc_set_default_log(pc_log_fn fn, void *arg, int level)
 
 static __thread log_state_t *bound_log;
 
+/* pc_set_thread_hooks(): start/stop are NULL when none are installed. */
+static pc_thread_hooks_t thr_hooks;
+
+/*
+ * Run start() and stop() of h around every thread the library creates
+ * from now on; NULL removes them. -1 (nothing changed) for a struct whose
+ * size is too small or that has neither function. Plain globals: a host
+ * sets them before its threads use the library.
+ */
+int DLL_EXPORT
+pc_set_thread_hooks(const pc_thread_hooks_t *h)
+{
+	if (h == NULL) {
+		memset(&thr_hooks, 0, sizeof (thr_hooks));
+		return (0);
+	}
+	if (h->size < sizeof (pc_thread_hooks_t) || (h->start == NULL && h->stop == NULL)) {
+		log_msg(LOG_ERR, 0, "pc_set_thread_hooks: size too small or no function");
+		return (-1);
+	}
+	memcpy(&thr_hooks, h, sizeof (thr_hooks));
+	thr_hooks.size = sizeof (thr_hooks);
+	return (0);
+}
+
+/* What pc_thread_create() hands its new thread. */
+struct thr_start {
+	void *(*fn)(void *);
+	void *arg;
+	const char *name;
+	pc_thread_hooks_t hooks;	/* as they were at creation */
+};
+
+/* The new thread: the start hook, the thread function, the stop hook. */
+static void *
+thr_main(void *p)
+{
+	struct thr_start t = *(struct thr_start *)p;
+	void *rv;
+
+	pc_mfree(p);
+	if (t.hooks.start != NULL)
+		t.hooks.start(t.hooks.ud, t.name);
+	rv = t.fn(t.arg);
+	if (t.hooks.stop != NULL)
+		t.hooks.stop(t.hooks.ud);
+	return (rv);
+}
+
+/*
+ * pthread_create() for every thread the library makes: a joinable thread
+ * running fn(arg), with the pc_set_thread_hooks() hooks around it. name
+ * (a string constant) is what the start hook sees. NB: fn must return,
+ * not call pthread_exit(), or the stop hook is skipped. Returns
+ * pthread_create()'s result.
+ */
+int
+pc_thread_create(pthread_t *thr, const char *name, void *(*fn)(void *), void *arg)
+{
+	struct thr_start *t;
+	int rv;
+
+	if (thr_hooks.start == NULL && thr_hooks.stop == NULL)
+		return (pthread_create(thr, NULL, fn, arg));
+	if ((t = pc_malloc(sizeof (*t))) == NULL) {
+		errno = ENOMEM;
+		return (ENOMEM);
+	}
+	t->fn = fn;
+	t->arg = arg;
+	t->name = name;
+	t->hooks = thr_hooks;
+	if ((rv = pthread_create(thr, NULL, thr_main, t)) != 0)
+		pc_mfree(t);
+	return (rv);
+}
+
 void
 log_bind(log_state_t *ls)
 {

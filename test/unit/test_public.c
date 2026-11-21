@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
@@ -335,6 +336,82 @@ MU_TEST(test_pub_default_log)
 	pc_set_default_log(NULL, NULL, PC_LOG_INFO);
 }
 
+static int th_start, th_stop, th_badname, th_onmain;
+static pthread_t th_main;
+
+static void
+th_start_cb(void *ud, const char *name)
+{
+	static const char *names[] = { "pc-compress", "pc-decompress", "pc-writer",
+	    "pc-meta", "pc-archive", "pc-extract", NULL };
+	int i;
+
+	(void) ud;
+	for (i = 0; names[i] != NULL && strcmp(names[i], name) != 0; i++)
+		;
+	if (names[i] == NULL)
+		__atomic_add_fetch(&th_badname, 1, __ATOMIC_RELAXED);
+	if (pthread_equal(pthread_self(), th_main))
+		__atomic_add_fetch(&th_onmain, 1, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&th_start, 1, __ATOMIC_RELAXED);
+}
+
+static void
+th_stop_cb(void *ud)
+{
+	(void) ud;
+	__atomic_add_fetch(&th_stop, 1, __ATOMIC_RELAXED);
+}
+
+/*
+ * pc_set_thread_hooks(): a compress and a decompress with 4 threads start
+ * workers and a writer each; every one runs start() in the new thread
+ * with a known name, and stop() before the call returns.
+ */
+MU_TEST(test_pub_thread_hooks)
+{
+	pc_thread_hooks_t h = { sizeof (h), th_start_cb, th_stop_cb, NULL };
+	pc_thread_hooks_t bad = { sizeof (h) - 1, th_start_cb, th_stop_cb, NULL };
+	pc_ctx_t *c;
+	int in, o;
+
+	th_main = pthread_self();
+	pc_set_default_log(quiet, NULL, -1);
+	mu_assert_int_eq(-1, pc_set_thread_hooks(&bad));
+	pc_set_default_log(NULL, NULL, -1);
+	mu_assert_int_eq(0, pc_set_thread_hooks(&h));
+	c = pc_new();
+	/* lz4 is not multithreaded itself: 4 threads are 4 workers. */
+	pc_set_algorithm(c, "lz4");
+	pc_set_threads(c, 4);
+	pc_set_chunk_size(c, 256 * 1024);
+	in = open(src, O_RDONLY);
+	o = open(cmp_, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert_int_eq(0, pc_compress_fd(c, in, o));
+	close(in);
+	close(o);
+	/* 4 workers and the writer. */
+	mu_assert_int_eq(5, th_start);
+	mu_assert_int_eq(th_start, th_stop);
+	in = open(cmp_, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert_int_eq(0, pc_decompress_fd(c, in, o));
+	close(in);
+	close(o);
+	pc_free(c);
+	mu_assert(same(src, out), "round trip");
+	mu_assert(th_start > 5, "decompress threads not hooked");
+	mu_assert_int_eq(th_start, th_stop);
+	mu_assert_int_eq(0, th_badname);
+	mu_assert_int_eq(0, th_onmain);
+
+	/* Removed: no more calls. */
+	mu_assert_int_eq(0, pc_set_thread_hooks(NULL));
+	th_start = 0;
+	mu_assert_int_eq(0, roundtrip("lz4", 1, PC_DEDUPE_NONE, NULL, NULL));
+	mu_assert_int_eq(0, th_start);
+}
+
 MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
@@ -346,6 +423,7 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_bad_settings);
 	MU_RUN_TEST(test_pub_fds_left_open);
 	MU_RUN_TEST(test_pub_garbage_input);
+	MU_RUN_TEST(test_pub_thread_hooks);
 	MU_RUN_TEST(test_pub_default_log);
 }
 

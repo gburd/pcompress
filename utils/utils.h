@@ -484,6 +484,9 @@ typedef struct log_state {
 	char last_error[256];
 } log_state_t;
 
+/* Every library thread starts here (pc_set_thread_hooks()). */
+int pc_thread_create(pthread_t *thr, const char *name, void *(*fn)(void *), void *arg);
+
 void log_bind(log_state_t *ls);
 log_state_t *log_bound(void);
 /* Record an error class for the bound context; the first one wins. */

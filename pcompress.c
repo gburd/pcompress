@@ -1800,7 +1800,7 @@ dec_start_worker(pc_ctx_t *pctx, struct cmp_data *tdat, const struct dec_job *j)
 			return (-1);
 		}
 	}
-	if (pthread_create(&(tdat->thr), NULL, perform_decompress, (void *)tdat) != 0) {
+	if (pc_thread_create(&(tdat->thr), "pc-decompress", perform_decompress, (void *)tdat) != 0) {
 		log_msg(LOG_ERR, 1, "Error in thread creation: ");
 		return (-1);
 	}
@@ -2183,7 +2183,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		w.nprocs = nprocs;
 		w.chunksize = h.chunksize;
 		w.pctx = pctx;
-		if (pthread_create(&writer_thr, NULL, writer_thread, (void *)(&w)) != 0) {
+		if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
 			UNCOMP_BAIL;
 		}
@@ -3010,7 +3010,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		}
 		/* Running workers must be joined even if a later setup fails. */
 		thread = 1;
-		if (pthread_create(&(tdat->thr), NULL, perform_compress,
+		if (pc_thread_create(&(tdat->thr), "pc-compress", perform_compress,
 		    (void *)tdat) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
 			COMP_BAIL;
@@ -3077,7 +3077,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	w.wfd = compfd;
 	w.nprocs = nprocs;
 	w.pctx = pctx;
-	if (pthread_create(&writer_thr, NULL, writer_thread, (void *)(&w)) != 0) {
+	if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 		log_msg(LOG_ERR, 1, "Error in thread creation: ");
 		COMP_BAIL;
 	}

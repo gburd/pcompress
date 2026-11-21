@@ -1529,7 +1529,7 @@ done:
 
 int
 start_archiver(pc_ctx_t *pctx) {
-	if (pthread_create(&(pctx->archive_thread), NULL, archiver_thread_func, (void *)pctx) != 0)
+	if (pc_thread_create(&(pctx->archive_thread), "pc-archive", archiver_thread_func, (void *)pctx) != 0)
 		return (-1);
 	pctx->archive_thread_started = 1;
 	return (0);
@@ -1936,7 +1936,7 @@ done:
 
 int
 start_extractor(pc_ctx_t *pctx) {
-	if (pthread_create(&(pctx->archive_thread), NULL, extractor_thread_func, (void *)pctx) != 0)
+	if (pc_thread_create(&(pctx->archive_thread), "pc-extract", extractor_thread_func, (void *)pctx) != 0)
 		return (-1);
 	pctx->archive_thread_started = 1;
 	return (0);
