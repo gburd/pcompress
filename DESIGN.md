@@ -308,8 +308,12 @@ the frame (`ZSTD_c_dictIDFlag` 0): the object's id already says which
 one, with no chance of collision between repositories. The id costs 32
 bytes, so seal keeps the dictionary frame only when it is at least 33
 bytes smaller than the input, and `pc_chunk_seal_bound()` is unchanged.
-Objects without a dictionary are byte-for-byte what 4.4 writes; 4.4 and
-older refuse flag 4 (an unknown flag) as corrupt.
+Seal uses the dictionary only for chunks under 128 KB; larger ones are
+plain zstd objects. zstd compresses with the match-finder tables of the
+digested dictionary, sized for small inputs, and on 1 to 4 MB chunks
+those cost up to 8% in size (`PCK_DICT_CHUNK` in chunk.c has the
+numbers). Objects without a dictionary are byte-for-byte what 4.4 writes;
+4.4 and older refuse flag 4 (an unknown flag) as corrupt.
 
 **Key files** (`pc_keyfile_create`/`open`, 128 bytes): magic `PCKEY1`,
 KDF id (1 = scrypt), log2 N, r, p, a 16-byte salt and a 24-byte nonce,

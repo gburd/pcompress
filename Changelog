@@ -25,8 +25,10 @@ Library: zstd dictionaries for sealed chunk objects. pc_dict_train()
   error class PC_ERR_DICT. On pieces under 8 KB it shrinks stored size
   by 30 to 40% (small /usr/share/doc files at zstd:3: ratio 1.89 to 2.96;
   per-directory manifests of /usr: 1.75 to 2.46); 64 KB chunks gain
-  almost nothing. Objects sealed without a dictionary are unchanged;
-  versions before this one refuse dictionary objects.
+  almost nothing; chunks of 128 KB and more are sealed without the
+  dictionary, where it would cost up to 8%. Objects sealed without a
+  dictionary are unchanged; versions before this one refuse dictionary
+  objects.
 Library: pc_chunk_seal() stores incompressible chunks raw without
   running the codec: a sampled byte histogram (2 KB, then 8 KB, of
   chunks from 16 KB) that is close to uniform skips it. Sealing random

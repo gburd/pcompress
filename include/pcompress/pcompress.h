@@ -532,8 +532,9 @@ int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *
  *
  * pc_set_dict() copies dict into the context (NULL, 0 removes it).
  * While one is set, pc_chunk_seal() needs the zstd algorithm (else it
- * fails with PC_ERR_ARGS), and the objects it compresses name the
- * dictionary by pc_dict_id() and need it to open: pc_chunk_open() fails
+ * fails with PC_ERR_ARGS), and the objects under 128 KB it compresses
+ * name the dictionary by pc_dict_id() and need it to open (larger ones
+ * are sealed without it, where it would cost ratio): pc_chunk_open() fails
  * with PC_ERR_DICT when the context has no dictionary or another one.
  * Objects stored raw (incompressible, or under 34 bytes) need none.
  * Objects sealed without a dictionary open with or without one set.

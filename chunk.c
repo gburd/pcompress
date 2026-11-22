@@ -573,6 +573,20 @@ struct chunk_dict {
 /* A dictionary larger than this is refused (zstd's trainer makes ~100 KB). */
 #define	PCK_DICT_MAX	(16 * 1024 * 1024)
 
+/*
+ * Chunks this size or larger are sealed without the dictionary, as plain
+ * zstd objects. The digested dictionary carries match-finder tables
+ * sized for small inputs, and zstd compresses the whole source with
+ * them: a 4 MB chunk at level 12 came out 8% larger than without the
+ * dictionary, and a 1 MB one at level 3 1% larger and 7% slower. Below
+ * 128 KB it makes text 3 to 25% smaller, and on gear chunks (avg 64 KB)
+ * the cutoff gives up less than 0.1% of that. Letting zstd size the
+ * tables for each chunk (a CDict that keeps its level) digests the
+ * dictionary again for every large chunk: zstd:3 on 1 MB chunks ran 20
+ * to 40% slower than with no dictionary, for 0 to 3% smaller output.
+ */
+#define	PCK_DICT_CHUNK	(128 * 1024)
+
 /* Free a dictionary pc_set_dict() made; NULL is ignored. */
 static void
 dict_destroy(struct chunk_dict *d)
@@ -795,7 +809,7 @@ looks_incompressible(const uchar_t *p, size_t len)
  * (at o + *hdr), *clen and the level byte o[7], and returns the flags;
  * *id becomes 0 when the chunk is stored raw, as it is when it does not
  * shrink or looks incompressible. With a dictionary set (zstd only),
- * the payload follows the dictionary id.
+ * chunks under PCK_DICT_CHUNK use it and the payload follows its id.
  */
 static uchar_t
 seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *clen,
@@ -809,7 +823,7 @@ seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *cl
 	if (len == 0 || *id == 0 || looks_incompressible(in, len)) {
 		/* Stored raw. */
 #ifdef ENABLE_PC_ZSTD
-	} else if (ctx->chunk_dict != NULL) {
+	} else if (ctx->chunk_dict != NULL && len < PCK_DICT_CHUNK) {
 		if (dict_compress(ctx, in, len, level, o + PCK_HDR + PCK_DICTID, clen) == 0) {
 			memcpy(o + PCK_HDR, ((struct chunk_dict *)ctx->chunk_dict)->id, PCK_DICTID);
 			*hdr = PCK_HDR + PCK_DICTID;

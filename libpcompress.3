@@ -465,9 +465,10 @@ Training is deterministic; its working memory comes from the C library.
 Copies a dictionary into the context, or removes it (NULL, 0).
 While one is set,
 .Fn pc_chunk_seal
-needs the zstd algorithm, and the objects it compresses record the
-dictionary's id; pieces under about 8 KB shrink 1.4 to 1.8 times more,
-64 KB chunks barely.
+needs the zstd algorithm, and the objects under 128 KB it compresses
+record the dictionary's id; pieces under about 8 KB shrink 1.4 to 1.8
+times more, 64 KB chunks barely.
+Larger chunks are sealed without it.
 .Fn pc_chunk_open
 of such an object fails with
 .Dv PC_ERR_DICT

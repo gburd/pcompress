@@ -252,6 +252,30 @@ MU_TEST(test_dict)
 	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "changed dictionary id accepted");
 	mu_assert_int_eq(PC_ERR_VERIFY, pc_last_error_code(d));
 
+	/* Chunks of 128 KB and more are plain zstd objects: no id, open anywhere. */
+	{
+		size_t bn = 128 * 1024, bl = pc_chunk_seal_bound(bn), bp = bn;
+		char *big = malloc(bn), *back = malloc(bn);
+		unsigned char *bobj = malloc(bl);
+		pc_ctx_t *g = ctx_with(NULL, 0, NULL);
+
+		for (i = 0, n = 0; n + 256 < bn; i++)
+			n += record(big + n, 256, i);
+		memset(big + n, ' ', bn - n);
+		mu_assert_int_eq(0, pc_chunk_seal(c, big, bn, bobj, &bl));
+		mu_assert(bobj[5] == 0 && bobj[6] == 1 && bl < bn / 2, "large chunk used the dictionary");
+		mu_assert_int_eq(0, pc_chunk_open(g, bobj, bl, back, &bp));
+		mu_assert(bp == bn && memcmp(back, big, bn) == 0, "large chunk round trip");
+		bl = pc_chunk_seal_bound(bn - 1);
+		mu_assert_int_eq(0, pc_chunk_seal(c, big, bn - 1, bobj, &bl));
+		mu_assert(bobj[5] == 0x04, "chunk under 128 KB without the dictionary");
+		pc_free(g);
+		free(big);
+		free(back);
+		free(bobj);
+		n = record(rec, sizeof (rec), 100000);
+	}
+
 	/* Noise and tiny inputs are stored raw, without the id. */
 	fill(noise, sizeof (noise), 1);
 	ol = sizeof (obj);
