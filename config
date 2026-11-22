@@ -730,6 +730,20 @@ if [ $is_clang -eq 1 ]; then
 	# The x86 .s sources use GNU as macro directives (.psize, .altmacro).
 	[ $is_x86 -eq 1 ] && [ "$OS" != "Darwin" ] && gnu_as_flag="-fno-integrated-as"
 fi
+# MinGW gcc cannot align the stack past 16 bytes (GCC PR 54412), so a
+# 256- or 512-bit value it spills with an aligned move faults. Upstream
+# BLAKE3 uses its .S files there; leave out its AVX2 and AVX-512 C files
+# (it dispatches to SSE4.1). The BLAKE2b and xxHash AVX and "AVX-512"
+# files are 128-bit code that gcc widens when vectorizing: build them
+# with AVX and 128-bit vectors only. clang realigns the stack, so the
+# CLANG64 build keeps all of it.
+if [ "$OS" = "MINGW" ] && [ $is_x86 -eq 1 ] && [ $is_clang -eq 0 ]; then
+	blake3_simd_srcs='\$\(BLAKE3_X86_SSE_SRCS\)'
+	extra_opt_flags="${extra_opt_flags} -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512"
+	avx_opt_flag="${avx_opt_flag} -mprefer-vector-width=128"
+	avx512_opt_flag="${avx_opt_flag}"
+	echo "  MinGW gcc: no BLAKE3 AVX2/AVX-512 code; AVX files use 128-bit vectors"
+fi
 
 # GCC built without ISL rejects the Graphite loop flags ("sorry, unimplemented"),
 # and some builds crash in it (Alpine's GCC 15: "internal compiler error:

@@ -154,10 +154,14 @@ MU_TEST(test_blake3_variants)
 	mu_assert(same_as_portable(blake3_hash_many_sse2), "sse2");
 	if (__builtin_cpu_supports("sse4.1"))
 		mu_assert(same_as_portable(blake3_hash_many_sse41), "sse4.1");
+#if !defined(BLAKE3_NO_AVX2)
 	if (__builtin_cpu_supports("avx2"))
 		mu_assert(same_as_portable(blake3_hash_many_avx2), "avx2");
+#endif
+#if !defined(BLAKE3_NO_AVX512)
 	if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vl"))
 		mu_assert(same_as_portable(blake3_hash_many_avx512), "avx512");
+#endif
 #elif BLAKE3_USE_NEON == 1
 	mu_assert(same_as_portable(blake3_hash_many_neon), "neon");
 #endif

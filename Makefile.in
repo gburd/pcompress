@@ -102,8 +102,9 @@ BLAKE2_OBJS = $(BLAKE2_SRCS:.c=.o)
 # itself; ./config picks the SIMD files this architecture can build.
 BLAKE3_BASE_SRCS = crypto/blake3/blake3.c crypto/blake3/blake3_dispatch.c \
 	crypto/blake3/blake3_portable.c
-BLAKE3_X86_SRCS = crypto/blake3/blake3_sse2.c crypto/blake3/blake3_sse41.c \
-	crypto/blake3/blake3_avx2.c crypto/blake3/blake3_avx512.c
+BLAKE3_X86_SSE_SRCS = crypto/blake3/blake3_sse2.c crypto/blake3/blake3_sse41.c
+BLAKE3_X86_SRCS = $(BLAKE3_X86_SSE_SRCS) crypto/blake3/blake3_avx2.c \
+	crypto/blake3/blake3_avx512.c
 BLAKE3_NEON_SRCS = crypto/blake3/blake3_neon.c
 BLAKE3_SRCS = $(BLAKE3_BASE_SRCS) @BLAKE3_SIMD_SRCS@
 BLAKE3_HDRS = crypto/blake3/blake3.h crypto/blake3/blake3_impl.h
