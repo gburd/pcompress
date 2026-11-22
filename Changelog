@@ -20,6 +20,9 @@ Library: pc_set_progress(ctx, fn, arg) reports input consumed and output
 Fix: a failed compress to a named output (pcompress file target, or the
   command-line style API with a target name) left the partial .pz file
   behind; it is removed now, as the temporary file is otherwise.
+Fix: archive compression with -T (no metadata stream) hung for good
+  when a worker or the writer failed, or when the job was cancelled:
+  the archiver thread was never released.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.
