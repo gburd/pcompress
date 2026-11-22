@@ -285,7 +285,14 @@ MU_TEST(test_dict)
 	mu_assert_int_eq(0, pc_set_dict(c, NULL, 0));
 	ol = sizeof (obj);
 	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert_int_eq(0, pc_set_dict(c, dict, dl));
 	mu_assert(pc_set_dict(c, NULL, 5) != 0 && pc_set_dict(c, dict, 0) != 0, "bad pc_set_dict");
+	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(c));
+	/* A failed pc_set_dict() keeps the dictionary the context had. */
+	mu_assert_int_eq(0, pc_set_algorithm(c, "zstd"));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert(obj[5] == 0x04 && memcmp(obj + 40, id, 32) == 0, "dictionary lost");
 	mu_assert(pc_dict_id(NULL, 0, id) != 0, "pc_dict_id of nothing");
 	pc_free(c);
 	pc_free(d);

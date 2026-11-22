@@ -573,11 +573,10 @@ struct chunk_dict {
 /* A dictionary larger than this is refused (zstd's trainer makes ~100 KB). */
 #define	PCK_DICT_MAX	(16 * 1024 * 1024)
 
+/* Free a dictionary pc_set_dict() made; NULL is ignored. */
 static void
-chunk_dict_free(pc_ctx_t *ctx)
+dict_destroy(struct chunk_dict *d)
 {
-	struct chunk_dict *d = (struct chunk_dict *)ctx->chunk_dict;
-
 	if (d == NULL)
 		return;
 #ifdef ENABLE_PC_ZSTD
@@ -588,6 +587,12 @@ chunk_dict_free(pc_ctx_t *ctx)
 #endif
 	memset(d->bytes, 0, d->len);
 	pc_mfree(d);
+}
+
+static void
+chunk_dict_free(pc_ctx_t *ctx)
+{
+	dict_destroy((struct chunk_dict *)ctx->chunk_dict);
 	ctx->chunk_dict = NULL;
 }
 
@@ -622,12 +627,14 @@ pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len)
 
 	if (ctx == NULL)
 		return (-1);
-	chunk_dict_free(ctx);
-	if (dict == NULL && len == 0)
+	if (dict == NULL && len == 0) {
+		chunk_dict_free(ctx);
 		return (0);
+	}
 #ifndef ENABLE_PC_ZSTD
 	return (seal_err(ctx, PC_ERR_ARGS, "pc_set_dict: this build has no zstd"));
 #else
+	/* Make the new one completely before dropping the old: a failure keeps it. */
 	if (dict == NULL || len == 0 || len > PCK_DICT_MAX)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_set_dict: bad dictionary size"));
 	if ((d = pc_calloc(1, sizeof (*d) + len)) == NULL)
@@ -635,9 +642,10 @@ pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len)
 	memcpy(d->bytes, dict, len);
 	d->len = len;
 	if (pc_dict_id(dict, len, d->id) != 0) {
-		pc_mfree(d);
+		dict_destroy(d);
 		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_set_dict: hash failure"));
 	}
+	chunk_dict_free(ctx);
 	ctx->chunk_dict = d;
 	return (0);
 #endif
