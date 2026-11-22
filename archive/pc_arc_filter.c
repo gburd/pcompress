@@ -135,55 +135,30 @@ type_tag_from_filter_name(struct type_data *typetab, const char *fname, size_t l
  * The filter table is shared by every context in the process, so its
  * scratch_buffer cannot hold per-call data. Each thread (an archiver or
  * extractor thread runs one entry at a time) gets its own buffer instead;
- * the table's sdat argument is ignored.
+ * the table's sdat argument is ignored. Filters run only in those two
+ * threads, and each releases its buffer with arc_filter_thread_done()
+ * before it exits. A thread-local pointer, not a pthread key: a key's
+ * destructor would run after the pc_set_thread_hooks() stop hook, and
+ * winpthreads crashed when the key was cleared before thread exit.
  */
-static pthread_key_t scratch_key;
-static pthread_once_t scratch_once = PTHREAD_ONCE_INIT;
-
-static void
-scratch_free(void *p)
-{
-	struct scratch_buffer *b = (struct scratch_buffer *)p;
-
-	pc_mfree(b->in_buff);
-	pc_mfree(b);
-}
-
-static void
-scratch_key_init(void)
-{
-	(void) pthread_key_create(&scratch_key, scratch_free);
-}
+static __thread struct scratch_buffer *scratch;
 
 static struct scratch_buffer *
 thread_scratch(void)
 {
-	struct scratch_buffer *b;
-
-	pthread_once(&scratch_once, scratch_key_init);
-	if ((b = pthread_getspecific(scratch_key)) == NULL) {
-		if ((b = pc_calloc(1, sizeof (*b))) == NULL)
-			return (NULL);
-		(void) pthread_setspecific(scratch_key, b);
-	}
-	return (b);
+	if (scratch == NULL)
+		scratch = pc_calloc(1, sizeof (*scratch));
+	return (scratch);
 }
 
-/*
- * Release the calling thread's scratch buffer, if it has one. The archiver
- * and extractor threads call it last, so the memory goes back to the host
- * allocator before their pc_set_thread_hooks() stop hook runs; the key's
- * destructor, which runs after it, is only the fallback.
- */
+/* Release the calling thread's scratch buffer, if it has one. */
 void
 arc_filter_thread_done(void)
 {
-	struct scratch_buffer *b;
-
-	pthread_once(&scratch_once, scratch_key_init);
-	if ((b = pthread_getspecific(scratch_key)) != NULL) {
-		(void) pthread_setspecific(scratch_key, NULL);
-		scratch_free(b);
+	if (scratch != NULL) {
+		pc_mfree(scratch->in_buff);
+		pc_mfree(scratch);
+		scratch = NULL;
 	}
 }
 
