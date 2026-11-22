@@ -14,6 +14,7 @@ dependencies managed as git submodules and any API changes required.
 | libbsc         | bsc/                                | 3.3.12   | Submodule  | github.com/IlyaGrebnov/libbsc |
 | Zstandard      | zstd/                               | HEAD     | Submodule  | github.com/facebook/zstd      |
 | WavPack        | wavpack/                            | HEAD     | Submodule  | github.com/dbry/WavPack       |
+| BLAKE3         | crypto/blake3/                      | 1.8.7    | Vendored   | github.com/BLAKE3-team/BLAKE3 |
 
 ---
 
@@ -299,3 +300,26 @@ git submodule update --init --recursive
 
 The `config` script does this automatically if submodules are not yet
 initialized.
+
+---
+
+## Vendored: BLAKE3 (crypto/blake3/)
+
+**Upstream**: https://github.com/BLAKE3-team/BLAKE3, tag 1.8.7
+(release tarball sha256
+c6782a28842b1c0478524ac06a4f2ede784038ee298d6e2162c0b089c4306a3c).
+**License**: CC0 1.0, or Apache-2.0, or Apache-2.0 with LLVM exception, at
+the user's choice; the three license files are kept next to the sources.
+**Modifications**: none. The files are upstream's `c/` directory, minus
+the assembly (`*.S`, `*.asm`), the TBB, CMake and test files.
+
+`blake3_dispatch.c` picks the code at run time from CPUID (SSE2, SSE4.1,
+AVX2, AVX-512) on x86-64. `./config` builds the four x86 intrinsics files
+there, each with only its own `-m` flag, `blake3_neon.c` on ARM64, and
+just the portable code elsewhere. The intrinsics files are used rather
+than the assembly so the same sources build with gcc and clang on Linux,
+macOS, the BSDs, illumos and MinGW.
+
+To update: copy the same files from the new tag's `c/` directory, update
+the version here and in the Makefile.in comment, and run `test_blake3`
+and `test_chunk` (both pin the official `test_vectors.json` values).

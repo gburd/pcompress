@@ -246,7 +246,15 @@ the `.pz` format.
   `(roll ^ ir[out]) & (avg - 1) == 0`, or at `max`. Since state resets at
   each boundary, the boundaries depend only on the data, never on how it
   was split across `pc_chunker_feed()` calls.
-- **Ids.** BLAKE2b-256, optionally keyed.
+- **Ids.** BLAKE2b-256, optionally keyed (`pc_chunk_id`), or, chosen per
+  repository with `pc_chunk_id2`, BLAKE3-256, keyed with exactly 32
+  bytes. BLAKE3 is the bundled official C code (`crypto/blake3`, 1.8.7),
+  with its own run-time dispatch to SSE2, SSE4.1, AVX2 and AVX-512 on
+  x86 and NEON on little-endian ARM64, portable C elsewhere; only the C
+  intrinsics files are built (no `.S`), so it builds wherever the rest
+  does. Object tags, subkeys and `pc_derive_key` stay BLAKE2b: the id
+  function is the only part that hashes every byte for naming, and
+  derive runs once per repository open, where speed does not matter.
 - **Objects** (`pc_chunk_seal`/`pc_chunk_open`), little-endian:
 
 | offset | size | field |

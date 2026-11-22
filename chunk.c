@@ -25,6 +25,7 @@
 #include <crypto_xsalsa20.h>
 #include <rabin_dedup.h>
 #include <crypto_scrypt.h>
+#include <blake3.h>
 
 /* --- Content-defined chunker ------------------------------------------- */
 
@@ -257,6 +258,28 @@ pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t
 	if ((buf == NULL && len > 0) || id == NULL || keylen > 64 || (key == NULL) != (keylen == 0))
 		return (-1);
 	return (blake2b_keyed2(id, 32, key, (int)keylen, buf, len, NULL, 0));
+}
+
+int DLL_EXPORT
+pc_chunk_id2(int alg, const void *buf, size_t len, const void *key, size_t keylen,
+    uint8_t id[32])
+{
+	blake3_hasher h;
+
+	if (alg == PC_ID_BLAKE2B)
+		return (pc_chunk_id(buf, len, key, keylen, id));
+	if (alg != PC_ID_BLAKE3 || (buf == NULL && len > 0) || id == NULL ||
+	    (key == NULL ? keylen != 0 : keylen != BLAKE3_KEY_LEN))
+		return (-1);
+	if (key != NULL)
+		blake3_hasher_init_keyed(&h, key);
+	else
+		blake3_hasher_init(&h);
+	blake3_hasher_update(&h, buf, len);
+	blake3_hasher_finalize(&h, id, 32);
+	/* The state holds the key's chaining values. */
+	memset(&h, 0, sizeof (h));
+	return (0);
 }
 
 /*

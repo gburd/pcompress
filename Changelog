@@ -34,6 +34,13 @@ Library: pc_chunk_seal() stores incompressible chunks raw without
   41 MB/s, lzma:6 13 MB/s); compressed .gz/.xz/.zst files lose 0.05% in
   size; text and binaries keep their size and lose about 1% in seal
   speed. No format change.
+Library: pc_chunk_id2(algorithm, ...) names chunks with BLAKE2b
+  (PC_ID_BLAKE2B, as pc_chunk_id) or BLAKE3 (PC_ID_BLAKE3, keyed with a
+  32-byte key): keyed BLAKE3 ids of 64 KB chunks ran at 4420 MB/s
+  against 820 MB/s for BLAKE2b on one core of an EC2 Xeon 8488C. The
+  official BLAKE3 C code 1.8.7 is bundled in crypto/blake3 (CC0 or
+  Apache-2.0), with its run-time dispatch; tests pin the official
+  vectors. Sealed objects keep their BLAKE2b tags.
 Fix: a failed compress to a named output (pcompress file target, or the
   command-line style API with a target name) left the partial .pz file
   behind; it is removed now, as the temporary file is otherwise.

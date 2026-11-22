@@ -24,6 +24,7 @@ PCOMPRESS_1 {
 		pc_set_allocator; pc_set_default_log; pc_set_thread_hooks;
 		pc_set_progress;
 		pc_dict_train; pc_set_dict; pc_dict_id;
+		pc_chunk_id2;
 	local:
 		*;
 };

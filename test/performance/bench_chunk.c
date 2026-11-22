@@ -1,8 +1,9 @@
 /*
  * Throughput of the chunk-store pipeline a backup tool runs, through the
- * public API only: the content-defined chunkers, the keyed chunk id, and
- * sealing and opening each chunk (compress, encrypt, authenticate, and
- * back). Prints MB/s of plaintext per stage, one thread.
+ * public API only: the content-defined chunkers, the keyed chunk ids
+ * (BLAKE2b and BLAKE3), and sealing and opening each chunk (compress,
+ * encrypt, authenticate, and back). Prints MB/s of plaintext per stage,
+ * one thread.
  *
  *   bench_chunk [MB] [algorithm[:level] ...]
  *
@@ -161,6 +162,10 @@ main(int argc, char **argv)
 	for (off = 0, k = 0; k < nc; off += lens[k++])
 		pc_chunk_id(buf + off, lens[k], key, 32, id);
 	report("chunk id (keyed BLAKE2b)", n, now() - t);
+	t = now();
+	for (off = 0, k = 0; k < nc; off += lens[k++])
+		pc_chunk_id2(PC_ID_BLAKE3, buf + off, lens[k], key, 32, id);
+	report("chunk id (keyed BLAKE3)", n, now() - t);
 
 	for (a = 0; a < nalgos; a++) {
 		char name[32], *colon;

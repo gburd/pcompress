@@ -177,6 +177,7 @@ Third-Party Dependency Licenses
 | xxHash         | BSD                | Non-cryptographic hashing      |
 | Keccak (SHA-3) | Public Domain      | SHA-3 checksums                |
 | BLAKE2         | CC0 / Apache-2.0   | Fast checksums (default)       |
+| BLAKE3         | CC0 / Apache-2.0   | Chunk ids (pc_chunk_id2)       |
 | Skein          | Public Domain      | Cryptographic hash             |
 
 See the COPYING and COPYING.LESSER files for the full LGPL license text.

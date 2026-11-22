@@ -8,7 +8,7 @@ Copyright: 2012-2014 Moinak Ghosh
 License: LGPL-3.0-or-later
 
 Files: lz4/* zstd/* bsc/* archive/libarchive/* lzma/* crypto/scrypt/*
- crypto/blake2/* crypto/keccak/* crypto/skein/* crypto/aes/* filters/*
+ crypto/blake2/* crypto/blake3/* crypto/keccak/* crypto/skein/* crypto/aes/* filters/*
 Copyright: Their respective authors; see the notices in each tree.
 License: various
  Bundled third-party sources under BSD-2-Clause, BSD-3-Clause, MIT,

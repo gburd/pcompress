@@ -215,7 +215,12 @@ sse4_opt_flag="-msse4.2"
 sse3_opt_flag="-mssse3"
 sse2_opt_flag="-msse2"
 avx512_opt_flag="-mavx512f -mavx512vl"
+avx2_opt_flag="-mavx2"
 neon_opt_flag=""
+# BLAKE3 (crypto/blake3): its x86 intrinsics files build only for x86
+# and its NEON file only for little-endian ARM64; it picks at run time.
+blake3_simd_srcs='\$\(BLAKE3_X86_SRCS\)'
+
 sse_intrin_flag="-D__USE_SSE_INTRIN__"
 aes_asm_srcs="crypto/aes/vpaes-x86_64.s crypto/aes/aesni-x86_64.s"
 crypto_compat_objs='\$\(CRYPTO_COMPAT_OBJS\)'
@@ -612,12 +617,17 @@ aarch64|arm64|armv*)
 	avx_detect=0
 	sse_opt_flags=""
 	avx_opt_flag=""
+	avx2_opt_flag=""
 	avx512_opt_flag=""
 	sse4_opt_flag=""
 	sse3_opt_flag=""
 	sse2_opt_flag=""
 	# Enable NEON compiler flags for ARM64
 	neon_opt_flag="-march=armv8-a+crypto"
+	case "$plat" in
+	aarch64|arm64) blake3_simd_srcs='\$\(BLAKE3_NEON_SRCS\)' ;;
+	*) blake3_simd_srcs="" ;;
+	esac
 	sse_intrin_flag=""
 	aes_asm_srcs=""
 	salsa20_stream_c='\$\(XSALSA20_STREAM_C\)'
@@ -632,7 +642,9 @@ aarch64|arm64|armv*)
 	avx_detect=0
 	sse_opt_flags=""
 	avx_opt_flag=""
+	avx2_opt_flag=""
 	avx512_opt_flag=""
+	blake3_simd_srcs=""
 	sse4_opt_flag=""
 	sse3_opt_flag=""
 	sse2_opt_flag=""
@@ -1511,6 +1523,7 @@ fi
 if [ $is_x86 -eq 1 ]; then
 	if [ -n "$use_clang_as" ]; then
 		avx512_opt_flag="${avx512_opt_flag} ${use_clang_as}"
+		avx2_opt_flag="${avx2_opt_flag} ${use_clang_as}"
 		avx_opt_flag="${avx_opt_flag} ${use_clang_as}"
 		sse4_opt_flag="${sse4_opt_flag} ${use_clang_as}"
 		sse3_opt_flag="${sse3_opt_flag} ${use_clang_as}"
@@ -1644,6 +1657,8 @@ s#@ZSTD_CPPFLAGS@#${zstd_cppflags}#g
 s#@ZSTD_INCFLAGS@#${zstd_incflags}#g
 s#@AVX_OPT_FLAG@#${avx_opt_flag}#g
 s#@AVX512_OPT_FLAG@#${avx512_opt_flag}#g
+s#@AVX2_OPT_FLAG@#${avx2_opt_flag}#g
+s#@BLAKE3_SIMD_SRCS@#${blake3_simd_srcs}#g
 s#@SSE4_OPT_FLAG@#${sse4_opt_flag}#g
 s#@SSE3_OPT_FLAG@#${sse3_opt_flag}#g
 s#@SSE2_OPT_FLAG@#${sse2_opt_flag}#g

@@ -425,6 +425,47 @@ MU_TEST(test_ids)
 }
 
 /*
+ * pc_chunk_id2(): PC_ID_BLAKE2B is pc_chunk_id(); PC_ID_BLAKE3 matches the
+ * official BLAKE3 vectors (test_vectors.json: input bytes i % 251, key
+ * "whats the Elvish word for friend"), keyed only with 32-byte keys.
+ */
+MU_TEST(test_chunk_id2)
+{
+	static const unsigned char h1025[32] = {
+		0xd0, 0x02, 0x78, 0xae, 0x47, 0xeb, 0x27, 0xb3, 0x4f, 0xae, 0xcf, 0x67,
+		0xb4, 0xfe, 0x26, 0x3f, 0x82, 0xd5, 0x41, 0x29, 0x16, 0xc1, 0xff, 0xd9,
+		0x7c, 0x8c, 0xb7, 0xfb, 0x81, 0x4b, 0x84, 0x44 };
+	static const unsigned char k102400[32] = {
+		0x1c, 0x35, 0xd1, 0xa5, 0x81, 0x10, 0x83, 0xfd, 0x71, 0x19, 0xf5, 0xd5,
+		0xd1, 0xba, 0x02, 0x7b, 0x4d, 0x01, 0xc0, 0xc6, 0xc4, 0x9f, 0xb6, 0xff,
+		0x2c, 0xf7, 0x53, 0x93, 0xea, 0x5d, 0xb4, 0xa7 };
+	static const unsigned char h0[32] = {
+		0xaf, 0x13, 0x49, 0xb9, 0xf5, 0xf9, 0xa1, 0xa6, 0xa0, 0x40, 0x4d, 0xea,
+		0x36, 0xdc, 0xc9, 0x49, 0x9b, 0xcb, 0x25, 0xc9, 0xad, 0xc1, 0x12, 0xb7,
+		0xcc, 0x9a, 0x93, 0xca, 0xe4, 0x1f, 0x32, 0x62 };
+	unsigned char *in = malloc(102400), id[32], id2[32];
+	const char *key = "whats the Elvish word for friend";
+	size_t i;
+
+	for (i = 0; i < 102400; i++)
+		in[i] = (unsigned char)(i % 251);
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, in, 1025, NULL, 0, id));
+	mu_assert(memcmp(id, h1025, 32) == 0, "BLAKE3 hash, 1025 bytes");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, in, 102400, key, 32, id));
+	mu_assert(memcmp(id, k102400, 32) == 0, "BLAKE3 keyed hash, 102400 bytes");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, NULL, 0, NULL, 0, id));
+	mu_assert(memcmp(id, h0, 32) == 0, "BLAKE3 hash, empty");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE2B, in, 1000, key, 32, id));
+	mu_assert_int_eq(0, pc_chunk_id(in, 1000, key, 32, id2));
+	mu_assert(memcmp(id, id2, 32) == 0, "PC_ID_BLAKE2B is pc_chunk_id");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, in, 10, key, 16, id) != 0, "16-byte BLAKE3 key");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, in, 10, NULL, 32, id) != 0, "NULL key, length 32");
+	mu_assert(pc_chunk_id2(3, in, 10, NULL, 0, id) != 0, "unknown id algorithm");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, NULL, 10, NULL, 0, id) != 0, "NULL input");
+	free(in);
+}
+
+/*
  * Derived keys: fixed forever (repositories depend on them), different per
  * purpose, and never equal to a chunk id made with the master key. The
  * known answer was computed independently (Python hashlib.blake2b).
@@ -889,6 +930,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_index_utf8_path);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_ids);
+	MU_RUN_TEST(test_chunk_id2);
 	MU_RUN_TEST(test_derive_key);
 	MU_RUN_TEST(test_chunker);
 	MU_RUN_TEST(test_gear_chunker);

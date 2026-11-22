@@ -98,6 +98,17 @@ BLAKE2_SRCS = $(BLAKE2b_SSE2) $(BLAKE2b_SSE3) $(BLAKE2b_SSE4) $(BLAKE2b_AVX) \
 	$(BLAKE2bp_AVX) $(BLAKE2bp_AVX512) $(BLAKE2b_NEON) $(BLAKE2bp_NEON)
 BLAKE2_OBJS = $(BLAKE2_SRCS:.c=.o)
 
+# BLAKE3 1.8.7, unmodified (VENDOR_PATCHES.md). It dispatches at run time
+# itself; ./config picks the SIMD files this architecture can build.
+BLAKE3_BASE_SRCS = crypto/blake3/blake3.c crypto/blake3/blake3_dispatch.c \
+	crypto/blake3/blake3_portable.c
+BLAKE3_X86_SRCS = crypto/blake3/blake3_sse2.c crypto/blake3/blake3_sse41.c \
+	crypto/blake3/blake3_avx2.c crypto/blake3/blake3_avx512.c
+BLAKE3_NEON_SRCS = crypto/blake3/blake3_neon.c
+BLAKE3_SRCS = $(BLAKE3_BASE_SRCS) @BLAKE3_SIMD_SRCS@
+BLAKE3_HDRS = crypto/blake3/blake3.h crypto/blake3/blake3_impl.h
+BLAKE3_OBJS = $(BLAKE3_SRCS:.c=.o)
+
 ZLIB_SRCS = zlib_compress.c
 ZLIB_HDRS = $(MAINHDRS)
 ZLIB_OBJS = $(ZLIB_SRCS:.c=.o)
@@ -274,7 +285,7 @@ BASE_CPPFLAGS = -I. -I./include -I./lzma -I./lzfx -I./lz4/lib @ZSTD_INCFLAGS@ -I
 	-D_FILE_OFFSET_BITS=64 -D_REENTRANT @SSE_INTRIN_FLAG@ -D_LZMA_PROB32 @ZSTD_CPPFLAGS@ \
 	-I./filters/lzp @LIBBSCCPPFLAGS@ -I./crypto/skein -I./utils -I./crypto/sha2 \
 	-I./crypto/scrypt -I./crypto/aes -I./crypto @KEYLEN@ -I./rabin/global \
-	-I./crypto/keccak -I./filters/transpose -I./crypto/blake2 $(EXTRA_CPPFLAGS) \
+	-I./crypto/keccak -I./filters/transpose -I./crypto/blake2 -I./crypto/blake3 $(EXTRA_CPPFLAGS) \
 	-I./crypto/xsalsa20 -I./archive -pedantic -Wall -Wno-variadic-macros -I./filters -fno-strict-aliasing \
 	-Wno-unused-but-set-variable -Wno-enum-compare -I./filters/analyzer -I./filters/dispack \
 	@COMPAT_CPPFLAGS@ @XSALSA20_DEBUG@ -I@LIBARCHIVE_DIR@/libarchive -I./filters/packjpg \
@@ -308,7 +319,7 @@ LDLIBS = @LDL@ -L./buildtmp -lbz2 -lz -lm @LIBBSCLFLAGS@ \
 OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) @ZSTD_OBJS@ $(ZSTD_ASM_OBJS) @ZSTD_WRAPOBJ@ $(CRCOBJS) \
 $(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
-$(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2_OBJS) \
+$(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2_OBJS) $(BLAKE3_OBJS) \
 @CRYPTO_COMPAT_OBJS@ $(CRYPTO_ASM_OBJS) $(ARCHIVEOBJS) $(PJPGOBJS) $(DISPACKOBJS) $(PPNMOBJS) \
 $(WAVPKOBJS) $(DICTOBJS)
 
@@ -350,6 +361,7 @@ SSE4_OPT_FLAG = @SSE4_OPT_FLAG@
 SSE3_OPT_FLAG = @SSE3_OPT_FLAG@
 SSE2_OPT_FLAG = @SSE2_OPT_FLAG@
 AVX512_OPT_FLAG = @AVX512_OPT_FLAG@
+AVX2_OPT_FLAG = @AVX2_OPT_FLAG@
 NEON_OPT_FLAG = @NEON_OPT_FLAG@
 
 SKEIN_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
@@ -487,6 +499,21 @@ $(BLAKE2_OBJS): $(BLAKE2_SRCS) $(BLAKE2_BASE_SRCS) $(BLAKE2_HDRS)
 	$(COMPILE) $(BASE_OPT) $(NEON_OPT_FLAG) $(CPPFLAGS) $(BLAKE2b_NEON) -o $(BLAKE2b_NEON:.c=.o)
 	$(COMPILE) $(BASE_OPT) $(NEON_OPT_FLAG) $(CPPFLAGS) $(BLAKE2bp_NEON) -o $(BLAKE2bp_NEON:.c=.o)
 
+# gnu11: blake3_dispatch.c uses C11 atomics for its CPU feature cache.
+BLAKE3_COMPILE = $(COMPILE) $(BASE_OPT) $(CPPFLAGS) -std=gnu11
+$(BLAKE3_OBJS): $(BLAKE3_HDRS)
+crypto/blake3/blake3.o crypto/blake3/blake3_dispatch.o crypto/blake3/blake3_portable.o \
+crypto/blake3/blake3_neon.o: %.o: %.c
+	$(BLAKE3_COMPILE) $< -o $@
+crypto/blake3/blake3_sse2.o: crypto/blake3/blake3_sse2.c
+	$(BLAKE3_COMPILE) $(SSE2_OPT_FLAG) $< -o $@
+crypto/blake3/blake3_sse41.o: crypto/blake3/blake3_sse41.c
+	$(BLAKE3_COMPILE) $(SSE4_OPT_FLAG) $< -o $@
+crypto/blake3/blake3_avx2.o: crypto/blake3/blake3_avx2.c
+	$(BLAKE3_COMPILE) $(AVX2_OPT_FLAG) $< -o $@
+crypto/blake3/blake3_avx512.o: crypto/blake3/blake3_avx512.c
+	$(BLAKE3_COMPILE) $(AVX512_OPT_FLAG) $< -o $@
+
 $(MAINOBJS): $(MAINSRCS) $(MAINHDRS)
 	$(COMPILE) $(GEN_OPT) $(LOOP_OPTFLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
@@ -572,7 +599,7 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit -I./filters/dict
-UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_sha2 test_api test_filters test_crypto test_algos test_reentrant
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_blake3 test_sha2 test_api test_filters test_crypto test_algos test_reentrant
 # Tests link the objects directly: the shared library hides internal symbols.
 # LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 
@@ -652,7 +679,7 @@ bench-build: $(LIB)
 # Third-party trees (lz4, zstd, bsc, libarchive, LZMA SDK, crypto
 # reference code, packJPG/packPNM/dispack/dict) are excluded.
 COV_EXCLUDE = '*/lz4/*' '*/zstd/*' '*/bsc/*' '*/archive/libarchive/*' \
-	'*/lzma/*' '*/crypto/blake2/*' '*/crypto/keccak/*' '*/crypto/skein/*' \
+	'*/lzma/*' '*/crypto/blake2/*' '*/crypto/blake3/*' '*/crypto/keccak/*' '*/crypto/skein/*' \
 	'*/crypto/sha2/*' '*/crypto/aes/*' '*/crypto/scrypt/*' '*/crypto/xsalsa20/*' \
 	'*/crypto/old/*' '*/utils/phash/*' '*/filters/packjpg/*' '*/filters/packpnm/*' \
 	'*/filters/dispack/*' '*/filters/dict/*' '*/test/*' '/nix/*' '/usr/*'
