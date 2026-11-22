@@ -314,7 +314,8 @@ extern void zstd_stats(int show);
 /** @name zstd dictionaries for sealed chunk objects (zstd_compress.c) */
 /**@{*/
 extern void *zstd_cdict_new(const void *dict, size_t len, int level);
-extern void *zstd_ddict_new(const void *dict, size_t len);
+extern int zstd_dict_new(const void *dict, size_t len, int level, void **cdict,
+    void **ddict);
 extern void zstd_cdict_free(void *cdict);
 extern void zstd_ddict_free(void *ddict);
 extern int zstd_compress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,

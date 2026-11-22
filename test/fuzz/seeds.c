@@ -47,7 +47,8 @@ quiet(void *a, int l, const char *m)
  * fuzz_chunk's first byte picks the mode: 0 builds a forged object from
  * (algorithm id, level, 20-bit length, payload), 8 the same as a
  * dictionary object (zstd with fuzz_chunk's dictionary); 2 opens the rest as is,
- * with a key when bit 2 is set (6); 3 opens a key file.
+ * with a key when bit 2 is set (6); 3 opens a key file, 19 sets the rest
+ * as a dictionary.
  */
 static void
 chunk_seeds(const char *dir)
@@ -121,6 +122,20 @@ chunk_seeds(const char *dir)
 			put(dir, "forged-zstd-dict", 8, f, 5 + ol - 104);
 		}
 		pc_free(c);
+	}
+	/* Dictionary mode (19): a trained zstd dictionary, entropy tables and all. */
+	{
+		static char samples[400 * 64];
+		static uint8_t dict[2048];
+		size_t sizes[400], dl = sizeof (dict), sn = 0;
+
+		for (i = 0; i < 400; i++) {
+			sizes[i] = (size_t)snprintf(samples + sn, 64, "{\"id\": %u, \"name\": \"user%u\"}\n",
+			    (unsigned)i, (unsigned)(i * 7919 % 10007));
+			sn += sizes[i];
+		}
+		if (pc_dict_train(samples, sizes, 400, dict, &dl) == 0)
+			put(dir, "dict-trained", 19, dict, dl);
 	}
 	if (pc_keyfile_size() <= sizeof (kf) && pc_keyfile_create("pw", 2, k, kf) == 0)
 		put(dir, "keyfile", 3, kf, pc_keyfile_size());

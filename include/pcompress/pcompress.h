@@ -72,7 +72,7 @@ typedef enum {
 	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
 	PC_ERR_INTERNAL = 8,	/**< anything else */
 	PC_ERR_CANCELLED = 9,	/**< the pc_set_progress() callback stopped the job */
-	PC_ERR_DICT = 10	/**< the object needs a pc_set_dict() dictionary not set */
+	PC_ERR_DICT = 10	/**< the object needs a pc_set_dict() dictionary not set, or a bad one */
 } pc_error_t;
 
 /** Log levels for pc_set_log(). */
@@ -530,7 +530,11 @@ int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *
  * pc_set_allocator()'s functions. Training is deterministic: the same
  * samples give the same dictionary.
  *
- * pc_set_dict() copies dict into the context (NULL, 0 removes it).
+ * pc_set_dict() copies dict into the context (NULL, 0 removes it) and
+ * digests it, so it fails here with PC_ERR_DICT if zstd cannot use it (a
+ * zstd-format dictionary whose tables do not parse; other bytes are
+ * taken as raw content). On failure the context keeps the dictionary it
+ * had.
  * While one is set, pc_chunk_seal() needs the zstd algorithm (else it
  * fails with PC_ERR_ARGS), and the objects under 128 KB it compresses
  * name the dictionary by pc_dict_id() and need it to open (larger ones

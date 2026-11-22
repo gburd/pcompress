@@ -558,7 +558,7 @@ seal_err(pc_ctx_t *ctx, pc_error_t code, const char *msg)
 
 /*
  * The context's pc_set_dict() dictionary: its bytes and id, and zstd's
- * digested forms, made on first use. The compressing one is for one
+ * digested forms, made by pc_set_dict(). The compressing one is for one
  * level and remade when the level changes; the decompressing one serves
  * every level.
  */
@@ -637,6 +637,7 @@ pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len)
 {
 #ifdef ENABLE_PC_ZSTD
 	struct chunk_dict *d;
+	int err;
 #endif
 
 	if (ctx == NULL)
@@ -658,6 +659,13 @@ pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len)
 	if (pc_dict_id(dict, len, d->id) != 0) {
 		dict_destroy(d);
 		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_set_dict: hash failure"));
+	}
+	/* Digest it now: a dictionary zstd refuses fails here, not at seal or open. */
+	d->clevel = ctx->level >= 1 ? ctx->level : 6;
+	if ((err = zstd_dict_new(d->bytes, len, d->clevel, &d->cdict, &d->ddict)) != 0) {
+		dict_destroy(d);
+		return (seal_err(ctx, (pc_error_t)err, err == PC_ERR_NOMEM ?
+		    "pc_set_dict: out of memory" : "pc_set_dict: malformed zstd dictionary"));
 	}
 	chunk_dict_free(ctx);
 	ctx->chunk_dict = d;
@@ -972,11 +980,6 @@ open_payload(pc_ctx_t *ctx, const uchar_t *p, const uchar_t *src, uint64_t clen,
 			*why = PC_ERR_DICT;
 			*msg = d == NULL ? "pc_chunk_open: object needs a dictionary, none set" :
 			    "pc_chunk_open: object needs a different dictionary";
-			return (-1);
-		}
-		if (d->ddict == NULL && (d->ddict = zstd_ddict_new(d->bytes, d->len)) == NULL) {
-			*why = PC_ERR_NOMEM;
-			*msg = "pc_chunk_open: out of memory";
 			return (-1);
 		}
 		drv = zstd_decompress_dict((void *)src, clen, out, &dl, d->ddict, k->data);

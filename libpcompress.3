@@ -350,7 +350,9 @@ the
 .Fn pc_set_progress
 callback stopped the job
 .It Dv PC_ERR_DICT
-the chunk object needs a dictionary the context does not have
+the chunk object needs a dictionary the context does not have, or
+.Fn pc_set_dict
+was given one zstd cannot use
 .El
 .Fn pc_strerror
 names a class.
@@ -463,6 +465,9 @@ The caller stores it, typically as an object of its own.
 Training is deterministic; its working memory comes from the C library.
 .It Fn pc_set_dict
 Copies a dictionary into the context, or removes it (NULL, 0).
+It fails with
+.Dv PC_ERR_DICT
+if zstd cannot use it, and the context then keeps the dictionary it had.
 While one is set,
 .Fn pc_chunk_seal
 needs the zstd algorithm, and the objects under 128 KB it compresses

@@ -16,8 +16,10 @@
  * frames reach the dictionary decoder too.
  *
  * The other modes feed the raw input to pc_chunk_open() (with and
- * without a key, so the header and tag checks are fuzzed too) and to
- * pc_keyfile_open(). Uses only the public API. Built by "make fuzz-build"
+ * without a key, so the header and tag checks are fuzzed too), to
+ * pc_keyfile_open(), and to pc_set_dict(): a dictionary is read back
+ * from storage too, and zstd parses its entropy tables. Uses only the
+ * public API. Built by "make fuzz-build"
  * (clang with libFuzzer and ASan); -DFUZZ_AFL builds a stdin driver.
  */
 
@@ -130,6 +132,30 @@ forged(const uint8_t *d, size_t n, int dict)
 	free(o);
 }
 
+/*
+ * Set the input as a dictionary on a fresh context; if it is accepted, a
+ * chunk sealed with it must open to the same bytes.
+ */
+static void
+dict_check(const uint8_t *d, size_t n)
+{
+	static const char text[] = "{\"id\": 17, \"name\": \"user17\", \"shell\": \"/bin/sh\"}\n";
+	pc_ctx_t *c = pc_new();
+	uint8_t obj[256];
+	size_t ol = sizeof (obj), pl = OUT_MAX;
+
+	if (c == NULL)
+		abort();
+	pc_set_log(c, quiet, NULL, PC_LOG_NONE);
+	if (pc_set_dict(c, d, n) == 0) {
+		if (pc_chunk_seal(c, text, sizeof (text), obj, &ol) != 0 ||
+		    pc_chunk_open(c, obj, ol, out, &pl) != 0 || pl != sizeof (text) ||
+		    memcmp(out, text, pl) != 0)
+			abort();
+	}
+	pc_free(c);
+}
+
 static int
 fuzz_one(const uint8_t *data, size_t size)
 {
@@ -147,6 +173,10 @@ fuzz_one(const uint8_t *data, size_t size)
 		open_check(data[0] & 4 ? keyed_ctx : plain_ctx, data + 1, size - 1);
 		break;
 	case 3:
+		if (data[0] & 16) {
+			dict_check(data + 1, size - 1);
+			break;
+		}
 		/*
 		 * A key file with the right magic runs scrypt with the file's
 		 * own parameters, up to 512 MB and a second or more: far too

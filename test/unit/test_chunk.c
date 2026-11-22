@@ -312,6 +312,13 @@ MU_TEST(test_dict)
 	mu_assert_int_eq(0, pc_set_dict(c, dict, dl));
 	mu_assert(pc_set_dict(c, NULL, 5) != 0 && pc_set_dict(c, dict, 0) != 0, "bad pc_set_dict");
 	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(c));
+	/* A zstd dictionary with broken entropy tables is refused at once. */
+	memcpy(dict2, dict, dl);
+	memset(dict2 + 8, 0xff, 64);
+	mu_assert(pc_set_dict(c, dict2, dl) != 0, "malformed dictionary accepted");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(c));
+	mu_assert(pc_set_dict(c, dict, 64) != 0, "truncated dictionary accepted");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(c));
 	/* A failed pc_set_dict() keeps the dictionary the context had. */
 	mu_assert_int_eq(0, pc_set_algorithm(c, "zstd"));
 	ol = sizeof (obj);

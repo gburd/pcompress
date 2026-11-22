@@ -627,7 +627,7 @@ pc_strerror(pc_error_t code)
 	    "out of memory", "not a pcompress file or unsupported version",
 	    "corrupt data", "verification failed (checksum, HMAC or password)",
 	    "encryption setup failed", "internal error", "cancelled",
-	    "needs a different dictionary" };
+	    "dictionary missing, different or unusable" };
 
 	return ((unsigned)code < sizeof (s) / sizeof (s[0]) ? s[code] : "unknown error");
 }

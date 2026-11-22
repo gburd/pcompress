@@ -79,12 +79,23 @@ window_log_for_chunksize(uint64_t chunksize)
 	return (wlog);
 }
 
+/*
+ * Set when one of this thread's zstd allocations fails, so a zstd call
+ * that returns only NULL can be told apart from one that refused its
+ * input (zstd_dict_new()).
+ */
+static __thread int zstd_nomem;
+
 /* zstd's allocations (contexts, worker pool, buffers) go through pc_malloc(). */
 static void *
 zstd_alloc(void *opaque, size_t n)
 {
+	void *p = pc_malloc(n);
+
 	(void) opaque;
-	return (pc_malloc(n));
+	if (p == NULL)
+		zstd_nomem = 1;
+	return (p);
 }
 
 static void
@@ -276,11 +287,26 @@ zstd_cdict_new(const void *dict, size_t len, int level)
 	    cp, zstd_mem));
 }
 
-void *
-zstd_ddict_new(const void *dict, size_t len)
+/*
+ * Digest dict both ways: for compressing at pcompress level, and for
+ * decompressing. 0 with *cdict and *ddict set; PC_ERR_NOMEM; or
+ * PC_ERR_DICT when zstd refuses the bytes, which happens only to a
+ * zstd-format dictionary (it starts with zstd's dictionary magic) whose
+ * entropy tables do not parse. Bytes without the magic are taken as raw
+ * content and always work. Neither half of a failure is kept.
+ */
+int
+zstd_dict_new(const void *dict, size_t len, int level, void **cdict, void **ddict)
 {
-	return (ZSTD_createDDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
-	    zstd_mem));
+	zstd_nomem = 0;
+	*ddict = ZSTD_createDDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
+	    zstd_mem);
+	*cdict = *ddict == NULL ? NULL : zstd_cdict_new(dict, len, level);
+	if (*cdict != NULL)
+		return (0);
+	ZSTD_freeDDict((ZSTD_DDict *)*ddict);
+	*ddict = NULL;
+	return (zstd_nomem ? PC_ERR_NOMEM : PC_ERR_DICT);
 }
 
 void
