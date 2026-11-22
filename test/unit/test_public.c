@@ -11,6 +11,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#ifndef _WIN32
+#include <pwd.h>
+#include <grp.h>
+#endif
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
@@ -569,7 +573,15 @@ MU_TEST(test_pub_progress_cancel_archive)
 	char args[1024], tree[260], f[300], target[320], pz[330];
 	struct prog p;
 	pc_ctx_t *c;
-	int i, fds = open_fds();
+	int i, fds;
+
+	/*
+	 * Archive mode looks up each file's owner, and the C library may keep
+	 * a descriptor once it has (illumos: a door to nscd): look up first.
+	 */
+	(void) getpwuid(getuid());
+	(void) getgrgid(getgid());
+	fds = open_fds();
 
 	/* Four 2 MB files: 32 chunks of 256k. */
 	snprintf(tree, sizeof (tree), "%s/tree", dir);
