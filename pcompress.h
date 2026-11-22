@@ -310,6 +310,22 @@ extern void zstd_stats(int show);
 #endif
 /**@}*/
 
+#ifdef ENABLE_PC_ZSTD
+/** @name zstd dictionaries for sealed chunk objects (zstd_compress.c) */
+/**@{*/
+extern void *zstd_cdict_new(const void *dict, size_t len, int level);
+extern void *zstd_ddict_new(const void *dict, size_t len);
+extern void zstd_cdict_free(void *cdict);
+extern void zstd_ddict_free(void *ddict);
+extern int zstd_compress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    int level, void *cdict, void *data);
+extern int zstd_decompress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    void *ddict, void *data);
+extern int zstd_train_dict(void *dict, size_t *len, const void *samples,
+    const size_t *sizes, unsigned n);
+#endif
+/**@}*/
+
 #ifdef ENABLE_PC_LIBBSC
 extern int libbsc_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
@@ -420,6 +436,7 @@ struct pc_ctx {
 	unsigned char chunk_key[32];	/* pc_set_key(): raw key for chunk objects */
 	int chunk_key_set;
 	void *chunk_codec[2];	/* chunk.c: codec state reused by seal/open */
+	void *chunk_dict;	/* chunk.c: pc_set_dict() dictionary; NULL: none */
 	char algo_name[ALGO_SZ + 1];	/* pc_set_algorithm() copy; algo points here */
 	pc_progress_fn progress_fn;	/* pc_set_progress(); NULL: none */
 	void *progress_arg;
@@ -479,7 +496,7 @@ int start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int
 /** Decompress filename to to_filename (NULL: the job's streams). */
 int start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename);
 
-/** Free the codec state pc_chunk_seal()/pc_chunk_open() kept (chunk.c). */
+/** Free the codec state and dictionary pc_chunk_seal()/pc_chunk_open() kept (chunk.c). */
 void chunk_codecs_free(pc_ctx_t *pctx);
 
 #ifdef	__cplusplus

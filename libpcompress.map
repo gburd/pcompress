@@ -23,6 +23,7 @@ PCOMPRESS_1 {
 		pc_manifest_add_sz; pc_manifest_get_sz; pc_manifest_find_sz;
 		pc_set_allocator; pc_set_default_log; pc_set_thread_hooks;
 		pc_set_progress;
+		pc_dict_train; pc_set_dict; pc_dict_id;
 	local:
 		*;
 };

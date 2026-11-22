@@ -149,7 +149,9 @@ ZSTDSRCS = zstd/lib/common/debug.c zstd/lib/common/entropy_common.c \
 	zstd/lib/decompress/huf_decompress.c \
 	zstd/lib/decompress/zstd_ddict.c \
 	zstd/lib/decompress/zstd_decompress_block.c \
-	zstd/lib/decompress/zstd_decompress.c
+	zstd/lib/decompress/zstd_decompress.c \
+	zstd/lib/dictBuilder/cover.c zstd/lib/dictBuilder/divsufsort.c \
+	zstd/lib/dictBuilder/fastcover.c zstd/lib/dictBuilder/zdict.c
 ZSTD_ASM_SRCS = zstd/lib/decompress/huf_decompress_amd64.S
 ZSTD_ASM_OBJS = $(ZSTD_ASM_SRCS:.S=.o)
 ZSTDHDRS = zstd/lib/zstd.h

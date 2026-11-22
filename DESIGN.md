@@ -253,13 +253,14 @@ the `.pz` format.
 |--------|------|-------|
 | 0  | 4  | magic `PCK1` |
 | 4  | 1  | version (1) |
-| 5  | 1  | flags: 1 encrypted, 2 stored raw |
+| 5  | 1  | flags: 1 encrypted, 2 stored raw, 4 dictionary (4.5) |
 | 6  | 1  | algorithm id (stable table in `chunk.c`; 0 when raw) |
 | 7  | 1  | level (low 4 bits), adaptive sub-algorithm (high 4) |
 | 8  | 8  | plaintext length |
 | 16 | 24 | nonce (random when encrypted, else 0) |
-| 40 | n  | payload |
-| 40+n | 32 | tag: BLAKE2b-256 over bytes [0, 40+n) |
+| 40 | 32 | dictionary id, only with flag 4 |
+| h  | n  | payload (h is 72 with flag 4, else 40) |
+| h+n | 32 | tag: BLAKE2b-256 over bytes [0, h+n) |
 
 With a key, the payload is XSalsa20-encrypted and the tag is keyed
 (encrypt-then-MAC). The encryption and MAC keys are the two halves of
@@ -271,6 +272,21 @@ for raw objects exactly the payload length) before anything else, then
 the tag in constant time, and only then decrypts and decompresses into
 exactly the declared length. The algorithm ids never change meaning:
 add new ones at the end.
+
+**Dictionaries** (`pc_set_dict`, 4.5). With flag 4 the payload is a zstd
+frame compressed with a dictionary, and bytes 40-71 name it: BLAKE2b-256
+of the dictionary bytes (`pc_dict_id`). The tag covers the id, so it
+cannot be swapped. The flag needs algorithm 1 (zstd) and is never set
+with flag 2: an object stored raw needs no dictionary. Open compares the
+id with the context's dictionary after the tag check and fails with
+`PC_ERR_DICT` when they differ or none is set, so a wrong dictionary is
+an error, not garbage. zstd's own 4-byte dictionary id is left out of
+the frame (`ZSTD_c_dictIDFlag` 0): the object's id already says which
+one, with no chance of collision between repositories. The id costs 32
+bytes, so seal keeps the dictionary frame only when it is at least 33
+bytes smaller than the input, and `pc_chunk_seal_bound()` is unchanged.
+Objects without a dictionary are byte-for-byte what 4.4 writes; 4.4 and
+older refuse flag 4 (an unknown flag) as corrupt.
 
 **Key files** (`pc_keyfile_create`/`open`, 128 bytes): magic `PCKEY1`,
 KDF id (1 = scrypt), log2 N, r, p, a 16-byte salt and a 24-byte nonce,

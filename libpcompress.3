@@ -28,6 +28,9 @@
 .Nm pc_set_key ,
 .Nm pc_chunk_seal ,
 .Nm pc_chunk_open ,
+.Nm pc_dict_train ,
+.Nm pc_set_dict ,
+.Nm pc_dict_id ,
 .Nm pc_keyfile_create ,
 .Nm pc_keyfile_open ,
 .Nm pc_version ,
@@ -109,6 +112,12 @@ libpcompress
 .Fn pc_chunk_open "pc_ctx_t *ctx" "const void *in" "size_t len" "void *out" "size_t *outlen"
 .Ft size_t
 .Fn pc_chunk_open_size "const void *obj" "size_t len"
+.Ft int
+.Fn pc_dict_train "const void *samples" "const size_t *sizes" "unsigned n" "void *dict" "size_t *dictlen"
+.Ft int
+.Fn pc_set_dict "pc_ctx_t *ctx" "const void *dict" "size_t len"
+.Ft int
+.Fn pc_dict_id "const void *dict" "size_t len" "uint8_t id[32]"
 .Ft size_t
 .Fn pc_keyfile_size "void"
 .Ft int
@@ -337,6 +346,8 @@ anything else
 the
 .Fn pc_set_progress
 callback stopped the job
+.It Dv PC_ERR_DICT
+the chunk object needs a dictionary the context does not have
 .El
 .Fn pc_strerror
 names a class.
@@ -423,6 +434,31 @@ After opening, compare
 of the result with the name the object was fetched by.
 .Fn pc_chunk_open_size
 reads the plaintext size from the header (unverified) to size the buffer.
+.It Fn pc_dict_train
+Trains a zstd dictionary of at most
+.Fa *dictlen
+bytes (about 110 KB is usual) from
+.Fa n
+samples laid end to end, and sets
+.Fa *dictlen
+to its size.
+The caller stores it, typically as an object of its own.
+Training is deterministic; its working memory comes from the C library.
+.It Fn pc_set_dict
+Copies a dictionary into the context, or removes it (NULL, 0).
+While one is set,
+.Fn pc_chunk_seal
+needs the zstd algorithm, and the objects it compresses record the
+dictionary's id; pieces under about 8 KB shrink 1.4 to 1.8 times more,
+64 KB chunks barely.
+.Fn pc_chunk_open
+of such an object fails with
+.Dv PC_ERR_DICT
+unless the context holds that same dictionary.
+Raw objects and objects sealed without a dictionary need none.
+Versions before 4.5 refuse dictionary objects.
+.It Fn pc_dict_id
+BLAKE2b-256 of the dictionary bytes: the id objects carry.
 .It Fn pc_keyfile_create
 Makes a random 256-bit key and writes it, wrapped with a password of any
 length, to

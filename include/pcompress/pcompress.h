@@ -71,7 +71,8 @@ typedef enum {
 	PC_ERR_VERIFY = 6,	/**< checksum, CRC or HMAC mismatch; wrong password */
 	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
 	PC_ERR_INTERNAL = 8,	/**< anything else */
-	PC_ERR_CANCELLED = 9	/**< the pc_set_progress() callback stopped the job */
+	PC_ERR_CANCELLED = 9,	/**< the pc_set_progress() callback stopped the job */
+	PC_ERR_DICT = 10	/**< the object needs a pc_set_dict() dictionary not set */
 } pc_error_t;
 
 /** Log levels for pc_set_log(). */
@@ -496,6 +497,38 @@ int pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *
  * is the buffer size on entry, the plaintext size on return.
  */
 int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
+
+/**
+ * zstd dictionaries for small chunks: a backup tool trains one on samples
+ * of a repository's data, stores it as an object of its own, and sets it
+ * on every context that seals or opens that repository's chunks. Pieces
+ * under about 8 KB (small files, per-directory manifests) then compress
+ * 1.4 to 1.8 times better; 64 KB chunks gain almost nothing.
+ *
+ * pc_dict_train() writes a dictionary of at most *dictlen bytes (about
+ * 110 KB is usual) to dict from n samples laid end to end in samples,
+ * sizes[i] bytes each, and sets *dictlen to its size. It needs a few
+ * hundred samples, at least about 100 times the dictionary size in all.
+ * 0 or -1. Its working memory comes from the C library, not from
+ * pc_set_allocator()'s functions. Training is deterministic: the same
+ * samples give the same dictionary.
+ *
+ * pc_set_dict() copies dict into the context (NULL, 0 removes it).
+ * While one is set, pc_chunk_seal() needs the zstd algorithm (else it
+ * fails with PC_ERR_ARGS), and the objects it compresses name the
+ * dictionary by pc_dict_id() and need it to open: pc_chunk_open() fails
+ * with PC_ERR_DICT when the context has no dictionary or another one.
+ * Objects stored raw (incompressible, or under 34 bytes) need none.
+ * Objects sealed without a dictionary open with or without one set.
+ * Versions before 4.5 refuse dictionary objects as corrupt.
+ *
+ * pc_dict_id() is BLAKE2b-256 of the dictionary bytes, unkeyed: the name
+ * objects carry. 0 or -1.
+ */
+int pc_dict_train(const void *samples, const size_t *sizes, unsigned n, void *dict,
+    size_t *dictlen);
+int pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len);
+int pc_dict_id(const void *dict, size_t len, uint8_t id[32]);
 
 /**
  * Plaintext size an object declares, from its header only (not verified),

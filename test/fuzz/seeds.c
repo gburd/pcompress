@@ -45,7 +45,8 @@ quiet(void *a, int l, const char *m)
 
 /*
  * fuzz_chunk's first byte picks the mode: 0 builds a forged object from
- * (algorithm id, level, 20-bit length, payload); 2 opens the rest as is,
+ * (algorithm id, level, 20-bit length, payload), 8 the same as a
+ * dictionary object (zstd with fuzz_chunk's dictionary); 2 opens the rest as is,
  * with a key when bit 2 is set (6); 3 opens a key file.
  */
 static void
@@ -96,6 +97,29 @@ chunk_seeds(const char *dir)
 		ol = sizeof (obj);
 		if (pc_chunk_seal(c, in, sizeof (in), obj, &ol) == 0)
 			put(dir, "object-encrypted", 6, obj, ol);
+		pc_free(c);
+	}
+	/* Forged dictionary mode (8): fuzz_chunk's dictionary, as raw content. */
+	{
+		static uint8_t dict[4096];
+		pc_ctx_t *c = pc_new();
+
+		for (i = 0; i < sizeof (dict); i++)
+			dict[i] = (uint8_t)("the quick brown fox jumps "[i % 26] + (i % 97 == 0));
+		pc_set_log(c, quiet, NULL, PC_LOG_NONE);
+		ol = sizeof (obj);
+		if (pc_set_dict(c, dict, sizeof (dict)) == 0 &&
+		    pc_chunk_seal(c, in, sizeof (in), obj, &ol) == 0 && (obj[5] & 0x04)) {
+			uint8_t f[4096];
+
+			f[0] = 1;
+			f[1] = obj[7];
+			f[2] = obj[8];
+			f[3] = obj[9];
+			f[4] = obj[10];
+			memcpy(f + 5, obj + 72, ol - 104);
+			put(dir, "forged-zstd-dict", 8, f, 5 + ol - 104);
+		}
 		pc_free(c);
 	}
 	if (pc_keyfile_size() <= sizeof (kf) && pc_keyfile_create("pw", 2, k, kf) == 0)

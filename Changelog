@@ -17,6 +17,16 @@ Library: pc_set_progress(ctx, fn, arg) reports input consumed and output
   written after each chunk of pc_compress_fd(), pc_decompress_fd() and
   start_pcompress(); a non-zero return cancels the job cleanly, with
   the new error class PC_ERR_CANCELLED.
+Library: zstd dictionaries for sealed chunk objects. pc_dict_train()
+  trains one from samples, pc_set_dict() makes a context seal and open
+  with it, and pc_dict_id() names it. Objects sealed with a dictionary
+  carry its id (flag 4 in the PCK1 header, 32 more bytes) and open only
+  with that dictionary set: otherwise pc_chunk_open() fails with the new
+  error class PC_ERR_DICT. On pieces under 8 KB it shrinks stored size
+  by 30 to 40% (small /usr/share/doc files at zstd:3: ratio 1.89 to 2.96;
+  per-directory manifests of /usr: 1.75 to 2.46); 64 KB chunks gain
+  almost nothing. Objects sealed without a dictionary are unchanged;
+  versions before this one refuse dictionary objects.
 Fix: a failed compress to a named output (pcompress file target, or the
   command-line style API with a target name) left the partial .pz file
   behind; it is removed now, as the temporary file is otherwise.

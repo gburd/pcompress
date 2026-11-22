@@ -143,6 +143,122 @@ MU_TEST(test_compresses_and_falls_back)
 	free(b);
 }
 
+/* A small JSON-like record: shared structure, varying values. */
+static size_t
+record(char *b, size_t cap, unsigned i)
+{
+	return ((size_t)snprintf(b, cap, "{\"id\": %u, \"name\": \"user%u\", \"email\": "
+	    "\"user%u@example.org\", \"active\": %s, \"groups\": [\"staff\", \"wheel\"], "
+	    "\"shell\": \"/bin/sh\", \"home\": \"/home/user%u\", \"quota\": %u}\n",
+	    i, i * 7919 % 10007, i * 31 % 997, i % 3 ? "true" : "false", i, (i * 2654435761U) >> 20));
+}
+
+/*
+ * Dictionaries: training is deterministic, objects with one are smaller
+ * for small inputs, name the dictionary and need exactly it to open;
+ * objects without one open either way; raw objects carry none.
+ */
+MU_TEST(test_dict)
+{
+	size_t sizes[600], dl = 8192, dl2 = 8192, n = 0, ol, ol2, pl;
+	char *samples = malloc(600 * 256), rec[1024];
+	unsigned char *dict = malloc(dl), *dict2 = malloc(dl), obj[2048], obj2[2048], out[1024];
+	unsigned char key[32] = { 9 }, id[32], noise[300];
+	pc_ctx_t *c, *d;
+	unsigned i;
+
+	for (i = 0; i < 600; i++) {
+		sizes[i] = record(samples + n, 256, i);
+		n += sizes[i];
+	}
+	mu_assert_int_eq(0, pc_dict_train(samples, sizes, 600, dict, &dl));
+	mu_assert(dl > 0 && dl <= 8192, "dictionary size");
+	mu_assert_int_eq(0, pc_dict_train(samples, sizes, 600, dict2, &dl2));
+	mu_assert(dl == dl2 && memcmp(dict, dict2, dl) == 0, "training not deterministic");
+	mu_assert(pc_dict_train(samples, sizes, 0, dict2, &dl2) != 0, "no samples");
+
+	/* One record not among the samples: smaller with the dictionary. */
+	n = record(rec, sizeof (rec), 100000);
+	c = ctx_with("zstd", 3, NULL);
+	ol2 = sizeof (obj2);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj2, &ol2));
+	mu_assert_int_eq(0, pc_set_dict(c, dict, dl));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert(ol + 40 < ol2, "dictionary did not help a small record");
+	mu_assert(obj[5] == 0x04 && obj[6] == 1, "dictionary flag and zstd id");
+	mu_assert_int_eq(0, pc_dict_id(dict, dl, id));
+	mu_assert(memcmp(obj + 40, id, 32) == 0, "object names its dictionary");
+	mu_assert(pc_chunk_open_size(obj, ol) == n, "open_size");
+
+	/* Opens with the dictionary; PC_ERR_DICT without it or with another. */
+	d = ctx_with(NULL, 0, NULL);
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "opened without its dictionary");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(d));
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj2, ol2, out, &pl));
+	dict2[dl / 2] ^= 1;
+	mu_assert_int_eq(0, pc_set_dict(d, dict2, dl));
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "opened with another dictionary");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(d));
+	mu_assert_int_eq(0, pc_set_dict(d, dict, dl));
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, ol, out, &pl));
+	mu_assert(pl == n && memcmp(out, rec, n) == 0, "dictionary round trip");
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj2, ol2, out, &pl));
+	mu_assert(pl == n && memcmp(out, rec, n) == 0, "plain object with a dictionary set");
+
+	/* The tag covers the dictionary id. */
+	obj[50] ^= 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "changed dictionary id accepted");
+	mu_assert_int_eq(PC_ERR_VERIFY, pc_last_error_code(d));
+
+	/* Noise and tiny inputs are stored raw, without the id. */
+	fill(noise, sizeof (noise), 1);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, noise, sizeof (noise), obj, &ol));
+	mu_assert(obj[5] == 0x02 && ol == pc_chunk_seal_bound(sizeof (noise)), "noise raw");
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, "tiny", 4, obj, &ol));
+	mu_assert(obj[5] == 0x02, "tiny raw");
+
+	/* Every level, with a key, through a fresh context. */
+	for (i = 1; i <= 14; i++) {
+		pc_ctx_t *e = ctx_with("zstd", (int)i, key), *f = ctx_with(NULL, 0, key);
+
+		pc_set_dict(e, dict, dl);
+		pc_set_dict(f, dict, dl);
+		ol = sizeof (obj);
+		mu_assert_int_eq(0, pc_chunk_seal(e, rec, n, obj, &ol));
+		mu_assert(obj[5] == 0x05, "encrypted dictionary object");
+		pl = sizeof (out);
+		mu_assert_int_eq(0, pc_chunk_open(f, obj, ol, out, &pl));
+		mu_assert(pl == n && memcmp(out, rec, n) == 0, "keyed dictionary round trip");
+		pc_free(e);
+		pc_free(f);
+	}
+
+	/* Only zstd takes a dictionary; clearing it restores other algorithms. */
+	mu_assert_int_eq(0, pc_set_algorithm(c, "lz4"));
+	ol = sizeof (obj);
+	mu_assert(pc_chunk_seal(c, rec, n, obj, &ol) != 0, "lz4 with a dictionary");
+	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(c));
+	mu_assert_int_eq(0, pc_set_dict(c, NULL, 0));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert(pc_set_dict(c, NULL, 5) != 0 && pc_set_dict(c, dict, 0) != 0, "bad pc_set_dict");
+	mu_assert(pc_dict_id(NULL, 0, id) != 0, "pc_dict_id of nothing");
+	pc_free(c);
+	pc_free(d);
+	free(samples);
+	free(dict);
+	free(dict2);
+}
+
 /* Every one-byte change and every truncation of a small object fails. */
 static void
 tamper_all(const unsigned char *key, int kind)
@@ -742,6 +858,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_chunker);
 	MU_RUN_TEST(test_gear_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);
+	MU_RUN_TEST(test_dict);
 	MU_RUN_TEST(test_keys);
 	MU_RUN_TEST(test_bad_args);
 	MU_RUN_TEST(test_tamper_rejected);

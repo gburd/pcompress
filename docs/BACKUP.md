@@ -134,6 +134,15 @@ and the repository's lifecycle.
   manifest, with `pc_set_algorithm` chosen per repository (zstd by
   default). On restore, compare `pc_chunk_id` of the opened object with
   the name it was fetched by.
+- **Small objects:** a zstd dictionary per repository
+  (`pc_dict_train` on a few thousand small files or manifests, stored as
+  an object of its own and named in the repository config, then
+  `pc_set_dict` on every context). On pieces under 8 KB it cut stored
+  size by 30 to 40% (small `/usr/share/doc` files: ratio 1.89 to 2.96;
+  per-directory manifests of `/usr`: 1.75 to 2.46), and it costs
+  nothing on 64 KB chunks, where it also gains nothing. A dictionary
+  object must never be pruned while any object names it; a new
+  dictionary applies to new objects only.
 - **Keys:** `pc_keyfile_create` at `argh init`, `pc_keyfile_open` at
   each run. The password changes by rewrapping the same key in a new key
   file, with no re-encryption of the data. A second key file can wrap the

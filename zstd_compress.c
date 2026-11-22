@@ -35,6 +35,7 @@
 #define	ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <zstd_errors.h>
+#include <zdict.h>
 
 /*
  * Maximum chunk size for Zstandard.  ZSTD itself can handle very large
@@ -257,5 +258,102 @@ zstd_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	}
 
 	*dstlen = rv;
+	return (0);
+}
+
+/*
+ * Dictionaries for sealed chunk objects (chunk.c). A digested dictionary
+ * for compressing is made for one pcompress level; one for decompressing
+ * serves every level. Both copy the dictionary bytes, so the caller's
+ * buffer need not outlive them.
+ */
+void *
+zstd_cdict_new(const void *dict, size_t len, int level)
+{
+	ZSTD_compressionParameters cp = ZSTD_getCParams(map_level(level), 0, len);
+
+	return (ZSTD_createCDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
+	    cp, zstd_mem));
+}
+
+void *
+zstd_ddict_new(const void *dict, size_t len)
+{
+	return (ZSTD_createDDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
+	    zstd_mem));
+}
+
+void
+zstd_cdict_free(void *cdict)
+{
+	ZSTD_freeCDict((ZSTD_CDict *)cdict);
+}
+
+void
+zstd_ddict_free(void *ddict)
+{
+	ZSTD_freeDDict((ZSTD_DDict *)ddict);
+}
+
+/*
+ * zstd_compress() with a digested dictionary made for the same level;
+ * data is a COMPRESS state from zstd_init(). The frame does not record
+ * zstd's dictionary id (4 bytes saved): the chunk object names its
+ * dictionary itself. The dictionary is dropped from the context again
+ * before returning, so a later zstd_compress() on it does not use one.
+ */
+int
+zstd_compress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    int level, void *cdict, void *data)
+{
+	struct zstd_params *zdat = (struct zstd_params *)data;
+	size_t rv;
+
+	ZSTD_CCtx_reset(zdat->cctx, ZSTD_reset_session_only);
+	ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_compressionLevel, map_level(level));
+	ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_dictIDFlag, 0);
+	ZSTD_CCtx_refCDict(zdat->cctx, (const ZSTD_CDict *)cdict);
+	rv = ZSTD_compress2(zdat->cctx, dst, (size_t)*dstlen, src, (size_t)srclen);
+	ZSTD_CCtx_refCDict(zdat->cctx, NULL);
+	if (ZSTD_isError(rv))
+		return (-1);	/* as in zstd_compress(): the caller stores it raw */
+	*dstlen = rv;
+	return (0);
+}
+
+/* zstd_decompress() with a digested dictionary; data is a DECOMPRESS state. */
+int
+zstd_decompress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    void *ddict, void *data)
+{
+	struct zstd_params *zdat = (struct zstd_params *)data;
+	size_t rv;
+
+	rv = ZSTD_decompress_usingDDict(zdat->dctx, dst, (size_t)*dstlen, src,
+	    (size_t)srclen, (const ZSTD_DDict *)ddict);
+	if (ZSTD_isError(rv)) {
+		log_msg(LOG_ERR, 0, "ZSTD decompress error: %s\n", ZSTD_getErrorName(rv));
+		return (-1);
+	}
+	*dstlen = rv;
+	return (0);
+}
+
+/*
+ * Train a dictionary of at most *len bytes into dict from n samples laid
+ * end to end in samples, sizes[i] bytes each; *len is set to its size.
+ * 0, or -1 if zstd cannot make one (too few or too small samples).
+ * NB: the trainer's working memory comes from the C library, not
+ * pc_set_allocator()'s functions: zstd's dictBuilder calls malloc().
+ */
+int
+zstd_train_dict(void *dict, size_t *len, const void *samples, const size_t *sizes,
+    unsigned n)
+{
+	size_t rv = ZDICT_trainFromBuffer(dict, *len, samples, sizes, n);
+
+	if (ZDICT_isError(rv))
+		return (-1);
+	*len = rv;
 	return (0);
 }
