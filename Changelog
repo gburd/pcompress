@@ -27,6 +27,13 @@ Library: zstd dictionaries for sealed chunk objects. pc_dict_train()
   per-directory manifests of /usr: 1.75 to 2.46); 64 KB chunks gain
   almost nothing. Objects sealed without a dictionary are unchanged;
   versions before this one refuse dictionary objects.
+Library: pc_chunk_seal() stores incompressible chunks raw without
+  running the codec: a sampled byte histogram (2 KB, then 8 KB, of
+  chunks from 16 KB) that is close to uniform skips it. Sealing random
+  data or video runs at 700-750 MB/s with any algorithm (zstd:9 was
+  41 MB/s, lzma:6 13 MB/s); compressed .gz/.xz/.zst files lose 0.05% in
+  size; text and binaries keep their size and lose about 1% in seal
+  speed. No format change.
 Fix: a failed compress to a named output (pcompress file target, or the
   command-line style API with a target name) left the partial .pz file
   behind; it is removed now, as the temporary file is otherwise.

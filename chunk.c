@@ -689,11 +689,82 @@ pc_chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *out
 }
 
 /*
+ * The chi-square statistic of the byte histogram of runs runs of
+ * PCK_SAMPLE_RUN bytes spread evenly over p, against uniform:
+ * 256 * sum(count^2) / N - N for N bytes sampled. Random bytes give 255
+ * on average (standard deviation 23) whatever N is; text and code give
+ * thousands to millions.
+ */
+#define	PCK_SAMPLE_RUN	128
+
+static uint64_t
+sample_chi2(const uchar_t *p, size_t len, int runs)
+{
+	const uint64_t n = (uint64_t)runs * PCK_SAMPLE_RUN;
+	uint32_t count[4][256];
+	uint64_t sq = 0;
+	size_t step = (len - PCK_SAMPLE_RUN) / (runs - 1);
+	int r, i;
+
+	memset(count, 0, sizeof (count));
+	for (r = 0; r < runs; r++) {
+		const uchar_t *q = p + r * step;
+
+		/* Four tables: runs of one byte value would serialize on one counter. */
+		for (i = 0; i < PCK_SAMPLE_RUN; i += 4) {
+			count[0][q[i]]++;
+			count[1][q[i + 1]]++;
+			count[2][q[i + 2]]++;
+			count[3][q[i + 3]]++;
+		}
+	}
+	for (i = 0; i < 256; i++) {
+		uint64_t c = (uint64_t)count[0][i] + count[1][i] + count[2][i] + count[3][i];
+
+		sq += c * c;
+	}
+	return (sq * 256 / n - n);
+}
+
+/*
+ * Whether a chunk looks incompressible, so pc_chunk_seal() stores it raw
+ * without running the codec. A 2 KB sample (16 runs) that is far from
+ * uniform settles it cheaply for most compressible data; otherwise an
+ * 8 KB sample (64 runs) must score below 350. Measured on gear chunks
+ * (avg 64 KB, EC2 Xeon 8488C) against what zstd -19 would have saved on
+ * the chunks it skips:
+ *
+ *	random, H.264 video	99% skipped, nothing lost
+ *	.gz/.xz/.zst files	80% skipped, 0.05% of the input lost
+ *	PNG files		41% skipped, 0.004% lost
+ *	JPEG files		 2% skipped, 0.01% lost
+ *	tar of /usr/share/doc	13% skipped (its .gz members), 0.004% lost
+ *	enwik8, /usr/lib, /usr/bin	nothing skipped, nothing lost
+ *
+ * The worst chunk skipped would have shrunk 4.8%. Smaller final samples
+ * skipped a /usr/bin chunk that shrinks 48%. Byte statistics cannot see
+ * a repeated random block (each copy looks random): such a chunk is
+ * stored raw where an LZ coder would have found the repeat. Chunks under
+ * 16 KB are not tested; the sample would be most of them.
+ */
+#define	PCK_SAMPLE_MIN	(16 * 1024)
+#define	PCK_CHI2_QUICK	1000
+#define	PCK_CHI2_RAW	350
+
+static int
+looks_incompressible(const uchar_t *p, size_t len)
+{
+	if (len < PCK_SAMPLE_MIN || sample_chi2(p, len, 16) >= PCK_CHI2_QUICK)
+		return (0);
+	return (sample_chi2(p, len, 64) < PCK_CHI2_RAW);
+}
+
+/*
  * Compress in into the object at o for chunk_seal(): sets the payload
  * (at o + *hdr), *clen and the level byte o[7], and returns the flags;
  * *id becomes 0 when the chunk is stored raw, as it is when it does not
- * shrink. With a dictionary set (zstd only), the payload follows the
- * dictionary id.
+ * shrink or looks incompressible. With a dictionary set (zstd only),
+ * the payload follows the dictionary id.
  */
 static uchar_t
 seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *clen,
@@ -704,18 +775,18 @@ seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *cl
 
 	*hdr = PCK_HDR;
 	*clen = 0;
+	if (len == 0 || *id == 0 || looks_incompressible(in, len)) {
+		/* Stored raw. */
 #ifdef ENABLE_PC_ZSTD
-	if (ctx->chunk_dict != NULL) {
-		if (len > 0 && dict_compress(ctx, in, len, level, o + PCK_HDR + PCK_DICTID,
-		    clen) == 0) {
+	} else if (ctx->chunk_dict != NULL) {
+		if (dict_compress(ctx, in, len, level, o + PCK_HDR + PCK_DICTID, clen) == 0) {
 			memcpy(o + PCK_HDR, ((struct chunk_dict *)ctx->chunk_dict)->id, PCK_DICTID);
 			*hdr = PCK_HDR + PCK_DICTID;
 			o[7] = (uchar_t)level;
 			return (PCK_DICT);
 		}
-	} else
 #endif
-	if (len > 0 && *id != 0) {
+	} else {
 		struct codec *k = codec_get(ctx, algo, level, len, COMPRESS);
 		int crv;
 

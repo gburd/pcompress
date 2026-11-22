@@ -408,7 +408,9 @@ instead of using the master key for both; the names are the caller's to
 choose and keep stable.
 .It Fn pc_chunk_seal
 Compresses one chunk with the context's algorithm and level, stores it
-raw if it does not shrink, and with a key encrypts it (XSalsa20, random
+raw if it does not shrink (or, from 16 KB, if a sampled byte histogram
+says it cannot: compressed, encrypted or random data skips the codec),
+and with a key encrypts it (XSalsa20, random
 nonce) and authenticates header and payload (keyed BLAKE2b-256).
 Without a key the object has an unkeyed BLAKE2b-256 checksum.
 The output buffer needs

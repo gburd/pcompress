@@ -143,6 +143,41 @@ MU_TEST(test_compresses_and_falls_back)
 	free(b);
 }
 
+/*
+ * The incompressibility pre-test stores noise raw without the codec, and
+ * leaves near-random data that still compresses to the codec: text with
+ * one byte in four random, and noise over 128 byte values (7 bits each).
+ */
+MU_TEST(test_incompressible_skip)
+{
+	size_t n = 65536, i, ol;
+	unsigned char *b = malloc(n);
+	pc_ctx_t *c = ctx_with("lzma", 9, NULL);
+	unsigned char *obj = malloc(pc_chunk_seal_bound(n));
+
+	/* Noise: stored raw. */
+	fill(b, n, 1);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0x02, "noise not raw");
+	/* A quarter noise, three quarters text: compressed. */
+	fill(b, n, 0);
+	for (i = 0; i < n; i += 4)
+		b[i] = (unsigned char)rnd();
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n * 3 / 4, "mostly text stored raw");
+	/* Noise drawn from 128 byte values: 7 bits per byte, compressible. */
+	for (i = 0; i < n; i++)
+		b[i] = (unsigned char)(rnd() & 0x7f);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n * 15 / 16, "7-bit noise stored raw");
+	pc_free(c);
+	free(b);
+	free(obj);
+}
+
 /* A small JSON-like record: shared structure, varying values. */
 static size_t
 record(char *b, size_t cap, unsigned i)
@@ -859,6 +894,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_gear_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);
 	MU_RUN_TEST(test_dict);
+	MU_RUN_TEST(test_incompressible_skip);
 	MU_RUN_TEST(test_keys);
 	MU_RUN_TEST(test_bad_args);
 	MU_RUN_TEST(test_tamper_rejected);

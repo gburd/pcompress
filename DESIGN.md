@@ -273,6 +273,21 @@ the tag in constant time, and only then decrypts and decompresses into
 exactly the declared length. The algorithm ids never change meaning:
 add new ones at the end.
 
+**Incompressible chunks.** Before running the codec, seal takes 16 runs
+of 128 bytes spread over a chunk of 16 KB or more and computes the
+chi-square statistic of their byte histogram against uniform. If it is
+under 1000 (random bytes score 255), a second sample of 64 runs must
+score under 350, and then the chunk is stored raw without compressing.
+On gear chunks of random data and H.264 video this skips 99% of chunks
+and sealing at zstd -9 runs at 730 MB/s instead of 41; on `.gz`, `.xz`
+and `.zst` files it skips 80% and loses 0.05% of the input in size; on
+text, code and a tar of `/usr/lib` it skips nothing and costs about 1%
+of seal speed. The `.pz` pipeline does not use it. Tried there (4 MB
+chunks, one thread), it made zstd:3 output of `.gz`/`.xz`/`.zst` files
+0.7% larger, since those chunks still hold headers and padding worth
+compressing, and changed neither size nor time at lzma:6 or adapt2:6
+(those runs take the preprocessing path, which it did not cover).
+
 **Dictionaries** (`pc_set_dict`, 4.5). With flag 4 the payload is a zstd
 frame compressed with a dictionary, and bytes 40-71 name it: BLAKE2b-256
 of the dictionary bytes (`pc_dict_id`). The tag covers the id, so it
