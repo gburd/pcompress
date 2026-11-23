@@ -34,7 +34,23 @@ File Header
 8 Bytes - Indicated per-thread buffer size
 4 Bytes - Compression level
 
-If Encryption Used
+If Encryption Used, format version 12 (all encrypted files written by 4.5 and later)
+-------------------------------------------
+32 Bytes - Salt (random)
+4 Bytes - Key derivation function: 2 = Argon2id
+4 Bytes - Argon2id memory in KiB
+4 Bytes - Argon2id passes
+4 Bytes - Argon2id lanes
+          (All big-endian. New files: 131072 KiB, 4 passes, 4 lanes. Readers
+          refuse more than 1 GiB, 16 passes or 16 lanes, or more than 4 GiB
+          of memory times passes, before any work.)
+16 Bytes - AEAD tag over every header byte before it (the header is the
+          associated data, nothing is encrypted): AES-256-GCM when the AES
+          flag is set, XChaCha20-Poly1305 when the Salsa20 flag is set.
+          Stream 0, ordinal 0; see DESIGN.md, "Encryption", for the nonces.
+          There is no separate header checksum.
+
+If Encryption Used, format versions 7 to 11 (read only)
 -------------------------------------------
 4 Bytes - Salt Length
 X Bytes - Actual Salt bytes
@@ -62,8 +78,12 @@ Each chunk is a single compressed buffer
 X Bytes - Chunk data verification hash (upto 64 bytes) of the original uncompressed and unencrypted
           data.
 X Bytes - Chunk Header CRC32 for normal compression
-          Full chunk HMAC, including header, when encrypting. Computation is in this order:
-          Compression -> Encryption -> HMAC.
+          Full chunk HMAC, including header, when encrypting (versions up to 11).
+          Computation is in this order: Compression -> Encryption -> HMAC.
+          Version 12: the 16-byte AEAD tag of data chunk N (stream 1, ordinal N),
+          over the encrypted payload with the compressed length, the flags and
+          the original size (if present) as associated data. No digest precedes
+          it.
 1 Byte  - Chunk Flags
 
    *  *  *  *  *  *  *  *
@@ -95,4 +115,9 @@ File Trailer
 ===========================================
 8 Bytes - Zero bytes indicating zero compressed length
           and end of file.
+Format version 12 only, the end record:
+8 Bytes - Number of data chunks (big-endian)
+8 Bytes - Number of metadata chunks (big-endian)
+16 Bytes - AEAD tag (stream 3, ordinal 0) with the two counts as associated
+          data. Readers check it, so chunks cut off the end are detected.
 

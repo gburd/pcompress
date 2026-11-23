@@ -37,8 +37,9 @@ dec() {	# dec <bin> <password>: in.pz -> out, then compare
 	"$1" -d -w "$(pwf "$2")" "$W/in.pz" "$W/out" > /dev/null 2> "$W/err" && cmp -s "$W/in" "$W/out"
 }
 # A release before 4.3 refuses encrypted files from 4.3 on (format version
-# 11) up front; that is the expected result, not a password failure.
-refused_newer() { grep -q 'Cannot handle newer archive version 11' "$W/err"; }
+# 11), and one before 4.5 those from 4.5 on (12), up front; that is the
+# expected result, not a password failure.
+refused_newer() { grep -Eq 'Cannot handle newer archive version (11|12)' "$W/err"; }
 
 # Lengths 8, 14, 15, 16 (the old cap), 17, 20 and 40 bytes.
 for pw in s3cret12 abcdefghijklmn abcdefghijklmno abcdefghijklmnop \

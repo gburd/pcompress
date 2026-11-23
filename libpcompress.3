@@ -240,16 +240,20 @@ Global deduplication needs a seekable output and is refused by
 .Fn pc_compress_fd .
 .It Fn pc_set_encryption
 .Qq AES
-or
+(AES-256-GCM) or
 .Qq SALSA20
-in CTR mode with an HMAC per chunk;
+(XChaCha20-Poly1305), authenticated encryption with every chunk bound to
+its position and an authenticated chunk count at the end (format
+version 12; see
+.Xr pcompress 1 ) ;
 .Dv NULL
 turns encryption off.
 .Fa keylen
-is 16 or 32 bytes, 0 for 32.
+is 16 or 32 bytes, 0 for 32; it is checked but the key is always 32
+bytes.
 .It Fn pc_set_password
 The password, used by the next job; all of it feeds the key derivation
-(scrypt).
+(Argon2id for new files, scrypt for files from 4.4 and earlier).
 It is copied; the caller's buffer is not changed.
 .El
 .Ss Jobs

@@ -196,13 +196,19 @@ ownership is restored only when run as root.
 On extraction do not overwrite files that are newer than the archived
 copy.
 .It Fl e Ar cipher
-Encrypt with
+Encrypt with an authenticated cipher:
 .Cm AES
-or
+is AES-256-GCM,
 .Cm SALSA20
-in counter mode, keyed by scrypt from a password.
-Every chunk and the header are authenticated with an HMAC.
-A new key is derived for every run.
+is XChaCha20-Poly1305.
+The key is derived from a password with Argon2id (128 MiB, 4 passes) and
+a random salt, so it is new for every run.
+Every chunk is bound to its position, and the file ends with an
+authenticated chunk count: a changed, reordered or missing chunk, or a
+wrong password, fails decompression.
+Files encrypted by 4.4 and earlier (AES or Salsa20 in counter mode with
+an HMAC, keyed by scrypt) still decompress; 4.4 and earlier cannot read
+files encrypted by this version.
 .It Fl w Ar pwfile
 Read the password from
 .Ar pwfile ,
@@ -211,6 +217,8 @@ Otherwise the password is prompted for on the terminal.
 Required in pipe mode.
 .It Fl k Ar keylen
 Key length in bytes, 16 or 32; default 32.
+Accepted for compatibility: the authenticated ciphers always use 32-byte
+keys.
 .It Fl C
 Print compression statistics.
 .Fl CC

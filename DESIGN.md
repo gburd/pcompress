@@ -24,10 +24,14 @@ diagrams. Read this before changing `pcompress.c`, `rabin/` or
 
 ```
 file header   algo[8] version[2] flags[2] chunksize[8] level[4]
-              [salt, nonce, keylen, KDF cost if encrypted]  CRC32 or HMAC
+              [salt, KDF cost if encrypted]  CRC32 or AEAD tag
 chunk*        len_cmp[8] digest[n] mac[m] flags[1] payload [orig_size[8]]
-trailer       0[8]
+trailer       0[8]  [end record if encrypted: counts[16] tag[16]]
 ```
+
+(Version 12, encrypted. Versions 7 to 11 have salt, nonce, key length
+and, from 11, the scrypt cost in the header, an HMAC in place of the
+tag, and no end record.)
 
 Header fields and `len_cmp` are big-endian; dedupe indexes and the
 metadata-chunk length are little-endian. `len_cmp == 0` is end of stream.
@@ -42,9 +46,11 @@ header has `FLAG_META_STREAM`. Do not add another sentinel in the length
 field; extend the flags instead.
 
 **Versioning.** `VERSION` in `pcompress.h` is the format version (10).
-Encrypted files are written as `VERSION_KDF` (11): the same chunks, with
-the scrypt cost added to the header. Keeping plain files at 10 lets older
-releases still read them. The reader accepts `VERSION-4` up to
+Encrypted files are written as `VERSION_AEAD` (12, since 4.5): an AEAD
+per chunk bound to its stream and position, and an end record (see
+Encryption); 4.3 and 4.4 wrote them as `VERSION_KDF` (11), which this
+reader still reads. Keeping plain files at 10 lets older releases still
+read them, and 4.4 refuses version 12 as newer than it knows. The reader accepts `VERSION-4` up to
 `VERSION_MAX`; older-version quirks are handled inline (look for
 `version <`). Bump it only when the format changes, never for a release.
 
@@ -404,14 +410,66 @@ an entry the stored bytes are written unchanged and the path is listed in
 
 ## Encryption
 
-A key is derived from the password and a random salt with scrypt, at
-N = 2^17, r = 8, p = 1 (128 MB, about 0.3 s) since 4.3; the header
-records the cost, and the reader checks its bounds before any work.
-Files up to format version 10 used a fixed N = 2^11 and did not record
-it. Chunks are encrypted in place with AES-CTR or XSalsa20, using the chunk
-number in the nonce, and authenticated with HMAC over the header and
-ciphertext. The HMAC is checked before decryption. Passwords and key
-material are zeroed after use.
+**Format version 12 (since 4.5).** One key per file: Argon2id (RFC 9106)
+of the password and a random 256-bit salt, at 128 MiB, 4 passes and 4
+lanes (0.29 s on a Xeon 8488C). The header records the salt and cost;
+the reader refuses more than 1 GiB, 16 passes, 16 lanes or 4 GiB of
+memory traffic before any work. `-e SALSA20` selects XChaCha20-Poly1305
+(OpenSSL's ChaCha20-Poly1305 behind HChaCha20, draft-irtf-cfrg-xchacha)
+and `-e AES` AES-256-GCM (OpenSSL); 16-byte keys (`-k 16`) are not used
+any more, the AEAD key is always 32 bytes.
+
+Every authenticated piece of the file belongs to a *stream* and has an
+*ordinal* in it (`pz_crypt.h`):
+
+| stream | id | ordinal | sealed |
+|--------|----|---------|--------|
+| header | 0 | 0 | nothing; associated data: every header byte before the tag |
+| data chunks | 1 | chunk number from 0 | payload; AD: `len_cmp`, flags, original size |
+| metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
+| end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
+| seekable index | 4 | reserved (phase A2) | |
+
+The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
+zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
+its associated data starts with the same 12 bytes. Nonce uniqueness: a
+key belongs to one file, since the salt is 256 random bits from the
+system generator (no fallback: no random bytes, no file), and within a
+file each (stream, ordinal) pair is sealed once, because data and
+metadata chunks are numbered by the single thread that hands them out,
+and the header and end record are written once. So no nonce repeats
+under a key, with either AEAD, and a deterministic nonce avoids GCM's
+96-bit random-nonce limit. In 4.4 (version 11) data chunk *k* and
+metadata chunk *k* used the same key and CTR nonce, a two-time pad; here
+they are different streams.
+
+What the tags bind: a chunk opens only at its own position in its own
+stream, so reordering, repeating, or moving a chunk between streams
+fails (the nonce differs and so does the AD). The chunk's length field,
+flags and original size are AD, so none can change. The end record,
+after the zero length that ends the chunks, holds both chunk counts; the
+reader checks it after the last chunk (the data reader counts the
+metadata chunks it skips; the metadata thread checks its own count when
+it reaches the end), so dropping chunks off the end, or the end record
+itself, fails. Decompressed output is written as chunks verify, so a
+file truncated after chunk *k* has written *k* chunks when the error is
+reported, and pcompress exits non-zero; the same holds for any chunk
+that fails. Chunks keep the version 10 layout with the 16-byte tag in
+the `mac` field and no digest: the AEAD tag is the integrity check.
+
+A seekable index (phase A2) should be sealed as stream 4, ordinal 0,
+with the per-chunk tags it lists as AD, and counted in the end record
+(or given its own record); readers that stop at the end record then
+never see it.
+
+**Version 11 and earlier** (read only). scrypt derives the key, at
+N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and
+the reader checks its bounds before any work), and a fixed N = 2^11 for
+version 10 and earlier. Chunks are encrypted in place with AES-CTR or
+XSalsa20, using the chunk number in the nonce, and authenticated with
+HMAC over the header and ciphertext, checked before decryption. These
+files have the weaknesses above, which is why new files are version 12.
+Passwords and key material are zeroed after use.
 
 ## Portability
 

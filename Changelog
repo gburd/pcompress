@@ -1,4 +1,25 @@
 == Unreleased ==
+Security: encrypted .pz files are format version 12, with authenticated
+  encryption. 4.4 and earlier encrypted data chunk k and metadata chunk k
+  of an archive with the same key and CTR nonce (the XOR of the two
+  ciphertexts is the XOR of the plaintexts; with -c none and a known
+  file this decrypts the metadata), and authenticated each chunk alone,
+  so chunks could be reordered or the last ones cut off (keeping the end
+  marker) and the file still decompressed without an error. Version 12
+  seals every chunk with an AEAD, under a nonce of its stream (data,
+  metadata) and position, with its length and flags as associated data,
+  and ends with an authenticated count of both kinds of chunks: a
+  reordered, repeated, moved, cut or changed chunk fails. -e SALSA20 is
+  now XChaCha20-Poly1305 and -e AES AES-256-GCM (OpenSSL), keyed with
+  Argon2id (128 MiB, 4 passes, 4 lanes). enwik8 at zstd -l3 on a 16-vCPU
+  Xeon 8488C: 0.62 s with either cipher, 0.64 s with 4.4's AES-CTR and
+  HMAC, 0.34 s unencrypted; the key derivation is 0.29 s of it. Files
+  written by 4.4 and earlier (version 11 and below) still decompress;
+  4.4 and earlier refuse version 12 ("Cannot handle newer archive
+  version 12"). Unencrypted files are unchanged (version 10).
+Fix: compressing a 1- or 2-byte file with -e wrote past a heap buffer
+  (the header was built in the chunk buffer, which a tiny input makes
+  smaller than an encrypted header); glibc then aborted.
 Library: key files (pc_keyfile_create()) use Argon2id (RFC 9106, KDF
   id 2) with 128 MiB, 4 passes and 4 lanes in place of scrypt: 0.29 s on
   a Xeon 8488C, 0.36 s on Graviton. pc_keyfile_open() still opens scrypt

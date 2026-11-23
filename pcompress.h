@@ -56,6 +56,7 @@ extern "C" {
 #include <crypto_utils.h>
 #include <filters/analyzer/analyzer.h>
 #include <meta_stream.h>
+#include <pz_crypt.h>
 
 /** @name File Format Constants */
 /**@{*/
@@ -70,7 +71,13 @@ extern "C" {
  * so releases before 4.3 read them.
  */
 #define	VERSION_KDF	11
-#define	VERSION_MAX	VERSION_KDF	/**< Newest version this build reads. */
+/**
+ * Encrypted files are written as version 12 since 4.5: an AEAD per chunk
+ * bound to its stream and ordinal, an Argon2id key, an authenticated end
+ * record (pz_crypt.h, DESIGN.md). Readers before 4.5 refuse it as newer.
+ */
+#define	VERSION_AEAD	12
+#define	VERSION_MAX	VERSION_AEAD	/**< Newest version this build reads. */
 #define	KDF_SCRYPT	1	/**< KDF id in a version 11 header. */
 #define	FLAG_DEDUP	1       /**< File flag: Rabin deduplication enabled. */
 #define	FLAG_DEDUP_FIXED	2 /**< File flag: fixed-block deduplication enabled. */
@@ -443,6 +450,10 @@ struct pc_ctx {
 	void *progress_arg;
 	int cancelled;		/* progress_fn asked to stop this job */
 	uint64_t prog_out;	/* chunk bytes the writer wrote (atomic) */
+	int pz_v12;		/* encrypting or decrypting format version 12 */
+	pz_aead_t pz_aead;	/* its file key */
+	uchar_t pz_hdr[PZ_HDR_CRYPTO];	/* its salt and KDF cost, as stored */
+	uint64_t pz_nmeta;	/* metadata chunks written or skipped so far */
 };
 
 /**

@@ -15,6 +15,7 @@
 #include <allocator.h>
 #include <crypto_utils.h>
 #include <aead.h>
+#include <pz_crypt.h>
 #include <monocypher/monocypher.h>
 #include <openssl/evp.h>
 #include "minunit.h"
@@ -389,6 +390,71 @@ MU_TEST(test_argon2id_kat)
 		    &bad[i], out, 32) == -1, "out-of-bounds Argon2 cost accepted");
 }
 
+/*
+ * Format version 12 framing (pz_crypt.c): a piece opens only as the
+ * stream and ordinal it was sealed as, with its associated data, under
+ * the file's key; the end record carries both counts; a header cost out
+ * of bounds is refused before the KDF runs. Both ciphers.
+ */
+MU_TEST(test_pz_v12)
+{
+	static const int flags[] = { CRYPTO_ALG_AES, CRYPTO_ALG_SALSA20 };
+	uchar_t hdr[PZ_HDR_CRYPTO], bad[PZ_HDR_CRYPTO], p[300], q[300], tag[16], end[PZ_END_LEN];
+	uchar_t ad[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+	pz_aead_t a, b;
+	uint64_t nd, nm;
+	int f;
+
+	memset(&a, 0, sizeof (a));
+	memset(&b, 0, sizeof (b));
+	for (f = 0; f < 2; f++) {
+		mu_assert_int_eq(0, pz_key_new(&a, flags[f], (const uchar_t *)"pw", 2, hdr));
+		memcpy(p, buf, sizeof (p));
+		mu_assert_int_eq(0, pz_seal(&a, PZ_STREAM_DATA, 7, ad, 9, p, sizeof (p), tag));
+		memcpy(q, p, sizeof (q));
+		mu_assert_int_eq(0, pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
+		mu_assert(memcmp(q, buf, sizeof (q)) == 0, "v12 round trip");
+		/* Another ordinal or stream: the 4.4 two-time pad and reordering. */
+		memcpy(q, p, sizeof (q));
+		mu_assert(pz_open(&a, PZ_STREAM_DATA, 8, ad, 9, q, sizeof (q), tag) != 0,
+		    "chunk opened at another ordinal");
+		memcpy(q, p, sizeof (q));
+		mu_assert(pz_open(&a, PZ_STREAM_META, 7, ad, 9, q, sizeof (q), tag) != 0,
+		    "data chunk opened as metadata");
+		ad[0] ^= 1;
+		memcpy(q, p, sizeof (q));
+		mu_assert(pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
+		    "changed chunk header accepted");
+		ad[0] ^= 1;
+		/* Same password, same salt: same key; new salt: another key. */
+		mu_assert_int_eq(0, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, hdr));
+		memcpy(q, p, sizeof (q));
+		mu_assert_int_eq(0, pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
+		mu_assert_int_eq(0, pz_key_open(&b, flags[f], (const uchar_t *)"pW", 2, hdr));
+		memcpy(q, p, sizeof (q));
+		mu_assert(pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
+		    "wrong password accepted");
+		mu_assert_int_eq(0, pz_key_new(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		mu_assert(memcmp(bad, hdr, PZ_SALT_LEN) != 0, "salt repeated");
+		/* The end record. */
+		mu_assert_int_eq(0, pz_end_make(&a, 12345, 6, end));
+		mu_assert(pz_end_check(&a, end, &nd, &nm) == 0 && nd == 12345 && nm == 6, "end");
+		end[7] ^= 1;
+		mu_assert(pz_end_check(&a, end, &nd, &nm) != 0, "forged chunk count accepted");
+		/* Costs out of bounds: -2 before any work. */
+		memcpy(bad, hdr, sizeof (bad));
+		bad[PZ_SALT_LEN + 4] = 0x40;	/* 1 TiB */
+		mu_assert_int_eq(-2, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		memcpy(bad, hdr, sizeof (bad));
+		bad[PZ_SALT_LEN + 3] = 1;	/* scrypt id */
+		mu_assert_int_eq(-2, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		pz_key_wipe(&a);
+		mu_assert(pz_seal(&a, PZ_STREAM_DATA, 0, NULL, 0, p, 1, tag) != 0, "wiped key used");
+	}
+	mu_assert(pz_key_new(&a, 0x40, (const uchar_t *)"pw", 2, hdr) != 0, "unknown cipher");
+	pz_key_wipe(&b);
+}
+
 MU_TEST_SUITE(suite_crypto)
 {
 	MU_RUN_TEST(test_checksum_props);
@@ -402,6 +468,7 @@ MU_TEST_SUITE(suite_crypto)
 	MU_RUN_TEST(test_rfc8439_kat);
 	MU_RUN_TEST(test_gcm_kat);
 	MU_RUN_TEST(test_argon2id_kat);
+	MU_RUN_TEST(test_pz_v12);
 }
 
 int

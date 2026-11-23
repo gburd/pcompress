@@ -235,18 +235,16 @@ usage(pc_ctx_t *pctx)
 	fprintf(stderr,
 "    Encryption\n"
 "    ----------\n"
-"       -e <ALGO> Encrypt chunks with the given encrption algorithm. The ALGO parameter\n"
-"                 can be one of AES or SALSA20. Both are used in CTR stream encryption\n"
-"                 mode. The password can be prompted from the user or read from a file.\n"
-"                 Unique keys are generated every time pcompress is run even when giving\n"
-"                 the same password. Default key length is 256-bits (see -k below).\n"
+"       -e <ALGO> Encrypt with an authenticated cipher: AES (AES-256-GCM) or SALSA20\n"
+"                 (XChaCha20-Poly1305), keyed with Argon2id from a password, which is\n"
+"                 prompted for or read from a file (-w). Unique keys are generated every\n"
+"                 time pcompress is run even when giving the same password.\n"
 "       -w <pathname>\n"
 "                 Provide a file which contains the encryption password. This file must\n"
 "                 be readable and writable since it is zeroed out after the password is\n"
 "                 read.\n"
 "       -k <key length>\n"
-"                 Specify key length. Can be 16 for 128 bit or 32 for 256 bit. Default\n"
-"                 is 32 for 256 bit keys.\n\n");
+"                 Accepted (16 or 32) for compatibility; keys are always 256 bits.\n\n");
 }
 
 static void
@@ -612,6 +610,38 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
 }
 
 /*
+ * The associated data of a version 12 data chunk, from its stored bytes
+ * at seg (length field, tag, flags, payload of plen bytes, then the
+ * original size when the flags say so): the length field, the flags and
+ * the original size. With pz_seal()'s stream and ordinal, every byte of
+ * the chunk outside the payload is bound to it. Returns the length.
+ */
+static size_t
+pz_chunk_ad(const uchar_t *len_field, uchar_t flags, const uchar_t *orig, uchar_t ad[17])
+{
+	memcpy(ad, len_field, 8);
+	ad[8] = flags;
+	if (!(flags & CHSIZE_MASK))
+		return (9);
+	memcpy(ad + 9, orig, ORIGINAL_CHUNKSZ);
+	return (17);
+}
+
+/*
+ * Seal a finished data chunk in place (version 12): seg holds the length
+ * field, the tag's place, the flags, plen payload bytes and maybe the
+ * original size. The payload is encrypted and the tag written.
+ */
+static int
+pz_seal_chunk(pc_ctx_t *pctx, uchar_t *seg, uint64_t plen, uchar_t flags, unsigned int id)
+{
+	uchar_t ad[17], *tag = seg + COMPRESSED_CHUNKSZ, *pay = tag + AEAD_TAGLEN + CHUNK_FLAG_SZ;
+	size_t adl = pz_chunk_ad(seg, flags, pay + plen, ad);
+
+	return (pz_seal(&pctx->pz_aead, PZ_STREAM_DATA, id, ad, adl, pay, plen, tag));
+}
+
+/*
  * This routine is called in multiple threads. Calls the decompression handler
  * as encoded in the file header. For adaptive mode the handler adapt_decompress()
  * in turns looks at the chunk header and calls the actual decompression
@@ -690,10 +720,30 @@ redo:
 	}
 
 	/*
-	 * If this was encrypted:
-	 * Verify HMAC first before anything else and then decrypt compressed data.
+	 * Version 12: open the payload as chunk tdat->id of the data stream;
+	 * the tag covers its length field, flags and original size too, so a
+	 * moved, repeated or altered chunk fails here.
 	 */
-	if (pctx->encrypt_type) {
+	if (pctx->pz_v12) {
+		uchar_t ad[17];
+		size_t adl = pz_chunk_ad((uchar_t *)&tdat->len_cmp_be, HDR,
+		    tdat->compressed_chunk + tdat->rbytes, ad);
+
+		if (pz_open(&pctx->pz_aead, PZ_STREAM_DATA, tdat->id, ad, adl, cseg,
+		    tdat->len_cmp, tdat->compressed_chunk) != 0) {
+			log_error_code(PC_ERR_VERIFY);
+			log_msg(LOG_ERR, 0, "Chunk %d, authentication failed", tdat->id);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+			tdat->len_cmp = 0;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			Sem_Post(&tdat->cmp_done_sem);
+			return (NULL);
+		}
+	} else if (pctx->encrypt_type) {
+		/*
+		 * Version 11 and earlier: verify the HMAC before anything else,
+		 * then decrypt.
+		 */
 		unsigned int len;
 		DEBUG_STAT_EN(double strt, en);
 
@@ -1497,6 +1547,121 @@ dec_try_key(pc_ctx_t *pctx, const struct dec_hdr *h, struct dec_crypto *c,
 	return (memcmp(c->stored_mac, mac, pctx->mac_bytes) == 0);
 }
 
+/* The password from pc_set_password(), the -w file or the terminal. */
+static int
+dec_get_pw(pc_ctx_t *pctx, uchar_t pw[PC_PW_MAX + 1], uchar_t **upw, int *legacy)
+{
+	int len;
+
+	if (pctx->user_pw != NULL) {
+		*upw = pctx->user_pw;
+		return (pctx->user_pw_len);
+	}
+	if (!pctx->pwd_file) {
+		len = get_pw_string(pw, "Please enter decryption password", 0);
+	} else {
+		len = read_pw_file(pctx->pwd_file, pw, legacy);
+		if (len == -1)
+			log_msg(LOG_ERR, 1, "%s", pctx->pwd_file);
+	}
+	if (len == -1) {
+		log_error_code(PC_ERR_CRYPTO);
+		log_msg(LOG_ERR, 0, "Failed to get password.");
+	}
+	*upw = pw;
+	return (len);
+}
+
+/*
+ * Version 12: read the salt, KDF cost and header tag, refuse a cost out
+ * of bounds before any work, derive the key and check the tag over the
+ * whole header (which also tells a wrong password). The password is
+ * wiped.
+ */
+static int
+dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
+{
+	uchar_t hdr[ALGO_SZ + 2 + 2 + 8 + 4 + PZ_HDR_CRYPTO], tag[AEAD_TAGLEN];
+	uchar_t pw[PC_PW_MAX + 1], *upw, *pos = hdr;
+	unsigned short d1;
+	uint64_t d3;
+	int d2, len, rv;
+
+	if (Read(compfd, pctx->pz_hdr, PZ_HDR_CRYPTO) < PZ_HDR_CRYPTO ||
+	    Read(compfd, tag, AEAD_TAGLEN) < AEAD_TAGLEN) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Incomplete header. File corrupt ?");
+		return (-1);
+	}
+	memcpy(pos, pctx->algo, ALGO_SZ);
+	pos += ALGO_SZ;
+	d1 = htons(h->version);
+	memcpy(pos, &d1, 2);
+	d1 = htons(h->flags);
+	memcpy(pos + 2, &d1, 2);
+	d3 = htonll(h->chunksize);
+	memcpy(pos + 4, &d3, 8);
+	d2 = htonl(h->level);
+	memcpy(pos + 12, &d2, 4);
+	memcpy(pos + 16, pctx->pz_hdr, PZ_HDR_CRYPTO);
+	if ((len = dec_get_pw(pctx, pw, &upw, NULL)) == -1)
+		return (-1);
+	rv = pz_key_open(&pctx->pz_aead, h->flags & MASK_CRYPTO_ALG, upw, len, pctx->pz_hdr);
+	memset(upw, 0, len);
+	if (upw == pctx->user_pw) {
+		pctx->user_pw = NULL;
+		pctx->user_pw_len = 0;
+	}
+	if (rv == -2) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Invalid key derivation parameters. File corrupt ?");
+		return (-1);
+	}
+	if (rv != 0) {
+		log_error_code(PC_ERR_CRYPTO);
+		log_msg(LOG_ERR, 0, "Failed to initialize crypto");
+		return (-1);
+	}
+	if (pz_open(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, sizeof (hdr), NULL, 0, tag) != 0) {
+		pz_key_wipe(&pctx->pz_aead);
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Header verification failed! File "
+		    "tampered or wrong password.");
+		return (-1);
+	}
+	pctx->pz_v12 = 1;
+	return (0);
+}
+
+/*
+ * Version 12, after the end-of-chunks marker: the end record must be
+ * authentic and its counts those read, or chunks were cut off the end
+ * (or added). nmeta is checked only when the metadata chunks were
+ * counted (they are skipped, and counted, by the data reader).
+ */
+static int
+dec_check_end(pc_ctx_t *pctx, int compfd, uint64_t ndata, uint64_t nmeta, int check_meta)
+{
+	uchar_t end[PZ_END_LEN];
+	uint64_t wd, wm;
+
+	if (Read(compfd, end, sizeof (end)) != sizeof (end) ||
+	    pz_end_check(&pctx->pz_aead, end, &wd, &wm) != 0) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "End record missing or not authentic: file truncated "
+		    "or tampered.");
+		return (-1);
+	}
+	if (wd != ndata || (check_meta && wm != nmeta)) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "File has %" PRIu64 " data and %" PRIu64 " metadata "
+		    "chunks, the end record says %" PRIu64 " and %" PRIu64 ": truncated or "
+		    "tampered.", ndata, nmeta, wd, wm);
+		return (-1);
+	}
+	return (0);
+}
+
 /*
  * Encrypted file: read the encryption fields, get the password, and set
  * up decryption with the key whose header HMAC matches. The whole
@@ -1508,9 +1673,11 @@ dec_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 {
 	struct dec_crypto c;
 	uchar_t pw[PC_PW_MAX + 1];
-	uchar_t *upw = pctx->user_pw;
-	int upw_len = pctx->user_pw_len, legacy = -1, tries, t, ok = 0;
+	uchar_t *upw;
+	int upw_len, legacy = -1, tries, t, ok = 0;
 
+	if (h->version >= VERSION_AEAD)
+		return (dec_crypto_v12(pctx, compfd, h));
 	if (pctx->mac_bytes > CKSUM_MAX_BYTES)
 		return (-1);	/* not possible: from the checksum table */
 	memset(&c, 0, sizeof (c));
@@ -1518,21 +1685,9 @@ dec_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 		dec_crypto_wipe(&c);
 		return (-1);
 	}
-	if (upw == NULL) {
-		if (!pctx->pwd_file) {
-			upw_len = get_pw_string(pw, "Please enter decryption password", 0);
-		} else {
-			upw_len = read_pw_file(pctx->pwd_file, pw, &legacy);
-			if (upw_len == -1)
-				log_msg(LOG_ERR, 1, "%s", pctx->pwd_file);
-		}
-		if (upw_len == -1) {
-			dec_crypto_wipe(&c);
-			log_error_code(PC_ERR_CRYPTO);
-			log_msg(LOG_ERR, 0, "Failed to get password.");
-			return (-1);
-		}
-		upw = pw;
+	if ((upw_len = dec_get_pw(pctx, pw, &upw, &legacy)) == -1) {
+		dec_crypto_wipe(&c);
+		return (-1);
 	}
 	/*
 	 * A prompt never took more than 14 bytes: no legacy form.
@@ -1794,7 +1949,7 @@ dec_start_worker(pc_ctx_t *pctx, struct cmp_data *tdat, const struct dec_job *j)
 		tdat->rctx = NULL;
 	}
 
-	if (pctx->encrypt_type) {
+	if (pctx->encrypt_type && !pctx->pz_v12) {
 		if (hmac_init(&tdat->chunk_hmac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
 			log_msg(LOG_ERR, 0, "Cannot initialize chunk hmac.");
 			return (-1);
@@ -1869,6 +2024,7 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 		if (tdat->len_cmp == 0)
 			return (1);
 		if (is_meta) {
+			pctx->pz_nmeta++;
 			/* Its real length follows; it is skipped below. */
 			if (dec_read_len(pctx, compfd, &tdat->len_cmp_be) != 0)
 				return (-1);
@@ -2127,6 +2283,14 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		UNCOMP_BAIL;
 	}
 
+	/* Version 12 is only ever written encrypted. */
+	pctx->pz_v12 = 0;
+	if (h.version >= VERSION_AEAD && !(h.flags & MASK_CRYPTO_ALG)) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Version %d file without encryption. File corrupt ?",
+		    h.version);
+		UNCOMP_BAIL;
+	}
 	if (h.flags & MASK_CRYPTO_ALG) {
 		/*
 		 * In encrypted files we do not have a normal digest. The HMAC
@@ -2135,6 +2299,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		pctx->cksum_bytes = 0;
 		compressed_chunksize += pctx->mac_bytes;
 		pctx->encrypt_type = h.flags & MASK_CRYPTO_ALG;
+		if (h.version >= VERSION_AEAD)
+			pctx->mac_bytes = AEAD_TAGLEN;
 		if (h.version < 7)
 			pctx->keylen = OLD_KEYLEN;
 		if (dec_crypto(pctx, compfd, &h) != 0) {
@@ -2203,7 +2369,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	if (nprocs > 0)
 		Sem_Post(&(dary[0]->index_sem));
 
-	if (pctx->encrypt_type) {
+	if (pctx->encrypt_type && !pctx->pz_v12) {
 		/* Erase encryption key bytes stored as a plain array. No longer reqd. */
 		crypto_clean_pkey(&(pctx->crypto_ctx));
 	}
@@ -2221,7 +2387,14 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		thread = 2;
 	}
 
+	pctx->pz_nmeta = 0;
 	if (dec_feed(pctx, compfd, dary, &job, &np) != 0) {
+		UNCOMP_BAIL;
+	}
+	if (pctx->pz_v12 && nprocs > 0 && !__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED) &&
+	    dec_check_end(pctx, compfd, pctx->chunk_num, pctx->pz_nmeta, pctx->meta_stream) != 0) {
+		__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 		UNCOMP_BAIL;
 	}
 	/* Wait for the writer to finish every other slot's last chunk. */
@@ -2292,7 +2465,7 @@ uncomp_done:
 static void *
 perform_compress(void *dat) {
 	struct cmp_data *tdat = (struct cmp_data *)dat;
-	typeof (tdat->chunksize) _chunksize, len_cmp, dedupe_index_sz, index_size_cmp;
+	typeof (tdat->chunksize) _chunksize, len_cmp, dedupe_index_sz, index_size_cmp, plen;
 	int type, rv;
 
 	log_bind(&tdat->pctx->log);
@@ -2466,34 +2639,8 @@ plain_index:
 		if (rv < 0) rv = COMPRESS_NONE;
 	}
 
-	/*
-	 * Now perform encryption on the compressed data, if requested.
-	 */
-	if (pctx->encrypt_type) {
-		int ret;
-		DEBUG_STAT_EN(double strt, en);
-
-		/*
-		 * Encryption algorithm must not change the size and
-		 * encryption is in-place.
-		 */
-		DEBUG_STAT_EN(strt = get_wtime_millis());
-		ret = crypto_buf(&(pctx->crypto_ctx), compressed_chunk, compressed_chunk,
-			tdat->len_cmp, tdat->id);
-		if (ret == -1) {
-			/*
-			 * Encryption failure is fatal.
-			 */
-			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
-			tdat->len_cmp = 0;
-			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
-			Sem_Post(&tdat->cmp_done_sem);
-			return (0);
-		}
-		DEBUG_STAT_EN(en = get_wtime_millis());
-		DEBUG_STAT_EN(fprintf(stderr, "Encryption speed %.3f MB/s\n",
-			      get_mb_s(tdat->len_cmp, strt, en)));
-	}
+	/* The payload, encrypted below (version 12) once the header is known. */
+	plen = tdat->len_cmp;
 
 	if ((pctx->enable_rabin_scan || pctx->enable_fixed_scan) && tdat->rctx->valid) {
 		type |= CHUNK_FLAG_DEDUP;
@@ -2538,25 +2685,19 @@ plain_index:
 	*(tdat->compressed_chunk) = type;
 
 	/*
-	 * If encrypting, compute HMAC for full chunk including header.
+	 * Version 12: seal the payload as chunk tdat->id of the data stream,
+	 * with its length, flags and original size as associated data.
 	 */
 	if (pctx->encrypt_type) {
-		uchar_t *mac_ptr;
-		unsigned int hlen;
-		uchar_t chash[pctx->mac_bytes];
-		DEBUG_STAT_EN(double strt, en);
-
-		/* Clean out mac_bytes to 0 for stable HMAC. */
-		DEBUG_STAT_EN(strt = get_wtime_millis());
-		mac_ptr = tdat->cmp_seg + sizeof (tdat->len_cmp) + pctx->cksum_bytes;
-		memset(mac_ptr, 0, pctx->mac_bytes);
-		hmac_reinit(&tdat->chunk_hmac);
-		hmac_update(&tdat->chunk_hmac, tdat->cmp_seg, tdat->len_cmp);
-		hmac_final(&tdat->chunk_hmac, chash, &hlen);
-		serialize_checksum(chash, mac_ptr, hlen);
-		DEBUG_STAT_EN(en = get_wtime_millis());
-		DEBUG_STAT_EN(fprintf(stderr, "HMAC Computation speed %.3f MB/s\n",
-			      get_mb_s(tdat->len_cmp, strt, en)));
+		if (pz_seal_chunk(pctx, tdat->cmp_seg, plen, type, tdat->id) != 0) {
+			log_error_code(PC_ERR_CRYPTO);
+			log_msg(LOG_ERR, 0, "Chunk %d, encryption failed", tdat->id);
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+			tdat->len_cmp = 0;
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			Sem_Post(&tdat->cmp_done_sem);
+			return (0);
+		}
 	} else {
 		/*
 		 * Compute header CRC32 in non-crypto mode.
@@ -2648,6 +2789,59 @@ do_cancel:
 }
 
 /*
+ * Write the file header: algorithm, version, flags, chunk size and level,
+ * then for an encrypted file (version 12) the salt and KDF cost and an
+ * AEAD tag over all of it (stream PZ_STREAM_HEADER, nothing encrypted),
+ * else (version 10) a CRC32. Built in a buffer of its own: the chunk
+ * buffer is sized from the chunk size, which for a tiny input is smaller
+ * than an encrypted header (4.4 wrote past it for 1- and 2-byte files).
+ */
+static int
+write_file_header(pc_ctx_t *pctx, int compfd, unsigned short flags, uint64_t chunksize,
+    int level)
+{
+	uchar_t hdr[ALGO_SZ + 2 + 2 + 8 + 4 + PZ_HDR_CRYPTO + AEAD_TAGLEN], *pos = hdr;
+	unsigned short v = htons(pctx->encrypt_type ? VERSION_AEAD : VERSION);
+	unsigned short f = htons(flags);
+	uint64_t cs = htonll(chunksize);
+	int lv = htonl(level);
+	uint32_t crc;
+
+	memset(hdr, 0, ALGO_SZ);
+	strncpy((char *)hdr, pctx->algo, ALGO_SZ);
+	pos += ALGO_SZ;
+	memcpy(pos, &v, sizeof (v));
+	pos += sizeof (v);
+	memcpy(pos, &f, sizeof (f));
+	pos += sizeof (f);
+	memcpy(pos, &cs, sizeof (cs));
+	pos += sizeof (cs);
+	memcpy(pos, &lv, sizeof (lv));
+	pos += sizeof (lv);
+	if (pctx->encrypt_type) {
+		memcpy(pos, pctx->pz_hdr, PZ_HDR_CRYPTO);
+		pos += PZ_HDR_CRYPTO;
+		if (pz_seal(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, pos - hdr, NULL, 0,
+		    pos) != 0) {
+			log_error_code(PC_ERR_CRYPTO);
+			log_msg(LOG_ERR, 0, "Cannot authenticate the header.");
+			return (-1);
+		}
+		pos += AEAD_TAGLEN;
+	} else {
+		/* Archive version 5 and later: a header CRC32. */
+		crc = htonl(lzma_crc32(hdr, pos - hdr, 0));
+		memcpy(pos, &crc, sizeof (crc));
+		pos += sizeof (crc);
+	}
+	if (Write(compfd, hdr, pos - hdr) != pos - hdr) {
+		log_msg(LOG_ERR, 1, "Write ");
+		return (-1);
+	}
+	return (0);
+}
+
+/*
  * File compression routine. Can use as many threads as there are
  * logical cores unless user specified something different. There is
  * not much to gain from nthreads > n logical cores however.
@@ -2660,16 +2854,16 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	struct wdata w;
 	char tmpfile1[MAXPATHLEN], tmpdir[MAXPATHLEN];
 	char to_filename[MAXPATHLEN];
-	uint64_t compressed_chunksize, n_chunksize, file_offset;
+	uint64_t compressed_chunksize, file_offset;
 	int64_t rbytes, rabin_count;
-	unsigned short version, flags;
+	unsigned short flags;
 	struct stat sbuf;
 	int compfd = -1, uncompfd = -1, err;
 	int thread, bail, single_chunk;
 	uint32_t i, nprocs, np, p, dedupe_flag, started = 0;
 	struct cmp_data **dary = NULL, *tdat;
 	pthread_t writer_thr;
-	uchar_t *cread_buf, *pos;
+	uchar_t *cread_buf;
 	dedupe_context_t *rctx;
 	algo_props_t props;
 	my_sysinfo msys_info;
@@ -2688,11 +2882,13 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	pctx->cancelled = 0;
 	pctx->prog_out = 0;
 
+	pctx->pz_nmeta = 0;
+	pctx->pz_v12 = 0;
 	if (pctx->encrypt_type) {
 		uchar_t pw[PC_PW_MAX + 1];
-		int pw_len = -1;
+		int pw_len = -1, rv;
 
-		compressed_chunksize += pctx->mac_bytes;
+		compressed_chunksize += AEAD_TAGLEN;
 		if (!pctx->pwd_file && !pctx->user_pw) {
 			pw_len = get_pw_string(pw,
 				"Please enter encryption password", 1);
@@ -2708,25 +2904,26 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				return (1);
 			}
 		}
+		/* Format version 12: one Argon2id key per file, for the AEAD. */
 		if (pctx->user_pw) {
-			if (init_crypto(&(pctx->crypto_ctx), pctx->user_pw, pctx->user_pw_len,
-			    pctx->encrypt_type, NULL, 0, pctx->keylen, 0, ENCRYPT_FLAG) == -1) {
-				memset(pctx->user_pw, 0, pctx->user_pw_len);
-				log_msg(LOG_ERR, 0, "Failed to initialize crypto.");
-				return (1);
-			}
+			rv = pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pctx->user_pw,
+			    pctx->user_pw_len, pctx->pz_hdr);
 			memset(pctx->user_pw, 0, pctx->user_pw_len);
 			pctx->user_pw = NULL;
 			pctx->user_pw_len = 0;
 		} else {
-			if (init_crypto(&(pctx->crypto_ctx), pw, pw_len, pctx->encrypt_type, NULL,
-			    0, pctx->keylen, 0, ENCRYPT_FLAG) == -1) {
-				memset(pw, 0, sizeof (pw));
-				log_msg(LOG_ERR, 0, "Failed to initialize crypto.");
-				return (1);
-			}
+			rv = pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pw, pw_len,
+			    pctx->pz_hdr);
 			memset(pw, 0, sizeof (pw));
 		}
+		if (rv != 0) {
+			log_error_code(PC_ERR_CRYPTO);
+			log_msg(LOG_ERR, 0, "Failed to initialize crypto.");
+			return (1);
+		}
+		pctx->pz_v12 = 1;
+		pctx->cksum_bytes = 0;
+		pctx->mac_bytes = AEAD_TAGLEN;
 	}
 
 	single_chunk = 0;
@@ -3040,12 +3237,6 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 			}
 		}
 
-		if (pctx->encrypt_type) {
-			if (hmac_init(&tdat->chunk_hmac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
-				log_msg(LOG_ERR, 0, "Cannot initialize chunk hmac.");
-				COMP_BAIL;
-			}
-		}
 		/* Running workers must be joined even if a later setup fails. */
 		thread = 1;
 		if (pc_thread_create(&(tdat->thr), "pc-compress", perform_compress,
@@ -3133,96 +3324,10 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 			flags |= FLAG_META_STREAM;
 	}
 
-	/*
-	 * Write out file header. First insert hdr elements into mem buffer
-	 * then write out the full hdr in one shot.
-	 */
 	flags |= pctx->cksum;
-	memset(cread_buf, 0, ALGO_SZ);
-	strncpy((char *)cread_buf, pctx->algo, ALGO_SZ);
-	version = htons(pctx->encrypt_type ? VERSION_KDF : VERSION);
-	flags = htons(flags);
-	n_chunksize = htonll(chunksize);
-	level = htonl(level);
-	pos = cread_buf + ALGO_SZ;
-	memcpy(pos, &version, sizeof (version));
-	pos += sizeof (version);
-	memcpy(pos, &flags, sizeof (flags));
-	pos += sizeof (flags);
-	memcpy(pos, &n_chunksize, sizeof (n_chunksize));
-	pos += sizeof (n_chunksize);
-	memcpy(pos, &level, sizeof (level));
-	pos += sizeof (level);
-
-	/*
-	 * If encryption is enabled, include salt, nonce and keylen in the header
-	 * to be HMAC-ed (archive version 7 and greater).
-	 */
-	if (pctx->encrypt_type) {
-		I32_P(pos) = htonl(pctx->crypto_ctx.saltlen);
-		pos += sizeof (int);
-		serialize_checksum(pctx->crypto_ctx.salt, pos, pctx->crypto_ctx.saltlen);
-		pos += pctx->crypto_ctx.saltlen;
-		if (pctx->encrypt_type == CRYPTO_ALG_AES) {
-			U64_P(pos) = htonll(U64_P(crypto_nonce(&(pctx->crypto_ctx))));
-			pos += 8;
-
-		} else if (pctx->encrypt_type == CRYPTO_ALG_SALSA20) {
-			serialize_checksum(crypto_nonce(&(pctx->crypto_ctx)), pos,
-			    XSALSA20_CRYPTO_NONCEBYTES);
-			pos += XSALSA20_CRYPTO_NONCEBYTES;
-		}
-		I32_P(pos) = htonl(pctx->keylen);
-		pos += sizeof (int);
-		I32_P(pos) = htonl(KDF_SCRYPT);
-		I32_P(pos + 4) = htonl((uint32_t)pctx->crypto_ctx.kdf.logn);
-		I32_P(pos + 8) = htonl(pctx->crypto_ctx.kdf.r);
-		I32_P(pos + 12) = htonl(pctx->crypto_ctx.kdf.p);
-		pos += 16;
-	}
-	if (Write(compfd, cread_buf, pos - cread_buf) != pos - cread_buf) {
-		log_msg(LOG_ERR, 1, "Write ");
+	if (write_file_header(pctx, compfd, flags, chunksize, level) != 0) {
 		COMP_BAIL;
 	}
-
-	/*
-	 * If encryption is enabled, compute header HMAC and write it.
-	 */
-	if (pctx->encrypt_type) {
-		mac_ctx_t hdr_mac;
-		uchar_t hdr_hash[pctx->mac_bytes];
-		unsigned int hlen;
-
-		if (hmac_init(&hdr_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1) {
-			log_msg(LOG_ERR, 0, "Cannot initialize header hmac.");
-			COMP_BAIL;
-		}
-		hmac_update(&hdr_mac, cread_buf, pos - cread_buf);
-		hmac_final(&hdr_mac, hdr_hash, &hlen);
-		hmac_cleanup(&hdr_mac);
-
-		/* Erase encryption key bytes stored as a plain array. No longer reqd. */
-		crypto_clean_pkey(&(pctx->crypto_ctx));
-
-		pos = cread_buf;
-		serialize_checksum(hdr_hash, pos, hlen);
-		pos += hlen;
-		if (Write(compfd, cread_buf, pos - cread_buf) != pos - cread_buf) {
-			log_msg(LOG_ERR, 1, "Write ");
-			COMP_BAIL;
-		}
-	} else {
-		/*
-		 * Compute header CRC32 and store that. Only archive version 5 and above.
-		 */
-		uint32_t crc = lzma_crc32(cread_buf, pos - cread_buf, 0);
-		U32_P(cread_buf) = htonl(crc);
-		if (Write(compfd, cread_buf, sizeof (uint32_t)) != sizeof (uint32_t)) {
-			log_msg(LOG_ERR, 1, "Write ");
-			COMP_BAIL;
-		}
-	}
-
 	/*
 	 * Now read from the uncompressed file in 'chunksize' sized chunks, independently
 	 * compress each chunk and write it out. Chunk sequencing is ensured.
@@ -3388,8 +3493,6 @@ comp_done:
 			if (pctx->enable_rabin_global)
 				Sem_Post(&tdat->index_sem);
 			pthread_join(tdat->thr, NULL);
-			if (pctx->encrypt_type)
-				hmac_cleanup(&tdat->chunk_hmac);
 		}
 		if (thread == 2)
 			pthread_join(writer_thr, NULL);
@@ -3419,6 +3522,16 @@ comp_done:
 		    sizeof (compressed_chunksize)) < 0) {
 			log_msg(LOG_ERR, 1, "Write ");
 			err = 1;
+		}
+		/* Version 12: the authenticated chunk counts, so truncation shows. */
+		if (!err && pctx->pz_v12) {
+			uchar_t end[PZ_END_LEN];
+
+			if (pz_end_make(&pctx->pz_aead, pctx->chunk_num, pctx->pz_nmeta, end) != 0 ||
+			    Write(compfd, end, sizeof (end)) != sizeof (end)) {
+				log_msg(LOG_ERR, 1, "Write ");
+				err = 1;
+			}
 		}
 
 		/*
@@ -3707,6 +3820,7 @@ destroy_pc_context(pc_ctx_t *pctx)
 		pc_mfree(pctx->pw_copy);
 	}
 	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
+	pz_key_wipe(&pctx->pz_aead);
 	chunk_codecs_free(pctx);
 	pc_mfree(pctx);
 }

@@ -42,9 +42,10 @@ one() {
 		    cmp -s "$W/in" "$W/out"; then ok "$label"; return; fi
 	fi
 	# Releases before 4.3 cannot read encrypted files from 4.3 on (format
-	# version 11): from those, only a clean refusal counts as a pass.
+	# version 11), nor releases before 4.5 those from 4.5 on (version 12):
+	# from those, only a clean refusal counts as a pass.
 	if [ "$w" = "$NEW" ] && [ -n "$extra" ] &&
-	    grep -q 'Cannot handle newer archive version 11' "$W/err"; then
+	    grep -Eq 'Cannot handle newer archive version (11|12)' "$W/err"; then
 		ok "$label (refused: older release)"; return
 	fi
 	no "$label"

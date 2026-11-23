@@ -136,7 +136,10 @@ compress_and_write(meta_ctx_t *mctx)
 	}
 
 	if (pctx->encrypt_type) {
-		rv = crypto_buf(&(pctx->crypto_ctx), comp_chunk, comp_chunk, dstlen, mctx->id);
+		/* Version 12: sealed below, once the header is complete. */
+		rv = 0;
+		if (!pctx->pz_v12)
+			rv = crypto_buf(&(pctx->crypto_ctx), comp_chunk, comp_chunk, dstlen, mctx->id);
 		if (rv == -1) {
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -155,7 +158,22 @@ compress_and_write(meta_ctx_t *mctx)
 	if (!pctx->encrypt_type)
 		serialize_checksum(mctx->checksum, tobuf + 25, pctx->cksum_bytes);
 
-	if (pctx->encrypt_type) {
+	if (pctx->pz_v12) {
+		/*
+		 * Metadata chunk mctx->id of the metadata stream: its own nonce
+		 * domain, apart from the data chunks. The tag goes where the
+		 * checksum was and covers the length fields and flags.
+		 */
+		memset(tobuf + 25, 0, CKSUM_MAX + CRC32_SIZE);
+		if (pz_seal(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, tobuf, 25,
+		    comp_chunk, dstlen, tobuf + 25) != 0) {
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			log_msg(LOG_ERR, 0, "Metadata Encrypion failed");
+			return (0);
+		}
+		pctx->pz_nmeta++;
+	} else if (pctx->encrypt_type) {
 		uchar_t chash[pctx->mac_bytes];
 		unsigned int hlen;
 		uchar_t *mac_ptr;
@@ -298,11 +316,30 @@ decompress_data(meta_ctx_t *mctx)
 	cseg = cbuf + METADATA_HDR_SZ;
 	dstlen = origlen;
 
-	/*
-	 * If this was encrypted:
-	 * Verify HMAC first before anything else and then decrypt compressed data.
-	 */
-	if (pctx->encrypt_type) {
+	/* Version 12: open as metadata chunk mctx->id (see compress_and_write()). */
+	if (pctx->pz_v12) {
+		int i;
+
+		/* The tag's slot is 68 bytes: the rest is zeros, unused. */
+		for (i = 25 + AEAD_TAGLEN; i < METADATA_HDR_SZ; i++) {
+			if (cbuf[i] != 0) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk %d, bad header", mctx->id);
+				return (0);
+			}
+		}
+		memcpy(checksum, cbuf + 25, AEAD_TAGLEN);
+		if (pz_open(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, cbuf, 25, cseg,
+		    len_cmp, checksum) != 0) {
+			log_error_code(PC_ERR_VERIFY);
+			log_msg(LOG_ERR, 0, "Metadata chunk %d, authentication failed", mctx->id);
+			return (0);
+		}
+	} else if (pctx->encrypt_type) {
+		/*
+		 * If this was encrypted:
+		 * Verify HMAC first before anything else and then decrypt compressed data.
+		 */
 		unsigned int len;
 
 		len = pctx->mac_bytes;
@@ -384,6 +421,24 @@ decompress_data(meta_ctx_t *mctx)
 	return (1);
 }
 
+/* Version 12: check the end record at comp_fd against the chunks decoded. */
+static int
+meta_check_end(meta_ctx_t *mctx)
+{
+	uchar_t end[PZ_END_LEN];
+	uint64_t nd, nm;
+
+	if (Read(mctx->comp_fd, end, sizeof (end)) != sizeof (end) ||
+	    pz_end_check(&mctx->pctx->pz_aead, end, &nd, &nm) != 0 ||
+	    nm != (uint64_t)mctx->id) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Metadata stream: end record missing, forged or "
+		    "with another count: file truncated or tampered.");
+		return (-1);
+	}
+	return (0);
+}
+
 static void *
 metadata_decompress(void *dat)
 {
@@ -418,8 +473,16 @@ metadata_decompress(void *dat)
 
 					if (len_cmp == 0) {
 						/*
-						 * We have reached the end of the file.
+						 * We have reached the end of the file. Version 12:
+						 * the end record must count the metadata chunks
+						 * read (truncation, e.g. when only listing).
 						 */
+						if (pctx->pz_v12 && meta_check_end(mctx) != 0) {
+							ack = 0;
+							Write(mctx->meta_pipes[SINK_CHANNEL], &ack,
+							    sizeof (ack));
+							return (NULL);
+						}
 						msgp->len = 0;
 						ack = 1;
 						Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
@@ -446,8 +509,17 @@ metadata_decompress(void *dat)
 
 			} else if (rb == 0) {
 				/*
-				 * We have reached the end of the file.
+				 * We have reached the end of the file. Version 12 files
+				 * end with a marker and the end record: without them it
+				 * was cut short.
 				 */
+				if (pctx->pz_v12) {
+					log_error_code(PC_ERR_VERIFY);
+					log_msg(LOG_ERR, 0, "Metadata stream: file truncated.");
+					ack = 0;
+					Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+					return (NULL);
+				}
 				msgp->len = 0;
 				ack = 1;
 				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
@@ -538,7 +610,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 	memset(mctx, 0, sizeof (*mctx));
 
-	if (pctx->encrypt_type) {
+	if (pctx->encrypt_type && !pctx->pz_v12) {
 		if (hmac_init(&mctx->chunk_hmac, pctx->cksum,
 		    &(pctx->crypto_ctx)) == -1) {
 			meta_ctx_free(mctx);
