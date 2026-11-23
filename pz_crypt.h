@@ -98,6 +98,13 @@ int pc_pz_seal(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
 int pc_pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
     size_t adlen, uchar_t *buf, size_t len, const uchar_t tag[AEAD_TAGLEN]);
 
+/**
+ * Check what pc_pz_seal() made without decrypting it anywhere: 0 if the
+ * tag matches. For data that is not to be copied before it is believed.
+ */
+int pc_pz_verify(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+    size_t adlen, const uchar_t *buf, size_t len, const uchar_t tag[AEAD_TAGLEN]);
+
 /** The end record: the data and metadata chunk counts, authenticated. */
 int pc_pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta,
     uchar_t out[PZ_END_LEN]);

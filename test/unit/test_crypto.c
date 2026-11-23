@@ -403,10 +403,15 @@ MU_TEST(test_pz_v12)
 	static const int flags[] = { CRYPTO_ALG_AES, CRYPTO_ALG_SALSA20 };
 	uchar_t hdr[PZ_HDR_CRYPTO], bad[PZ_HDR_CRYPTO], p[300], q[300], tag[16], end[PZ_END_LEN];
 	uchar_t ad[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+	static uchar_t big[40000], bigsrc[40000], bigsrc2[40000];
+	uchar_t itag[16];
 	pz_aead_t a, b;
 	uint64_t nd, nm;
+	size_t i;
 	int f;
 
+	for (i = 0; i < sizeof (bigsrc); i++)
+		bigsrc[i] = (uchar_t)(i * 31 + 7);
 	memset(&a, 0, sizeof (a));
 	memset(&b, 0, sizeof (b));
 	for (f = 0; f < 2; f++) {
@@ -428,6 +433,24 @@ MU_TEST(test_pz_v12)
 		mu_assert(pc_pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
 		    "changed chunk header accepted");
 		ad[0] ^= 1;
+		/*
+		 * Checking without decrypting (the seek index, read-only and
+		 * over 16 KB so the scratch buffer is reused): the same answer
+		 * as opening, and the sealed bytes stay as they were.
+		 */
+		memcpy(big, bigsrc, sizeof (big));
+		mu_assert_int_eq(0, pc_pz_seal(&a, PZ_STREAM_INDEX, 0, ad, 9, big, sizeof (big), itag));
+		memcpy(bigsrc2, big, sizeof (big));
+		mu_assert_int_eq(0, pc_pz_verify(&a, PZ_STREAM_INDEX, 0, ad, 9, big, sizeof (big), itag));
+		mu_assert(memcmp(big, bigsrc2, sizeof (big)) == 0, "verify changed its input");
+		mu_assert(pc_pz_verify(&a, PZ_STREAM_DATA, 0, ad, 9, big, sizeof (big), itag) != 0,
+		    "index verified as another stream");
+		big[sizeof (big) - 1] ^= 1;
+		mu_assert(pc_pz_verify(&a, PZ_STREAM_INDEX, 0, ad, 9, big, sizeof (big), itag) != 0,
+		    "changed index verified");
+		big[sizeof (big) - 1] ^= 1;
+		mu_assert_int_eq(0, pc_pz_open(&a, PZ_STREAM_INDEX, 0, ad, 9, big, sizeof (big), itag));
+		mu_assert(memcmp(big, bigsrc, sizeof (big)) == 0, "index round trip");
 		/* Same password, same salt: same key; new salt: another key. */
 		mu_assert_int_eq(0, pc_pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, hdr));
 		memcpy(q, p, sizeof (q));

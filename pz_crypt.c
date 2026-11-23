@@ -155,6 +155,17 @@ pc_pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
 }
 
 int
+pc_pz_verify(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+    size_t adlen, const uchar_t *buf, size_t len, const uchar_t tag[AEAD_TAGLEN])
+{
+	uchar_t nonce[AEAD_NONCE_MAX], full[12 + PZ_AD_MAX];
+
+	if (pz_frame(a, stream, ord, ad, adlen, nonce, full) != 0)
+		return (-1);
+	return (pc_aead_open(a->alg, a->key, nonce, full, 12 + adlen, buf, NULL, len, tag));
+}
+
+int
 pc_pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta, uchar_t out[PZ_END_LEN])
 {
 	put_be64(out, ndata);

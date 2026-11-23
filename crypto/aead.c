@@ -85,6 +85,28 @@ aead_update(EVP_CIPHER_CTX *x, uint8_t *out, const uint8_t *in, size_t len)
 }
 
 /*
+ * Opening with no output buffer: decrypt in pieces into a scratch buffer
+ * that is wiped afterwards, so all that is kept is the tag check. A
+ * caller can then authenticate data it has not yet copied anywhere.
+ */
+static int
+aead_discard(EVP_CIPHER_CTX *x, const uint8_t *in, size_t len)
+{
+	uint8_t scratch[16384];
+	size_t piece;
+	int rv = 0;
+
+	while (len > 0 && rv == 0) {
+		piece = len > sizeof (scratch) ? sizeof (scratch) : len;
+		rv = aead_update(x, scratch, in, piece);
+		in += piece;
+		len -= piece;
+	}
+	pcmono_wipe(scratch, sizeof (scratch));
+	return (rv);
+}
+
+/*
  * One AEAD pass: enc 1 seals (writes tag), 0 opens (checks tag). The
  * OpenSSL context is per call: callers run in many threads at once.
  */
@@ -98,7 +120,8 @@ aead_run(int alg, int enc, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
 	EVP_CIPHER_CTX *x = NULL;
 	int n, rv = -1;
 
-	if (cipher == NULL || (x = EVP_CIPHER_CTX_new()) == NULL)
+	if (cipher == NULL || (enc && out == NULL && len > 0) ||
+	    (x = EVP_CIPHER_CTX_new()) == NULL)
 		goto out;
 	if (EVP_CipherInit_ex(x, cipher, NULL, subkey, iv, enc) != 1)
 		goto out;
@@ -106,7 +129,9 @@ aead_run(int alg, int enc, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
 		goto out;
 	if (adlen > 0 && aead_update(x, NULL, ad, adlen) != 0)
 		goto out;
-	if (len > 0 && aead_update(x, out, in, len) != 0)
+	if (len > 0 && out != NULL && aead_update(x, out, in, len) != 0)
+		goto out;
+	if (len > 0 && out == NULL && aead_discard(x, in, len) != 0)
 		goto out;
 	/* Opening: the tag is checked here, 0 on a mismatch. */
 	if (EVP_CipherFinal_ex(x, fin, &n) != 1)
@@ -118,7 +143,7 @@ out:
 	if (x != NULL)
 		EVP_CIPHER_CTX_free(x);
 	pcmono_wipe(subkey, sizeof (subkey));
-	if (rv != 0 && !enc && len > 0)
+	if (rv != 0 && !enc && len > 0 && out != NULL)
 		memset(out, 0, len);	/* never hand out unauthenticated plaintext */
 	return (rv);
 }

@@ -55,6 +55,7 @@ int pc_aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
 /**
  * Check tag over ad and the ciphertext, and decrypt in to out. Returns 0,
  * or -1 if the tag does not match (out is then zeroed) or on an error.
+ * With out NULL only the tag is checked and the plaintext is discarded.
  */
 int pc_aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
     const uint8_t *ad, size_t adlen, const uint8_t *in, uint8_t *out, size_t len,
