@@ -225,8 +225,9 @@ PYEOF
 	    -r 300000:10 "$T/d_swap.pz" "$T/part"
 	# A body length of 900 MB (a hole in a sparse file) under a wrong
 	# tag: refused on its tag, before 900 MB is allocated for it. Linux
-	# only, where ulimit -d bounds malloc() but not a file mapping.
-	if [ "$(uname -s)" = Linux ]; then
+	# only, where ulimit -d bounds malloc() but not a file mapping. Not
+	# under ASan, whose shadow memory does not fit the limit.
+	if [ "$(uname -s)" = Linux ] && [ -z "${ASAN_OPTIONS:-}" ]; then
 		python3 - "$T/x.pz" "$T/d_big.pz" <<'PYEOF'
 import struct, sys
 b = open(sys.argv[1], "rb").read()
