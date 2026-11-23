@@ -131,6 +131,25 @@ else
 	log_fail "archive with -X"
 fi
 
+# The first member of an archive is indexed by the archiver thread as
+# soon as it starts: the index must exist by then (TSan found it set up
+# after the thread started). Several trees, the first member, repeated.
+mkdir -p "$T/many"
+for d in 1 2 3 4 5 6; do
+	mkdir -p "$T/many/t$d"; echo "first $d" > "$T/many/t$d/a"
+done
+ok=1
+for n in 1 2 3 4 5 6 7 8 9 10; do
+	rm -f "$T/m.pz"; find "$T/o" -depth -delete 2>/dev/null; mkdir -p "$T/o"
+	if ! (cd "$T" && $PCOMPRESS -a -X -c lz4 -l1 many/t1 many/t2 many/t3 \
+	    many/t4 many/t5 many/t6 m >/dev/null 2>&1) ||
+	    ! $PCOMPRESS -d -R many/t1/a "$T/m.pz" "$T/o" >/dev/null 2>&1 ||
+	    ! cmp -s "$T/many/t1/a" "$T/o/many/t1/a"; then
+		ok=0; break
+	fi
+done
+if [ $ok = 1 ]; then log_pass "first member, repeated"; else log_fail "first member (run $n)"; fi
+
 echo ""
 echo "--- Refusals ---"
 # expect_fail <label> <args...>: pcompress must exit 1.

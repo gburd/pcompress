@@ -3485,6 +3485,20 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		Sem_Post(&(dary[0]->index_sem));
 	}
 
+	/*
+	 * -X: the index of this job, filled by the writer and archiver
+	 * threads, so it is set up before either starts.
+	 */
+	pctx->arc_spos = 0;
+	if (pctx->sx_write) {
+		if ((pctx->sx_w = pc_malloc(sizeof (sx_writer_t))) == NULL) {
+			log_error_code(PC_ERR_NOMEM);
+			log_msg(LOG_ERR, 0, "Out of memory");
+			COMP_BAIL;
+		}
+		sx_writer_init(pctx->sx_w, sx_taglen(pctx));
+	}
+
 	w.dary = dary;
 	w.wfd = compfd;
 	w.nprocs = nprocs;
@@ -3507,17 +3521,6 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		flags |= FLAG_ARCHIVE;
 		if (pctx->meta_stream)
 			flags |= FLAG_META_STREAM;
-	}
-
-	/* -X: the index of this job, filled by the writer and archiver threads. */
-	pctx->arc_spos = 0;
-	if (pctx->sx_write) {
-		if ((pctx->sx_w = pc_malloc(sizeof (sx_writer_t))) == NULL) {
-			log_error_code(PC_ERR_NOMEM);
-			log_msg(LOG_ERR, 0, "Out of memory");
-			COMP_BAIL;
-		}
-		sx_writer_init(pctx->sx_w, sx_taglen(pctx));
 	}
 
 	/*
