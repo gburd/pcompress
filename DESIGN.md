@@ -54,6 +54,20 @@ read them, and 4.4 refuses version 12 as newer than it knows. The reader accepts
 `VERSION_MAX`; older-version quirks are handled inline (look for
 `version <`). Bump it only when the format changes, never for a release.
 
+Version 13 (`VERSION_FLAGS`, since 4.5) is version 10, or version 12
+when encrypted, with one rule added: the reader refuses a header flag
+bit it does not know (`FLAG_KNOWN`). Readers of 10 to 12 ignore unknown
+bits, so a new bit alone could not stop them from misreading data that
+needs it. A feature that changes how data must be decoded therefore
+takes a free flag bit, and `write_file_header()` writes version 13 for
+any flags outside the version 12 set (`FLAG_V12`): 4.4 and older refuse the file as newer, and a later build
+without the feature refuses the bit, rather than either producing wrong
+output. A file that uses no such feature keeps version 10 or 12, so
+older releases still read it. Encrypted version 13 files follow every
+version 12 rule (Argon2id, the AEAD streams, the end record); an
+unencrypted one is a version 10 file in all but the number. Taken
+bits: none yet. Free: 0x8, 0x40, 0x80, 0x2000, 0x4000, 0x8000.
+
 ## Pipeline
 
 ```

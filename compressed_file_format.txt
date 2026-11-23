@@ -11,7 +11,8 @@ headers of the compression and deduplication algorithms used.
 File Header
 ===========================================
 8 Bytes - Compression algorithm name
-2 Bytes - File format version
+2 Bytes - File format version (10 plain, 12 encrypted, 13 when a flag
+          below needs it: version 13 readers refuse unknown flag bits)
 2 Bytes - Flags
 	
  *   *   *   *   *   *   *   *   *   *   *   *   *   *   *   *

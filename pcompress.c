@@ -1211,6 +1211,14 @@ dec_read_header(pc_ctx_t *pctx, int compfd, const char *filename, char *algorith
 		log_msg(LOG_ERR, 0, "Unsupported version: %d", h->version);
 		return (-1);
 	}
+	/* Version 13: a flag this build does not know changes the decoding. */
+	if (h->version >= VERSION_FLAGS && (h->flags & ~FLAG_KNOWN) != 0) {
+		log_error_code(PC_ERR_FORMAT);
+		log_msg(LOG_ERR, 0, "File uses features this build does not know "
+		    "(header flags 0x%x): written by a newer pcompress, or corrupt.",
+		    h->flags & ~FLAG_KNOWN);
+		return (-1);
+	}
 	return (0);
 }
 
@@ -2661,9 +2669,9 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		UNCOMP_BAIL;
 	}
 
-	/* Version 12 is only ever written encrypted. */
+	/* Version 12 is only ever written encrypted; 13 either way. */
 	pctx->pz_v12 = 0;
-	if (h.version >= VERSION_AEAD && !(h.flags & MASK_CRYPTO_ALG)) {
+	if (h.version == VERSION_AEAD && !(h.flags & MASK_CRYPTO_ALG)) {
 		log_error_code(PC_ERR_CORRUPT);
 		log_msg(LOG_ERR, 0, "Version %d file without encryption. File corrupt ?",
 		    h.version);
@@ -3397,7 +3405,8 @@ write_file_header(pc_ctx_t *pctx, int compfd, unsigned short flags, uint64_t chu
     int level)
 {
 	uchar_t hdr[ALGO_SZ + 2 + 2 + 8 + 4 + PZ_HDR_CRYPTO + AEAD_TAGLEN], *pos = hdr;
-	unsigned short v = htons(pctx->encrypt_type ? VERSION_AEAD : VERSION);
+	unsigned short v = htons((flags & ~FLAG_V12) ? VERSION_FLAGS :
+	    pctx->encrypt_type ? VERSION_AEAD : VERSION);
 	unsigned short f = htons(flags);
 	uint64_t cs = htonll(chunksize);
 	int lv = htonl(level);
