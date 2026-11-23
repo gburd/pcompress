@@ -488,12 +488,16 @@ length, to
 .Fn pc_keyfile_size
 bytes at
 .Fa out
-(scrypt N=2^17 r=8 p=1, then XSalsa20 and a BLAKE2b-256 tag).
+(Argon2id with 128 MiB, 4 passes and 4 lanes, then XSalsa20 and a
+BLAKE2b-256 tag).
+Key files made with scrypt by 4.4 and earlier still open; 4.4 and
+earlier cannot open the Argon2id ones.
 .Fn pc_keyfile_open
 recovers the key; a wrong password or any change to the file fails.
 The KDF and its parameters are stored in the file, and
 .Fn pc_keyfile_open
-refuses parameters beyond 512 MB or unreasonable work.
+refuses parameters beyond 512 MB (scrypt) or 1 GiB (Argon2id) or
+unreasonable work before doing any.
 .It Fn pc_index_open
 Opens or creates a persistent set of 32-byte chunk ids, kept in an
 append-only file, so a backup tool can skip chunks it already stored

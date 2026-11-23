@@ -178,22 +178,32 @@ fuzz_one(const uint8_t *data, size_t size)
 			break;
 		}
 		/*
-		 * A key file with the right magic runs scrypt with the file's
-		 * own parameters, up to 512 MB and a second or more: far too
-		 * slow for fuzzing. Clamp N and r in a copy so the KDF stays
-		 * cheap; the parsing, the bounds checks around them and the
-		 * tag check are what is under test.
+		 * A key file with the right magic runs its KDF (scrypt or
+		 * Argon2id) with the file's own parameters, up to 512 MB or
+		 * 1 GiB and a second or more: far too slow for fuzzing. Clamp
+		 * the cost in a copy so the KDF stays cheap; the parsing, the
+		 * bounds checks around them and the tag check are what is
+		 * under test.
 		 */
 		if (size - 1 == pc_keyfile_size()) {
 			uint8_t kf[128];
 
 			memcpy(kf, data + 1, sizeof (kf));
-			if (kf[7] > 12)
-				kf[7] = 10 + kf[7] % 3;
-			kf[8] = 1 + kf[8] % 2;
-			kf[9] = kf[10] = kf[11] = 0;
-			if (kf[12] > 2)
-				kf[12] = 1 + kf[12] % 2;
+			if (kf[6] == 2) {	/* Argon2id: p, m (KiB), t */
+				if (kf[7] > 2)
+					kf[7] = 1 + kf[7] % 2;
+				kf[9] %= 2;	/* m up to 511 KiB */
+				kf[10] = kf[11] = 0;
+				if (kf[12] > 2)
+					kf[12] = 1 + kf[12] % 2;
+			} else {	/* scrypt: log2 N, r, p */
+				if (kf[7] > 12)
+					kf[7] = 10 + kf[7] % 3;
+				kf[8] = 1 + kf[8] % 2;
+				kf[9] = kf[10] = kf[11] = 0;
+				if (kf[12] > 2)
+					kf[12] = 1 + kf[12] % 2;
+			}
 			pc_keyfile_open(kf, sizeof (kf), "pw", 2, key);
 		} else {
 			pc_keyfile_open(data + 1, size - 1, "pw", 2, key);

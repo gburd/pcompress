@@ -322,12 +322,16 @@ numbers). Objects without a dictionary are byte-for-byte what 4.4 writes;
 4.4 and older refuse flag 4 (an unknown flag) as corrupt.
 
 **Key files** (`pc_keyfile_create`/`open`, 128 bytes): magic `PCKEY1`,
-KDF id (1 = scrypt), log2 N, r, p, a 16-byte salt and a 24-byte nonce,
+KDF id and its cost in bytes 6-15, a 16-byte salt and a 24-byte nonce,
 8 reserved bytes, the 32-byte key XSalsa20-encrypted, and a BLAKE2b-256
-tag over everything before it. scrypt yields 64 bytes: 32 to encrypt, 32
-for the tag. New files use N=2^17, r=8, p=1; open refuses log2 N outside
-10-22, r outside 1-32 and p outside 1-16, so a crafted file cannot make
-it allocate more than 512 MB.
+tag over everything before it. The KDF yields 64 bytes: 32 to encrypt,
+32 for the tag. KDF 1 is scrypt (byte 7 log2 N, then r and p as 32-bit
+words), written up to 4.4; open refuses log2 N outside 10-22, r outside
+1-32 and p outside 1-16, so a crafted file cannot make it allocate more
+than 512 MB. KDF 2 is Argon2id (byte 7 lanes, then memory in KiB and
+passes), written since 4.5 with 128 MiB, 4 passes and 4 lanes (0.29 s
+on a Xeon 8488C); open refuses more than 1 GiB, 16 passes, 16 lanes or
+4 GiB of memory traffic, before any work. 4.4 refuses KDF 2 files.
 
 **Chunk index** (`pc_index_*`): the file is `PCIDX1`, two zero bytes,
 then 32-byte ids in the order they were added. It is only appended to

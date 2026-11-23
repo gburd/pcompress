@@ -1,4 +1,11 @@
 == Unreleased ==
+Library: key files (pc_keyfile_create()) use Argon2id (RFC 9106, KDF
+  id 2) with 128 MiB, 4 passes and 4 lanes in place of scrypt: 0.29 s on
+  a Xeon 8488C, 0.36 s on Graviton. pc_keyfile_open() still opens scrypt
+  key files; 4.4 and earlier cannot open the new ones. Argon2id is the
+  bundled Monocypher 4.0.2 (OpenSSL has it only from 3.2), pinned to
+  the RFC 9106 vectors, and costs over 1 GiB, 16 passes, 16 lanes or
+  4 GiB of memory traffic are refused before any work.
 Library: pc_set_allocator() gives the library a host program's memory
   functions (malloc, realloc, free and a user pointer), process-wide,
   before its first allocation. The library's own code, the bundled zstd,

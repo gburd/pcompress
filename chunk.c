@@ -25,6 +25,7 @@
 #include <crypto_xsalsa20.h>
 #include <rabin_dedup.h>
 #include <crypto_scrypt.h>
+#include <aead.h>
 #include <blake3.h>
 
 /* --- Content-defined chunker ------------------------------------------- */
@@ -1131,29 +1132,32 @@ pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen)
 
 /*
  * A key file holds a random 256-bit master key wrapped with a key derived
- * from a password of any length (ROADMAP Phase 4). 96 bytes, little-endian:
+ * from a password of any length (ROADMAP Phase 4). 128 bytes,
+ * little-endian:
  *
  *   0  6  magic "PCKEY1"
- *   6  1  KDF id: 1 = scrypt
- *   7  1  log2 N (scrypt work factor)
- *   8  4  r
- *  12  4  p
+ *   6  1  KDF id: 1 = scrypt, 2 = Argon2id (since 4.5)
+ *   7  1  scrypt: log2 N; Argon2id: lanes (p)
+ *   8  4  scrypt: r; Argon2id: memory in KiB (m)
+ *  12  4  scrypt: p; Argon2id: passes (t)
  *  16 16  salt
  *  32 24  nonce
  *  56  8  reserved, 0
  *  64 32  the wrapped key (XSalsa20 with the first half of the KDF output)
  *  96 32  tag: BLAKE2b-256 keyed with a MAC key from the KDF, over [0, 96)
  *
- * (128 bytes in all.) The KDF output is 64 bytes: the first 32 encrypt,
- * the last 32 authenticate. A wrong password fails the tag. The KDF and
- * its parameters are in the file, so they can change without breaking old
- * files; open refuses parameters outside sane bounds (a crafted file must
- * not make it allocate gigabytes).
+ * The KDF output is 64 bytes: the first 32 encrypt, the last 32
+ * authenticate. A wrong password fails the tag. The KDF and its
+ * parameters are in the file, so they can change without breaking old
+ * files; open refuses parameters outside sane bounds before any work (a
+ * crafted file must not make it allocate gigabytes). New files use
+ * Argon2id; 4.4 and earlier refuse those (an unknown KDF id), as they
+ * refuse a wrong password.
  */
 #define	PCK_KF_MAGIC	"PCKEY1"
 #define	PCK_KF_SIZE	128
 #define	PCK_KF_SCRYPT	1
-#define	PCK_KF_LOGN	17	/* 128 MB, about 0.3 s: interactive use */
+#define	PCK_KF_ARGON2ID	2
 
 static void
 put_le32(uchar_t *p, uint32_t v)
@@ -1169,19 +1173,34 @@ get_le32(const uchar_t *p)
 	    (uint32_t)p[3] << 24);
 }
 
+/*
+ * The key-file KDF named in hdr, with the parameters stored there, into
+ * dk. Parameters outside scrypt_params_ok() or argon2_params_ok() are
+ * refused before any work. 0, or -1 (unknown KDF, bad cost, failure).
+ */
 static int
 kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
 {
-	uint32_t logn = hdr[7], r = get_le32(hdr + 8), p = get_le32(hdr + 12);
-	scrypt_params_t kp;
+	if (hdr[6] == PCK_KF_SCRYPT) {
+		scrypt_params_t kp;
 
-	/* Bounds checked before any work (scrypt_params_ok(): at most 512 MB). */
-	kp.logn = (int)logn;
-	kp.r = r;
-	kp.p = p;
-	if (hdr[6] != PCK_KF_SCRYPT || !scrypt_params_ok(&kp))
-		return (-1);
-	return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << logn, r, p, dk, 64));
+		kp.logn = hdr[7];
+		kp.r = get_le32(hdr + 8);
+		kp.p = get_le32(hdr + 12);
+		if (!scrypt_params_ok(&kp))
+			return (-1);
+		return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << kp.logn, kp.r,
+		    kp.p, dk, 64));
+	}
+	if (hdr[6] == PCK_KF_ARGON2ID) {
+		argon2_params_t ap;
+
+		ap.p = hdr[7];
+		ap.m_kib = get_le32(hdr + 8);
+		ap.t = get_le32(hdr + 12);
+		return (argon2id_derive(pw, pwlen, hdr + 16, 16, &ap, dk, 64));
+	}
+	return (-1);
 }
 
 size_t DLL_EXPORT
@@ -1200,10 +1219,10 @@ pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out)
 		return (-1);
 	memset(o, 0, PCK_KF_SIZE);
 	memcpy(o, PCK_KF_MAGIC, 6);
-	o[6] = PCK_KF_SCRYPT;
-	o[7] = PCK_KF_LOGN;
-	put_le32(o + 8, 8);
-	put_le32(o + 12, 1);
+	o[6] = PCK_KF_ARGON2ID;
+	o[7] = ARGON2_PZ_P;
+	put_le32(o + 8, ARGON2_PZ_M);
+	put_le32(o + 12, ARGON2_PZ_T);
 	if (geturandom_bytes(o + 16, 16 + 24) != 0 || geturandom_bytes(key, 32) != 0)
 		goto out;
 	if (kf_derive(pw, pwlen, o, dk) != 0 ||

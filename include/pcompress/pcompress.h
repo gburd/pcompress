@@ -324,7 +324,8 @@ int pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32]
 
 /**
  * Key files: a random 256-bit key wrapped with a password of any length
- * (scrypt, then XSalsa20 and a BLAKE2b-256 tag). pc_keyfile_create()
+ * (Argon2id, then XSalsa20 and a BLAKE2b-256 tag; files made with scrypt
+ * by 4.4 and earlier still open). pc_keyfile_create()
  * writes pc_keyfile_size() bytes to out and returns the new key in key;
  * pc_keyfile_open() recovers the key, failing on a wrong password or any
  * change to the file. The KDF and its parameters are stored in the file.

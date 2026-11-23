@@ -678,15 +678,29 @@ MU_TEST(test_keyfile)
 	    strlen(pw), back) != 0, "wrong password accepted");
 	for (i = 0; i < 32; i++)
 		mu_assert(back[i] == 0, "key not zeroed on failure");
-	/* Any changed byte fails (sampled: each costs one scrypt). */
+	/* Any changed byte fails (sampled: each costs one KDF run). */
 	for (i = 0; i < n; i += 9) {
 		memcpy(kf2, kf, n);
 		kf2[i] ^= 0x40;
 		mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "modified keyfile accepted");
 	}
 	mu_assert(pc_keyfile_open(kf, n - 1, pw, strlen(pw), back) != 0, "short keyfile");
+	/* New files use Argon2id (KDF id 2) at 128 MiB, 4 passes, 4 lanes. */
+	mu_assert(kf[6] == 2 && kf[7] == 4 && kf[8] == 0 && kf[9] == 0 && kf[10] == 2 &&
+	    kf[12] == 4, "key file KDF and cost");
 	/* Absurd KDF parameters are refused before any work. */
 	memcpy(kf2, kf, n);
+	kf2[10] = 0x40;	/* 4 GiB */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "4 GiB Argon2 accepted");
+	memcpy(kf2, kf, n);
+	kf2[12] = 64;	/* passes */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "64 passes accepted");
+	memcpy(kf2, kf, n);
+	kf2[7] = 0;	/* lanes */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "0 lanes accepted");
+	memcpy(kf2, kf, n);
+	kf2[6] = 1;	/* scrypt with these bytes: log2 N 4 */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 4 accepted");
 	kf2[7] = 40;
 	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 40 accepted");
 	/* Each in range, together 16 GB (128 * r * N): refused before scrypt. */
@@ -694,6 +708,9 @@ MU_TEST(test_keyfile)
 	kf2[8] = 32; kf2[9] = kf2[10] = kf2[11] = 0;
 	kf2[12] = 16; kf2[13] = kf2[14] = kf2[15] = 0;
 	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "16 GB scrypt accepted");
+	kf2[6] = 3;
+	mu_assert(pc_keyfile_open(kf, n, pw, strlen(pw), back) == 0 &&
+	    pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "unknown KDF id accepted");
 	/* Two key files: different keys and salts. */
 	mu_assert_int_eq(0, pc_keyfile_create(pw, strlen(pw), back, kf2));
 	mu_assert(memcmp(key, back, 32) != 0 && memcmp(kf, kf2, n) != 0, "key files repeat");
@@ -706,6 +723,35 @@ MU_TEST(test_keyfile)
 	mu_assert(pl == 15 && memcmp(out, "hello, key file", 15) == 0, "seal with keyfile key");
 	pc_free(c);
 	pc_free(d);
+}
+
+/*
+ * A scrypt key file (KDF id 1) written by pc_keyfile_create() of 4.4.0
+ * still opens, to the same key.
+ */
+MU_TEST(test_keyfile_scrypt)
+{
+	static const char kfhex[] =
+	    "50434b45593101110800000001000000b013aca55d5feadd5a1f4d27657fbdef"
+	    "5520298d55511fc87e025d2b3088b098cb1d075a0adbaee40000000000000000"
+	    "37d6cdc258df9fee5521f92f09e7a1b9259e8dc3fd8a9dd1b90a63d61bb46bf1"
+	    "2d7a2a52f717d62af3f24ab4032fa83318f0874baff3f1aa9716ede64316349e";
+	static const unsigned char want[32] = {
+		0x21, 0xdb, 0x0b, 0x2e, 0x5b, 0x3d, 0x8b, 0x55, 0x74, 0xa3, 0xc0, 0x01,
+		0x5b, 0x82, 0xb2, 0x35, 0x29, 0x2e, 0xf8, 0x97, 0xe3, 0xc4, 0x66, 0x7c,
+		0xfd, 0x33, 0xa2, 0xb8, 0x9c, 0x72, 0x4f, 0xe5 };
+	const char *pw = "key file from 4.4.0";
+	unsigned char kf[128], key[32];
+	unsigned int b, i;
+
+	for (i = 0; i < sizeof (kf); i++) {
+		sscanf(kfhex + 2 * i, "%2x", &b);
+		kf[i] = (unsigned char)b;
+	}
+	mu_assert_int_eq(0, pc_keyfile_open(kf, sizeof (kf), pw, strlen(pw), key));
+	mu_assert(memcmp(key, want, 32) == 0, "4.4.0 key file opens to its key");
+	mu_assert(pc_keyfile_open(kf, sizeof (kf), "key file from 4.4.1", strlen(pw), key) != 0,
+	    "wrong password on a scrypt key file");
 }
 
 MU_TEST(test_index)
@@ -990,6 +1036,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_index_utf8_path);
 	MU_RUN_TEST(test_keyfile);
+	MU_RUN_TEST(test_keyfile_scrypt);
 	MU_RUN_TEST(test_ids);
 	MU_RUN_TEST(test_chunk_id2);
 	MU_RUN_TEST(test_derive_key);

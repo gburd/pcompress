@@ -64,7 +64,7 @@ Each piece has a libpcompress equivalent:
 | blob id (SHA-256 of plaintext) | `pc_chunk_id`, keyed BLAKE2b-256: the store cannot confirm guessed content |
 | blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XSalsa20 + BLAKE2b (encrypt-then-MAC) |
 | tree / node | `pc_manifest_*`, one per directory, linked by `subtree` ids |
-| encryptedkeyset.dat | `pc_keyfile_*` (scrypt-wrapped 256-bit key) |
+| encryptedkeyset.dat | `pc_keyfile_*` (Argon2id-wrapped 256-bit key) |
 | local blob cache / "already uploaded?" | `pc_index_*` |
 | pack files, BlobLoc | **not provided**: the caller's choice (see Argh! below) |
 
@@ -216,5 +216,5 @@ because a sealed object is opaque but its bytes are fixed once written:
 - **Keys:** the master key comes from the client's key file and never
   reaches the server. Derive one key per purpose with `pc_derive_key`.
   If the key file is stored with the service (so a user can restore
-  from a new machine with only a password), it is protected by scrypt
+  from a new machine with only a password), it is protected by Argon2id
   alone, and the password's strength is the whole defence.

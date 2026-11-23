@@ -76,6 +76,16 @@ typedef struct {
 #define	ARGON2_P_MAX	16
 #define	ARGON2_MT_MAX	(4ULL * 1024 * 1024)
 
+/*
+ * What new key files (and encrypted .pz files) use: 128 MiB, 4 passes,
+ * 4 lanes. 0.29 s on a Xeon 8488C and 0.36 s on Graviton, and the
+ * memory scrypt used before. RFC 9106's second recommendation (64 MiB,
+ * 3 passes) took 0.11 s there, under the 0.3 s scrypt cost it replaces.
+ */
+#define	ARGON2_PZ_M	(128U * 1024U)
+#define	ARGON2_PZ_T	4
+#define	ARGON2_PZ_P	4
+
 /** 1 if kp is within the bounds above, else 0. */
 int argon2_params_ok(const argon2_params_t *kp);
 
