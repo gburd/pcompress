@@ -4633,13 +4633,20 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 			break;
 
 		    case 'r':
-			if (sx_parse_range(pctx, oarg) != 0)
-				{ err = 1; goto opt_done; }
-			break;
-
 		    case 'R':
-			pctx->sx_mode = SX_MODE_MEMBER;
-			pctx->sx_member = oarg;
+			/* One range or member per job: a second one would replace the first. */
+			if (pctx->sx_mode != 0) {
+				log_msg(LOG_ERR, 0, "Give one -r or one -R, not several.");
+				err = 1;
+				goto opt_done;
+			}
+			if (opt == 'R') {
+				pctx->sx_mode = SX_MODE_MEMBER;
+				pctx->sx_member = oarg;
+			} else if (sx_parse_range(pctx, oarg) != 0) {
+				err = 1;
+				goto opt_done;
+			}
 			break;
 
 		   case 'n':

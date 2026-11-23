@@ -228,6 +228,7 @@ and
 need a file written with
 .Fl X ,
 read from a file, not standard input.
+A job takes one of them, once.
 They read the index, check its tag (the file's checksum, or its HMAC
 when encrypted) and decode only the chunks that hold the range; each of
 those must match the index's record of it.

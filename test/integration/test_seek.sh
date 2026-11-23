@@ -164,6 +164,11 @@ expect_fail "no index: -r refused" $PCOMPRESS -d -r 0:1 "$T/n.pz" "$T/part"
 expect_fail "-X with -G refused" $PCOMPRESS -c zstd -X -G "$T/in" "$T/g"
 expect_fail "-r on an archive refused" $PCOMPRESS -d -r 0:1 "$T/a.pz" "$T/o"
 rm -f "$T/part"
+expect_fail "-r twice refused" $PCOMPRESS -d -r 0:1 -r 5:1 "$T/x.pz" "$T/part"
+expect_fail "-r with -R refused" $PCOMPRESS -d -r 0:1 -R tree/big.txt "$T/a.pz" "$T/o"
+expect_fail "-R twice refused" $PCOMPRESS -d -R tree/big.txt -R tree/sub/small.txt \
+    "$T/a.pz" "$T/o"
+rm -f "$T/part"
 expect_fail "-R on a file refused" $PCOMPRESS -d -R x "$T/x.pz" "$T/part"
 if cat "$T/x.pz" | $PCOMPRESS -d -r 0:1 - >/dev/null 2>&1; then
 	log_fail "stream input with -r accepted"
