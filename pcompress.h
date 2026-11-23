@@ -388,6 +388,7 @@ struct pc_ctx {
 	uchar_t *arc_buf;
 	uint64_t arc_buf_size, arc_buf_pos;
 	int arc_closed, arc_writing;
+	int arc_eof;		/* the extractor reached the end-of-archive blocks */
 	int btype, ctype;
 	int interesting;
 	int min_chunk;

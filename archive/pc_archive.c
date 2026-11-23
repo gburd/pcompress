@@ -391,6 +391,20 @@ archiver_write(void *ctx, void *buf, uint64_t count)
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
 	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
+		uchar_t *b = (uchar_t *)buf;
+		uint64_t i;
+
+		/*
+		 * libarchive stops reading at the end-of-archive blocks, but the
+		 * tar stream goes on with zero padding to its record size, which
+		 * can fill a later chunk. Zeros after a clean end are that
+		 * padding: take them. Anything else is data the extractor never
+		 * read.
+		 */
+		for (i = 0; pctx->arc_eof && i < count && b[i] == 0; i++)
+			;
+		if (pctx->arc_eof && i == count)
+			return ((int64_t)count);
 		log_msg(LOG_WARN, 0, "Archive extractor closed unexpectedly");
 		return (0);
 	}
@@ -1862,6 +1876,7 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	/*
 	 * Read archive entries and extract to disk.
 	 */
+	pctx->arc_eof = 0;
 	while ((rv = archive_read_next_header(arc, &entry)) != ARCHIVE_EOF) {
 #ifndef	__APPLE__
 		const char *xt_name, *xt_value;
@@ -1949,6 +1964,9 @@ extractor_thread_run(pc_ctx_t *pctx) {
 			}
 		}
 	}
+	/* A clean end of the archive: trailing zero padding may follow. */
+	if (rv == ARCHIVE_EOF)
+		__atomic_store_n(&pctx->arc_eof, 1, __ATOMIC_RELAXED);
 	archive_read_free(arc);
 	archive_write_free(awd);
 
