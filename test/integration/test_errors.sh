@@ -180,6 +180,36 @@ else
 	log_fail "zstd -s 64k: compress"
 fi
 
+# Version 13 (DESIGN.md, Versioning): a file is read when its flags are
+# all known, refused with a clear message when one is not. The header
+# CRC is recomputed, so only the version rule can refuse it.
+rm -f "$T/in.pz"
+if command -v python3 >/dev/null 2>&1 &&
+    $PCOMPRESS -c zstd -l 1 -s 64k "$T/in" >/dev/null 2>&1; then
+	for case in known unknown; do
+		python3 - "$T/in.pz" "$T/v13.pz" $case <<'PYEOF'
+import struct, sys, zlib
+d = bytearray(open(sys.argv[1], "rb").read())
+d[8:10] = struct.pack(">H", 13)
+if sys.argv[3] == "unknown":
+    d[10:12] = struct.pack(">H", struct.unpack(">H", d[10:12])[0] | 0x8000)
+d[24:28] = struct.pack(">I", zlib.crc32(bytes(d[:24])))
+open(sys.argv[2], "wb").write(d)
+PYEOF
+		rm -f "$T/v13.out"
+		if [ $case = known ]; then
+			expect 0 "version 13, known flags: read" -d "$T/v13.pz" "$T/v13.out"
+			cmp -s "$T/in" "$T/v13.out" || log_fail "version 13, known flags: output"
+		else
+			expect 1 "version 13, unknown flag: refused" -d "$T/v13.pz" "$T/v13.out"
+			grep -q "features this build does not know" "$T/out.log" ||
+			    log_fail "version 13, unknown flag: message"
+		fi
+	done
+else
+	SKIP=$((SKIP + 1)); echo "  SKIP: version 13 (no python3)"
+fi
+
 echo ""
 echo "--- Corrupt archive ---"
 mkdir -p "$T/tree/sub" && cp "$T/in" "$T/tree/" && echo x > "$T/tree/sub/s"

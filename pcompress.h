@@ -78,7 +78,16 @@ extern "C" {
  * record (pz_crypt.h, DESIGN.md). Readers before 4.5 refuse it as newer.
  */
 #define	VERSION_AEAD	12
-#define	VERSION_MAX	VERSION_AEAD	/**< Newest version this build reads. */
+/**
+ * Version 13 is version 10 (version 12 when encrypted) plus one rule: a
+ * reader refuses a header flag bit it does not know. Older versions left
+ * unknown bits alone, so a feature that changes how data must be decoded
+ * takes a new flag bit and writes version 13; releases before 4.5 refuse
+ * the file as newer, and later ones that lack the feature refuse the bit.
+ * Files that use no such feature are still written as 10 or 12.
+ */
+#define	VERSION_FLAGS	13
+#define	VERSION_MAX	VERSION_FLAGS	/**< Newest version this build reads. */
 #define	KDF_SCRYPT	1	/**< KDF id in a version 11 header. */
 #define	FLAG_DEDUP	1       /**< File flag: Rabin deduplication enabled. */
 #define	FLAG_DEDUP_FIXED	2 /**< File flag: fixed-block deduplication enabled. */
@@ -87,6 +96,15 @@ extern "C" {
 #define	FLAG_ARCHIVE	2048    /**< File flag: archive mode (PAX). */
 #define	UTILITY_VERSION	"4.4.0"   /**< Human-readable utility version string. */
 #define	MASK_CRYPTO_ALG	0x30    /**< Bitmask for crypto algorithm in flags. */
+/**
+ * The header flag bits of versions 10 to 12 (0x700 is the checksum id,
+ * CKSUM_MASK). A file whose flags have any other bit is written as
+ * version 13. Free bits: 0x8, 0x40, 0x80, 0x2000, 0x4000, 0x8000.
+ */
+#define	FLAG_V12	(FLAG_DEDUP | FLAG_DEDUP_FIXED | FLAG_SINGLE_CHUNK | \
+	MASK_CRYPTO_ALG | 0x700 | FLAG_ARCHIVE | FLAG_META_STREAM)
+/** Every header flag bit this build understands. */
+#define	FLAG_KNOWN	FLAG_V12
 #define	MAX_LEVEL	14      /**< Maximum compression level. */
 /**@}*/
 
