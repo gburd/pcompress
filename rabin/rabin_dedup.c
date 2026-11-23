@@ -90,12 +90,7 @@
  */
 #define	SCRATCH_TAIL(ctx, sz) \
 	((uchar_t *)(((uintptr_t)((ctx)->cbuf + (ctx)->real_chunksize - (sz))) & ~(uintptr_t)7))
-#if defined(__USE_SSE_INTRIN__) && defined(__SSE4_1__) && RAB_POLYNOMIAL_WIN_SIZE == 16
-#	include <smmintrin.h>
-#	define	SSE_MODE		1
-#endif
-
-#if defined(__USE_SSE_INTRIN__) && !defined(__SSE4_1__)
+#if defined(__USE_SSE_INTRIN__)
 #	include <emmintrin.h>
 #endif
 
@@ -121,6 +116,7 @@ extern int bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf
 	bsize_t *_newsize);
 
 static uint64_t ir[256], out[256];
+static uint64_t gear[256];
 static pthread_once_t tables_once = PTHREAD_ONCE_INIT;
 static void init_rabin_tables(void);
 
@@ -140,6 +136,7 @@ init_rabin_tables(void)
 	unsigned int term, pow, i, j;
 	uint64_t val, poly_pow;
 
+	pc_gear_table(gear);
 	poly_pow = 1;
 	for (j = 0; j < RAB_POLYNOMIAL_WIN_SIZE; j++)
 		poly_pow = (poly_pow * RAB_POLYNOMIAL_CONST) & POLY_MASK;
@@ -289,11 +286,8 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
 	ctx->arc = arc;
 	ctx->out_fd = -1;	/* set by the decompressor for global dedupe */
 
-	ctx->current_window_data = NULL;
 	ctx->dedupe_flag = dedupe_flag;
-	ctx->rabin_break_patt = 0;
 	ctx->rabin_poly_avg_block_size = RAB_BLK_AVG_SZ(rab_blk_sz);
-	ctx->rabin_avg_block_mask = RAB_BLK_MASK;
 	ctx->rabin_poly_min_block_size = dedupe_min_blksz(rab_blk_sz);
 	ctx->delta_flag = 0;
 	ctx->deltac_min_distance = props->deltac_min_distance;
@@ -335,17 +329,12 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
 		destroy_dedupe_context(ctx);
 		return (NULL);
 	}
-#ifndef SSE_MODE
-	ctx->current_window_data = (uchar_t *)slab_alloc(NULL, RAB_POLYNOMIAL_WIN_SIZE);
-#else
-	ctx->current_window_data = (uchar_t *)1;
-#endif
 	ctx->blocks = NULL;
 	if (real_chunksize > 0 && dedupe_flag != RABIN_DEDUPE_FILE_GLOBAL) {
 		ctx->blocks = (rabin_blockentry_t **)slab_calloc(NULL,
 			ctx->blknum, sizeof (rabin_blockentry_t *));
 	}
-	if(ctx == NULL || ctx->current_window_data == NULL ||
+	if (ctx == NULL ||
 	    (ctx->blocks == NULL && real_chunksize > 0 && dedupe_flag != RABIN_DEDUPE_FILE_GLOBAL)) {
 		log_msg(LOG_ERR, 0,
 		    "Could not allocate rabin polynomial context, out of memory\n");
@@ -388,9 +377,6 @@ create_dedupe_context(uint64_t chunksize, uint64_t real_chunksize, int rab_blk_s
 void
 reset_dedupe_context(dedupe_context_t *ctx)
 {
-#ifndef	SSE_MODE
-	memset(ctx->current_window_data, 0, RAB_POLYNOMIAL_WIN_SIZE);
-#endif
 	ctx->valid = 0;
 }
 
@@ -409,9 +395,6 @@ destroy_dedupe_context(dedupe_context_t *ctx)
 {
 	if (ctx) {
 		uint32_t i;
-#ifndef SSE_MODE
-		if (ctx->current_window_data) slab_free(NULL, ctx->current_window_data);
-#endif
 
 		if (ctx->blocks) {
 			for (i=0; i<ctx->blknum && ctx->blocks[i] != NULL; i++) {
@@ -481,21 +464,52 @@ ckcmp(uchar_t *a, uchar_t *b, int sz)
 	return (0);
 }
 
+/*
+ * The length of the block that starts at p, of the len bytes left: the
+ * first cut at or past min bytes, else max, else len. A cut follows the
+ * byte after which the top RAB_GEAR_BITS bits of chunk.c's gear hash
+ * (FastCDC's, table from pc_gear_table()) are zero, so blocks average
+ * min + 1 KB like the 10-bit Rabin test this replaced. FastCDC's
+ * normalized chunking (a stricter test before the average, a looser one
+ * after) was measured and lost dedupe: -G on five PostgreSQL source trees
+ * deduped 11% worse. Only the 64 bytes before a candidate cut reach the
+ * top bits of h, so hashing starts 64 bytes before min. The decoder reads
+ * block lengths, so these cuts are not part of the format.
+ */
+static uint32_t
+gear_cut(const dedupe_context_t *ctx, const uchar_t *p, uint64_t len)
+{
+	const uint64_t mask = ~(uint64_t)0 << (64 - RAB_GEAR_BITS);
+	uint64_t h = 0;
+	uint32_t i, min = ctx->rabin_poly_min_block_size;
+	uint32_t n = len < ctx->rabin_poly_max_block_size ? len :
+	    ctx->rabin_poly_max_block_size;
+
+	if (n <= min)
+		return (n);
+	for (i = min - RAB_WINDOW_SLIDE_OFFSET; i < min - 1; i++)
+		h = (h << 1) + gear[p[i]];
+	for (; i < n; i++) {
+		h = (h << 1) + gear[p[i]];
+		if ((h & mask) == 0)
+			return (i + 1);
+	}
+	return (n);
+}
+
 /**
  * Perform Deduplication.
- * Both Semi-Rabin fingerprinting based and Fixed Block Deduplication are supported.
- * A 16-byte window is used for the rolling checksum and dedup blocks can vary in size
- * from 4K-128K.
+ * Both content-defined (gear hash, gear_cut()) and Fixed Block Deduplication
+ * are supported. Content-defined blocks vary in size from min to 128K.
  */
 uint32_t
 dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t offset,
 		uint64_t *rabin_pos, int mt)
 {
 	uint64_t i, last_offset, j, ary_sz;
-	uint32_t blknum, window_pos;
+	uint32_t blknum;
 	uchar_t *buf1 = (uchar_t *)buf;
 	uint32_t length;
-	uint64_t cur_roll_checksum, cur_pos_checksum;
 	uint32_t *ctx_heap;
 	rabin_blockentry_t **htab;
 	MinHeap heap;
@@ -506,9 +520,7 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 	length = offset;
 	last_offset = 0;
 	blknum = 0;
-	window_pos = 0;
 	ctx->valid = 0;
-	cur_roll_checksum = 0;
 	if (*size < ctx->rabin_poly_avg_block_size) {
 		/*
 		 * Must ensure that we are signaling the index semaphores before skipping
@@ -567,162 +579,78 @@ dedupe_compress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size, uint64_t of
 		ary_sz += ctx->rabin_poly_max_block_size;
 		ctx_heap = (uint32_t *)SCRATCH_TAIL(ctx, ary_sz);
 	}
-#ifndef SSE_MODE
-	memset(ctx->current_window_data, 0, RAB_POLYNOMIAL_WIN_SIZE);
-#else
-	__m128i cur_sse_byte = _mm_setzero_si128();
-	__m128i window = _mm_setzero_si128();
-#endif
-	j = *size - RAB_POLYNOMIAL_WIN_SIZE;
-
-	/* 
-	 * If rabin_pos is non-zero then we are being asked to scan for the last rabin boundary
-	 * in the chunk. We start scanning at chunk end - max rabin block size. We avoid doing
-	 * a full chunk scan.
-	 * 
-	 * !!!NOTE!!!: Code duplication below for performance.
+	/*
+	 * If rabin_pos is non-NULL we are only asked for the last block
+	 * boundary in the chunk, so that the caller can carry the bytes after
+	 * it over to the next chunk, whose blocks start there. Any cut will
+	 * do, so cutting starts max bytes before the end rather than at 0.
 	 */
 	if (rabin_pos) {
-		offset = *size - ctx->rabin_poly_max_block_size;
-		length = 0;
-		for (i=offset; i<j; i++) {
-			int cur_byte = buf1[i];
-#ifdef	SSE_MODE
-			uint32_t pushed_out = _mm_extract_epi32(window, 3);
-			pushed_out >>= 24;
-			asm ("movd %[cur_byte], %[cur_sse_byte]"
-			     : [cur_sse_byte] "=x" (cur_sse_byte)
-			     : [cur_byte] "r" (cur_byte)
-			);
-			window = _mm_slli_si128(window, 1);
-			window = _mm_or_si128(window, cur_sse_byte);
-#else
-			uint32_t pushed_out = ctx->current_window_data[window_pos];
-			ctx->current_window_data[window_pos] = cur_byte;
-#endif
-
-			cur_roll_checksum = (cur_roll_checksum * RAB_POLYNOMIAL_CONST) & POLY_MASK;
-			cur_roll_checksum += cur_byte;
-			cur_roll_checksum -= out[pushed_out];
-
-#ifndef	SSE_MODE
-			window_pos = (window_pos + 1) & (RAB_POLYNOMIAL_WIN_SIZE-1);
-#endif
-			++length;
-			if (length < ctx->rabin_poly_min_block_size) continue;
-
-			// If we hit our special value update block offset
-			cur_pos_checksum = cur_roll_checksum ^ ir[pushed_out];
-			if ((cur_pos_checksum & ctx->rabin_avg_block_mask) == ctx->rabin_break_patt) {
+		last_offset = 0;
+		i = *size > ctx->rabin_poly_max_block_size ?
+		    *size - ctx->rabin_poly_max_block_size : 0;
+		while (i < *size) {
+			i += gear_cut(ctx, buf1 + i, *size - i);
+			if (i < *size)
 				last_offset = i;
-				length = 0;
-			}
 		}
-
-		if (last_offset < *size) {
-			*rabin_pos = last_offset;
-		}
+		*rabin_pos = last_offset;
 		return (0);
 	}
 
 	/*
-	 * Start our sliding window at a fixed number of bytes before the min window size.
-	 * It is pointless to slide the window over the whole length of the chunk.
+	 * Cut blocks until what is left is no longer than min; that tail
+	 * (or a last stretch without a cut) becomes the final block below.
 	 */
-	offset = ctx->rabin_poly_min_block_size - RAB_WINDOW_SLIDE_OFFSET;
-	length = offset;
-	for (i=offset; i<j; i++) {
+	while (*size - last_offset > ctx->rabin_poly_min_block_size) {
 		uint64_t pc[4];
-		uint32_t cur_byte = buf1[i];
+		uint32_t blen;
 
-#ifdef	SSE_MODE
-		/*
-		 * A 16-byte XMM register is used as a sliding window if our window size is 16 bytes
-		 * and at least SSE 4.1 is enabled. Avoids memory access for the sliding window.
-		 */
-		uint32_t pushed_out = _mm_extract_epi32(window, 3);
-		pushed_out >>= 24;
-
-		/*
-		 * No intrinsic available for this.
-		 */
-		asm ("movd %[cur_byte], %[cur_sse_byte]"
-		     : [cur_sse_byte] "=x" (cur_sse_byte)
-		     : [cur_byte] "r" (cur_byte)
-		);
-		window = _mm_slli_si128(window, 1);
-		window = _mm_or_si128(window, cur_sse_byte);
-#else
-		uint32_t pushed_out = ctx->current_window_data[window_pos];
-		ctx->current_window_data[window_pos] = cur_byte;
-#endif
-
-		cur_roll_checksum = (cur_roll_checksum * RAB_POLYNOMIAL_CONST) & POLY_MASK;
-		cur_roll_checksum += cur_byte;
-		cur_roll_checksum -= out[pushed_out];
-
-#ifndef	SSE_MODE
-		/*
-		 * Window pos has to rotate from 0 .. RAB_POLYNOMIAL_WIN_SIZE-1
-		 * We avoid a branch here by masking. This requires RAB_POLYNOMIAL_WIN_SIZE
-		 * to be power of 2
-		 */
-		window_pos = (window_pos + 1) & (RAB_POLYNOMIAL_WIN_SIZE-1);
-#endif
-		++length;
-		if (length < ctx->rabin_poly_min_block_size) continue;
-
-		// If we hit our special value or reached the max block size update block offset
-		cur_pos_checksum = cur_roll_checksum ^ ir[pushed_out];
-		if ((cur_pos_checksum & ctx->rabin_avg_block_mask) == ctx->rabin_break_patt ||
-		    length >= ctx->rabin_poly_max_block_size) {
-
-			if (!(ctx->arc)) {
-				if (ctx->blocks[blknum] == 0)
-					ctx->blocks[blknum] = (rabin_blockentry_t *)slab_alloc(NULL,
-					    sizeof (rabin_blockentry_t));
-				ctx->blocks[blknum]->offset = last_offset;
-				ctx->blocks[blknum]->index = blknum; // Need to store for sorting
-				ctx->blocks[blknum]->length = length;
-			} else {
-				ctx->g_blocks[blknum].length = length;
-				ctx->g_blocks[blknum].offset = last_offset;
-			}
-			DEBUG_STAT_EN(if (length >= ctx->rabin_poly_max_block_size) ++max_count);
-			if (ctx->show_chunks) {
-				fprintf(stderr, "Block offset: %" PRIu64 ", length: %u\n", last_offset, length);
-			}
-
-			/*
-			 * Reset the heap structure and find the K min values if Delta Compression
-			 * is enabled. We use a min heap mechanism taken from the heap based priority
-			 * queue implementation in Python.
-			 * Here K = similarity extent = 87% or 62% or 50%.
-			 * 
-			 * Once block contents are arranged in a min heap we compute the K min values
-			 * sketch by hashing over the heap till K%. We interpret the raw bytes as a
-			 * sequence of 64-bit integers.
-			 * This is variant of minhashing which is used widely, for example in various
-			 * search engines to detect similar documents.
-			 */
-			if (ctx->delta_flag) {
-				length /= 8;
-				pc[1] = DELTA_NORMAL_PCT(length);
-				pc[2] = DELTA_EXTRA_PCT(length);
-				pc[3] = DELTA_EXTRA2_PCT(length);
-
-				heap_nsmallest(&heap, buf1+last_offset,
-					       (int64_t *)ctx_heap, pc[ctx->delta_flag], length);
-				ctx->blocks[blknum]->similarity_hash =
-					XXH32((const uchar_t *)ctx_heap, heap_size(&heap)*8, 0);
-			}
-			++blknum;
-			last_offset = i+1;
-			length = 0;
-			if (*size - last_offset <= ctx->rabin_poly_min_block_size) break;
-			length = ctx->rabin_poly_min_block_size - RAB_WINDOW_SLIDE_OFFSET;
-			i = i + length;
+		blen = gear_cut(ctx, buf1 + last_offset, *size - last_offset);
+		if (last_offset + blen == *size)
+			break;
+		length = blen;
+		if (!(ctx->arc)) {
+			if (ctx->blocks[blknum] == 0)
+				ctx->blocks[blknum] = (rabin_blockentry_t *)slab_alloc(NULL,
+				    sizeof (rabin_blockentry_t));
+			ctx->blocks[blknum]->offset = last_offset;
+			ctx->blocks[blknum]->index = blknum; // Need to store for sorting
+			ctx->blocks[blknum]->length = length;
+		} else {
+			ctx->g_blocks[blknum].length = length;
+			ctx->g_blocks[blknum].offset = last_offset;
 		}
+		DEBUG_STAT_EN(if (length >= ctx->rabin_poly_max_block_size) ++max_count);
+		if (ctx->show_chunks) {
+			fprintf(stderr, "Block offset: %" PRIu64 ", length: %u\n", last_offset, length);
+		}
+
+		/*
+		 * Reset the heap structure and find the K min values if Delta Compression
+		 * is enabled. We use a min heap mechanism taken from the heap based priority
+		 * queue implementation in Python.
+		 * Here K = similarity extent = 87% or 62% or 50%.
+		 * 
+		 * Once block contents are arranged in a min heap we compute the K min values
+		 * sketch by hashing over the heap till K%. We interpret the raw bytes as a
+		 * sequence of 64-bit integers.
+		 * This is variant of minhashing which is used widely, for example in various
+		 * search engines to detect similar documents.
+		 */
+		if (ctx->delta_flag) {
+			length /= 8;
+			pc[1] = DELTA_NORMAL_PCT(length);
+			pc[2] = DELTA_EXTRA_PCT(length);
+			pc[3] = DELTA_EXTRA2_PCT(length);
+
+			heap_nsmallest(&heap, buf1+last_offset,
+				       (int64_t *)ctx_heap, pc[ctx->delta_flag], length);
+			ctx->blocks[blknum]->similarity_hash =
+				XXH32((const uchar_t *)ctx_heap, heap_size(&heap)*8, 0);
+		}
+		++blknum;
+		last_offset += blen;
 	}
 
 	// Insert the last left-over trailing bytes, if any, into a block.

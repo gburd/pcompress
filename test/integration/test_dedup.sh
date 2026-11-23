@@ -127,6 +127,70 @@ for algo in lz4 zlib; do
 done
 rm -f "$PWFILE"
 
+# Every content-defined mode, threads 1 and 16, plain and encrypted, on a
+# file of 40 copies of a 64 KB random block with random gaps. With no
+# compressor only dedupe can shrink it, and only if the block boundaries
+# fall at the same places in each copy.
+echo ""
+echo "--- Dedupe modes, threads, encryption ---"
+rf="datafiles/dedup_rep.dat"
+if [ ! -f "$rf" ]; then
+	dd if=/dev/urandom of=datafiles/dedup_rep.tmp bs=4096 count=16 2>/dev/null
+	i=0
+	while [ $i -lt 40 ]; do
+		cat datafiles/dedup_rep.tmp
+		dd if=/dev/urandom bs=1000 count=3 2>/dev/null
+		i=$((i + 1))
+	done > "$rf"
+	rm -f datafiles/dedup_rep.tmp
+fi
+rsz=$(wc -c < "$rf")
+for mode in "-D" "-G" "-D -E" "-D -EE"; do
+	for t in 1 16; do
+		for enc in "" "-e AES"; do
+			label="${mode} -t${t} ${enc:-plain}"
+			pw=""
+			[ -n "$enc" ] && pw="-w $PWFILE"
+			rm -f ${rf}.pz ${rf}.out
+			# pcompress zeroes a password file once read.
+			echo "deduptestpassword" > "$PWFILE"
+			# shellcheck disable=SC2086
+			if ! $PCOMPRESS -c none -l 1 -s 4m $mode -t $t $enc $pw \
+			    ${rf} 2>/dev/null; then
+				log_fail "${label}: compression failed"
+				continue
+			fi
+			csz=$(wc -c < ${rf}.pz)
+			echo "deduptestpassword" > "$PWFILE"
+			# shellcheck disable=SC2086
+			if ! $PCOMPRESS -d $pw ${rf}.pz ${rf}.out 2>/dev/null; then
+				log_fail "${label}: decompression failed"
+			elif ! cmp -s ${rf} ${rf}.out; then
+				log_fail "${label}: data mismatch"
+			elif [ $((csz * 2)) -gt "$rsz" ]; then
+				log_fail "${label}: ${csz} of ${rsz} bytes: repeats not found"
+			else
+				log_pass "${label}: round-trip OK, ${csz} of ${rsz} bytes"
+			fi
+			rm -f ${rf}.pz ${rf}.out
+		done
+	done
+done
+
+# Archive mode with dedupe: two copies of the file in one directory.
+ADIR=datafiles/dedup_arc
+rm -rf "$ADIR" "$ADIR.pz" datafiles/dedup_arc_out
+mkdir -p "$ADIR" datafiles/dedup_arc_out && cp "$rf" "$ADIR/a" && cp "$rf" "$ADIR/b"
+if $PCOMPRESS -a -c zstd -l 3 -s 4m -D -E "$ADIR" 2>/dev/null &&
+    $PCOMPRESS -d "$ADIR.pz" datafiles/dedup_arc_out 2>/dev/null &&
+    cmp -s "$rf" datafiles/dedup_arc_out/$ADIR/b; then
+	log_pass "archive -D -E: round-trip OK"
+else
+	log_fail "archive -D -E: round-trip"
+fi
+rm -rf "$ADIR" "$ADIR.pz" datafiles/dedup_arc_out
+rm -f "$PWFILE"
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

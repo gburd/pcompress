@@ -92,8 +92,10 @@
 #define	RAB_POLYNOMIAL_MAX_WIN_SIZE 64
 #define	RAB_POLYNOMIAL_MAX_BLOCK_SIZE (128 * 1024)
 #define	RAB_POLY_MAX_BLOCK_SIZE_GLOBAL (64 * 1024)
-#define	RAB_BLK_MASK (((1 << RAB_BLK_MIN_BITS) - 1) >> 1)
 #define	RAB_BLK_AVG_SZ(x) (1 << ((x) + RAB_BLK_MIN_BITS))
+
+// Zero hash bits that end a content-defined block: about 1 KB past min.
+#define	RAB_GEAR_BITS	10
 
 // The sliding window starts at min window size - this offset. It is needless
 // to slide the window over every byte in the chunk.
@@ -176,7 +178,6 @@ typedef struct rab_blockentry {
 } rabin_blockentry_t;
 
 typedef struct {
-	unsigned char *current_window_data;
 	rabin_blockentry_t **blocks;
 	global_blockentry_t *g_blocks;
 	uint32_t blknum;
@@ -184,8 +185,6 @@ typedef struct {
 	uint32_t rabin_poly_max_block_size;
 	uint32_t rabin_poly_min_block_size;
 	uint32_t rabin_poly_avg_block_size;
-	uint32_t rabin_avg_block_mask;
-	uint32_t rabin_break_patt;
 	uint64_t real_chunksize;
 	short valid;
 	void *lzma_data;
@@ -209,6 +208,8 @@ extern void destroy_dedupe_context(dedupe_context_t *ctx);
 extern void destroy_dedupe_index(archive_config_t **shared_arc);
 /* Rolling-hash tables as used by dedupe_compress(), built once. */
 extern void rabin_tables(const uint64_t **ir_tab, const uint64_t **out_tab);
+/* chunk.c's gear table (PC_CHUNKER_GEAR), also used by dedupe_compress(). */
+extern void pc_gear_table(uint64_t g[256]);
 extern unsigned int dedupe_compress(dedupe_context_t *ctx, unsigned char *buf, 
 	uint64_t *size, uint64_t offset, uint64_t *rabin_pos, int mt);
 extern void dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size);

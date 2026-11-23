@@ -4,6 +4,11 @@ Format: version 13, for features that change how data is decoded: the
   any header flag bit it does not know, where 10 to 12 ignored them.
   Only files that use such a feature are written as 13 (4.4 refuses
   them as newer); all others are still 10 or 12.
+Change: -D and -G find block boundaries with the gear hash of the
+  library chunker instead of a Rabin hash: 18 to 30% less CPU at -D,
+  4 to 7% at -G (one thread, c7i), output within 0.5% at -D and 1.2%
+  at -G. No format change: 4.4 reads the new files, and the new
+  reader reads old ones.
 Change: a version 12 file with bytes after its end record is refused
   as corrupt, unless they end in the seek index trailer "PCSEEK01".
 Security: the version 12 file key is wiped when each job returns, not

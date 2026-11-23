@@ -220,8 +220,8 @@ Semaphore-based coordination (`Sem_t` wrapper around POSIX `sem_t`) ensures:
 Located in `rabin/rabin_dedup.c` (~50K lines), the deduplication engine
 supports three modes:
 
-- **Per-chunk Rabin dedup** (`-D`): content-defined chunking within each
-  compression segment using polynomial fingerprinting
+- **Per-chunk dedup** (`-D`): content-defined chunking within each
+  compression segment using a gear rolling hash
 - **Fixed-block dedup** (`-F`): fixed-size block boundaries, faster but lower
   dedup ratio
 - **Global dedup** (`-G`): maintains an in-memory hash index across the entire
