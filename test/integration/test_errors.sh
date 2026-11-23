@@ -157,6 +157,23 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 	[ $ok -eq 1 ] && log_pass "$a $o: corruption/truncation rejected"
 done
 
+# A first chunk length of chunk size + 256, the most the reader allowed:
+# more than the buffer's slack for zstd, a heap overflow under ASan.
+# Header 24 bytes and its CRC32, then the big-endian length.
+rm -f "$T/in.pz"
+if $PCOMPRESS -c zstd -l 1 -s 64k "$T/in" >/dev/null 2>&1; then
+	cp "$T/in.pz" "$T/long.pz"
+	printf '\000\000\000\000\000\001\001\000' |
+	    dd of="$T/long.pz" bs=1 seek=28 conv=notrunc 2>/dev/null
+	head -c 70000 /dev/zero >> "$T/long.pz"
+	# The message, not just the status: ASan also exits 1.
+	expect 1 "chunk length past its buffer"	-d "$T/long.pz" "$T/long.out"
+	grep -q "Compressed length too big" "$T/out.log" ||
+	    log_fail "chunk length past its buffer: not refused as too big"
+else
+	log_fail "zstd -s 64k: compress"
+fi
+
 echo ""
 echo "--- Corrupt archive ---"
 mkdir -p "$T/tree/sub" && cp "$T/in" "$T/tree/" && echo x > "$T/tree/sub/s"

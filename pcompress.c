@@ -2067,6 +2067,13 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 			 */
 			rb = tdat->len_cmp + pctx->cksum_bytes + pctx->mac_bytes +
 			    CHUNK_FLAG_SZ;
+			/* The check above leaves 256 bytes; the codec's slack can be less. */
+			if ((uint64_t)rb > tdat->buf_size) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %"
+				    PRIu64, pctx->chunk_num);
+				return (-1);
+			}
 			tdat->rbytes = Read(compfd, tdat->compressed_chunk, rb);
 		} else {
 			off_t cpos = lseek(compfd, 0, SEEK_CUR);

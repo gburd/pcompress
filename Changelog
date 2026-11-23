@@ -1,4 +1,9 @@
 == Unreleased ==
+Fix: a data chunk whose stored length was at most 256 bytes over the
+  chunk size, which the reader accepted, was read into a buffer with
+  less slack than that (about 50 bytes for zstd at 64 KB chunks): a
+  heap overflow found with ASan, in every format version. The read is
+  now bounded by the buffer and such a length is refused as corrupt.
 Security: the version 12 chunk ordinal, and the chunk counters behind
   it, are 64 bits end to end; the chunk number was 32 bits, so data
   chunk 2^32 would have reused chunk 0's key and nonce, and the end
