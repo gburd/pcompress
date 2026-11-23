@@ -170,10 +170,12 @@ if $PCOMPRESS -c zstd -l 1 -s 64k "$T/in" >/dev/null 2>&1; then
 	printf '\000\000\000\000\000\001\001\000' |
 	    dd of="$T/long.pz" bs=1 seek=28 conv=notrunc 2>/dev/null
 	head -c 70000 /dev/zero >> "$T/long.pz"
-	# The message, not just the status: ASan also exits 1.
+	# The message, not just the status: ASan also exits 1. Where the
+	# buffer has the full 256 bytes of slack (it depends on the codec's
+	# bound) the read fits, and the header check refuses the chunk instead.
 	expect 1 "chunk length past its buffer"	-d "$T/long.pz" "$T/long.out"
-	grep -q "Compressed length too big" "$T/out.log" ||
-	    log_fail "chunk length past its buffer: not refused as too big"
+	grep -q -E "Compressed length too big|Header CRC verification failed" "$T/out.log" ||
+	    log_fail "chunk length past its buffer: not refused"
 else
 	log_fail "zstd -s 64k: compress"
 fi
