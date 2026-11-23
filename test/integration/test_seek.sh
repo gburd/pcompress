@@ -218,6 +218,30 @@ PYEOF
 	rm -f "$T/part"
 	expect_fail "swapped encrypted chunks refused" $PCOMPRESS -d -w "$T/pw5" \
 	    -r 300000:10 "$T/d_swap.pz" "$T/part"
+	# A body length of 900 MB (a hole in a sparse file) under a wrong
+	# tag: refused on its tag, before 900 MB is allocated for it. Linux
+	# only, where ulimit -d bounds malloc() but not a file mapping.
+	if [ "$(uname -s)" = Linux ]; then
+		python3 - "$T/x.pz" "$T/d_big.pz" <<'PYEOF'
+import struct, sys
+b = open(sys.argv[1], "rb").read()
+t = 32
+n = struct.unpack("<Q", b[-16:-8])[0]
+head = b[:len(b) - 16 - t - n]
+with open(sys.argv[2], "wb") as f:
+    f.write(head)
+    f.seek(len(head) + (900 << 20))
+    f.write(bytes(t) + struct.pack("<Q", 900 << 20) + b"PCSEEK01")
+PYEOF
+		rm -f "$T/part"
+		if (ulimit -d 400000; $PCOMPRESS -d -r 0:1 "$T/d_big.pz" "$T/part" 2>&1) |
+		    grep -q "verification failed"; then
+			log_pass "huge index refused on its tag, not allocated"
+		else
+			log_fail "huge index allocated before its tag was checked"
+		fi
+		rm -f "$T/d_big.pz"
+	fi
 	for f in d_body d_tag d_len d_chunk d_ulen; do
 		rm -f "$T/part"
 		expect_fail "damaged $f refused" $PCOMPRESS -d -r 0: "$T/$f.pz" "$T/part"

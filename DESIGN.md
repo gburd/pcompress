@@ -171,8 +171,10 @@ gets its own nonce domains and binds the ordinal (format version 12),
 
 **Untrusted.** The reader checks the trailer magic, then bounds `len`
 by the file and by 1 GB, reads the 8 bytes before the body (they must
-be the zero marker), verifies the tag in constant time, decrypts, and
-only then parses. `sx_parse()` checks every count against the body's
+be the zero marker), and verifies the tag in constant time over the
+body mapped from the file, so a forged length costs no memory. Only
+then is the body read into memory; its tag is checked again on that
+copy (the file may have changed), and it is decrypted and parsed. `sx_parse()` checks every count against the body's
 size, the end marker against the file, every chunk inside
 [header, marker) in increasing order and decoding to 1 to chunksize
 bytes, and every member inside the stream, in order, with a nonempty

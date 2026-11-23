@@ -34,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <limits.h>
@@ -1971,6 +1972,29 @@ sx_pread(int fd, uint64_t off, void *buf, uint64_t len)
 }
 
 /*
+ * Check the index tag (t bytes, want) against the body as it lies in
+ * the file, mapped read-only: a forged length costs address space, not
+ * memory, until the tag matches. 0 if it does.
+ */
+static int
+sx_verify_mapped(pc_ctx_t *pctx, int fd, uint64_t body_off, uint64_t len,
+    const uchar_t *want, int t)
+{
+	uint64_t adj = body_off % (uint64_t)pctx->pagesize;
+	uchar_t tag[CKSUM_MAX_BYTES], *map;
+	int ok;
+
+	map = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, fd, (off_t)(body_off - adj));
+	if (map == MAP_FAILED) {
+		log_msg(LOG_ERR, 1, "Cannot map the seek index: ");
+		return (-1);
+	}
+	ok = sx_tag(pctx, map + adj, len, tag) == t && sx_tag_eq(tag, want, t);
+	munmap(map, len + adj);
+	return (ok ? 0 : -1);
+}
+
+/*
  * Random reads (-r, -R): find the seek index at the end of the file,
  * check its tag, decrypt and parse it into pctx->sx_idx. hdr_end is
  * where the chunks start (just after the verified header); the key must
@@ -2005,18 +2029,28 @@ sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
 		return (-1);
 	}
 	body_off = sb.st_size - trl - len;
-	if ((pctx->sx_body = pc_malloc(len)) == NULL) {
-		log_error_code(PC_ERR_NOMEM);
-		log_msg(LOG_ERR, 0, "Out of memory");
-		return (-1);
-	}
 	if (pctx->encrypt_type) {
 		if (hmac_init(&pctx->sx_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1)
 			return (-1);
 		pctx->sx_mac_ok = 1;
 	}
+	/*
+	 * The tag is checked in the file before the body is read into
+	 * memory, then again on the copy, which is what is parsed: the file
+	 * may change in between.
+	 */
 	if (sx_pread(fd, body_off - 8, &zero, 8) != 0 || zero != 0 ||
-	    sx_pread(fd, body_off, pctx->sx_body, len) != 0 ||
+	    sx_verify_mapped(pctx, fd, body_off, len, tr, t) != 0) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
+		return (-1);
+	}
+	if ((pctx->sx_body = pc_malloc(len)) == NULL) {
+		log_error_code(PC_ERR_NOMEM);
+		log_msg(LOG_ERR, 0, "Out of memory");
+		return (-1);
+	}
+	if (sx_pread(fd, body_off, pctx->sx_body, len) != 0 ||
 	    sx_tag(pctx, pctx->sx_body, len, tag) != t || !sx_tag_eq(tag, tr, t)) {
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
