@@ -43,6 +43,7 @@ extern "C" {
 #define	PZ_STREAM_META		2	/* metadata chunks, ordinal = their number */
 #define	PZ_STREAM_END		3	/* the end record, ordinal 0 */
 #define	PZ_STREAM_INDEX		4	/* the seek index body, ordinal 0 */
+#define	PZ_STREAM_REPAIR	5	/* the repair header, ordinal 0 (repair.h) */
 
 /* Header fields after the level: salt, KDF id and cost (big-endian). */
 #define	PZ_SALT_LEN	32
@@ -51,8 +52,9 @@ extern "C" {
 /* After the 8 zero bytes that end the chunks: two counts and a tag. */
 #define	PZ_END_LEN	(16 + AEAD_TAGLEN)
 /*
- * What may follow the end record: nothing, or a seek index, whose last 8
- * bytes are this magic (seek_index.h, SX_TRAILER_MAGIC).
+ * What may follow the end record: nothing, a seek index, whose last 8
+ * bytes are this magic (seek_index.h, SX_TRAILER_MAGIC), and then
+ * optionally a repair region (repair.h), which is always last.
  */
 #define	PZ_TAIL_MAGIC	"PCSEEK01"
 /* Longest associated data a caller passes (a chunk's or the header's). */

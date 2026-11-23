@@ -233,6 +233,94 @@ noise (25.2 to 26.3 s). Extracting one 20 KB member near the end takes
 `-X` gives up global dedupe and the metadata stream (those make the
 default archive 419.5 MB), not because of its own size.
 
+## Repair data
+
+`-Y <percent>` appends Reed-Solomon parity to a finished `.pz` file, and
+`pcompress -y file.pz [out.pz]` rebuilds damaged blocks from it
+(`repair.c`). Decompression does not repair: a damaged file fails as
+before, and the error names `-y`. Repair needs no password and no parse
+of the chunks: it treats the file as bytes.
+
+```
+... chunk*  0[8]  [end record]  [seek index]  header  crc[n]  parity  crc[n]  header  "PCREPR01"
+```
+
+The region comes last and covers every byte before it (`plen` bytes:
+the header, the chunks, the end record and the seek index), cut into
+blocks of `B` bytes, the last one padded with zeros. Blocks are grouped
+into stripes of `k` data and `m` parity blocks, a systematic code over
+GF(2^8) (polynomial 0x11d) with the Cauchy generator 1 / (i XOR (m + r))
+for parity row i and data row r, so that any `k` of a stripe's `k + m`
+blocks rebuild it. Stripes are interleaved `G` to a group: data block
+`b` of group `g` is row `(b mod kG) / G` of stripe `b mod G`, so a run of
+`G * m` damaged blocks costs each stripe at most `m`. The writer uses
+4 KB blocks (doubled until there are at most 2^20 of them), `m` = 4 and
+`k` = 400 / percent where that fits the 255 points of the field, and
+`G` = 64, so at 10% a run of 1 MB of bad sectors is repaired anywhere in
+the file; scattered damage is repaired while no stripe has more than `m`
+bad blocks.
+
+`crc[n]` is the CRC-32 of each of the `n` data and parity blocks, in
+that order, little-endian; it is how repair finds damage. Both tables
+and both header copies are written; repair uses any good copy and
+rewrites all of them. The header (80 bytes, little-endian):
+
+| offset | size | field |
+|--------|------|-------|
+| 0 | 8 | magic `PCRPAIR1` |
+| 8 | 4 | block size `B` (512 to 64 KB, a power of 2) |
+| 12 | 2 + 2 + 2 | `k`, `m`, `G` (k + m at most 255, G at most 256) |
+| 18 | 2 | flags: 1 sealed (version 12) |
+| 20 | 4 | zero |
+| 24 | 8 | `plen` |
+| 32 | 8 | bytes between the file's trailer (the end marker, or the end record) and the region: the seek index, or 0 |
+| 40 | 8 | region length, header to magic |
+| 48 | 16 | BLAKE2b-128 of bytes 0 to 47 |
+| 64 | 16 | flag 1: AEAD tag, else zero |
+
+The parser checks the hash, every limit, the region length against the
+geometry, and that the region ends at the end of the file, before
+anything else is read. The geometry bounds what a crafted header can
+make repair allocate: one stripe of blocks and the per-block tables.
+
+**Old readers.** Like the seek index, the region lies after the end
+marker, which 4.4 and earlier never read past, so they read an
+unencrypted `-Y` file (version 10) as any other (ci/xcompat.sh). A seek
+index reader (`-r`, `-R`) finds the index where the region starts.
+
+**Version 12.** After the end record a reader accepts the end of the
+file, a seek index, or a repair region (in that order, the region
+last), and refuses anything else. A region is accepted only if its
+header is sealed with the file's AEAD as stream 5, ordinal 0, with the
+header's first 64 bytes and the end record as associated data, and if
+the file after the end record is exactly the seek index length the
+header records plus the region. So a region cannot be moved from
+another file, bytes cannot be appended after one, and garbage that
+happens to end in `PCREPR01` is not skipped. The parity and tables are
+not authenticated, and need not be: what repair rebuilds is checked,
+block by block, against its CRC, and then by the chunks' own AEAD tags
+when the file is decompressed. A forged region can at worst make repair
+write bytes that then fail decompression, as the damage would have.
+
+**Cost**, on a c7i.4xlarge (Xeon 8488C), a 1.3 GB tar of `/usr/lib` at
+zstd -l6, 8 MB chunks, 16 threads, warm cache, three runs each:
+
+| -Y | size | time |
+|----|------|------|
+| none | 424.2 MB | 10.50 to 10.70 s |
+| 1 | 430.6 MB (+1.5%) | 10.97 to 11.06 s |
+| 5 | 447.1 MB (+5.4%) | 10.96 to 11.12 s |
+| 10 | 468.1 MB (+10.3%) | 10.97 to 11.03 s |
+| 25 | 532.2 MB (+25.5%) | 11.03 to 11.11 s |
+
+The size is the percent asked for plus the CRC tables (0.2%). The parity
+pass reads the finished file back once (from the page cache here) and
+costs 0.4 to 0.5 s whatever the percent: the multiply runs at memory
+speed with AVX2 (SSSE3 or NEON elsewhere), so the time goes to reading
+and CRC. `-y` on an intact file takes 0.24 to 0.29 s; repairing a run of
+256 KB took 2.9 to 3.8 s, most of it copying the file to a temporary
+name before it is fixed and renamed over the original.
+
 ## Library and contexts
 
 One `pc_ctx_t` is one job; the struct is private (`pcompress.h`) and
@@ -546,6 +634,7 @@ Every authenticated piece of the file belongs to a *stream* and has an
 | metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
 | end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
 | seek index | 4 | 0 | the index body; AD: its length (u64 LE), `PCSEEK01`, the end record |
+| repair header | 5 | 0 | nothing; AD: the header's first 64 bytes, the end record (see "Repair data") |
 
 The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
 zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
@@ -588,8 +677,9 @@ The seek index (`-X`, see "Seek index") is sealed as stream 4, ordinal
 lists are inside the sealed body. After the end record the reader
 accepts the end of the file, or a region whose last 8 bytes are the
 index trailer magic `PCSEEK01` (it does not parse the region; the
-index reader authenticates it), and refuses anything else as corrupt,
-so data appended to a file is not silently ignored.
+index reader authenticates it), or a repair region sealed for this file
+(see "Repair data"), and refuses anything else as corrupt, so data
+appended to a file is not silently ignored.
 
 **Version 11 and earlier** (read only). scrypt derives the key, at
 N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and

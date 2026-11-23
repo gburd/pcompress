@@ -41,6 +41,10 @@
 .Fl i
 .Ar archive
 .Nm
+.Fl y
+.Ar file
+.Op Ar target
+.Nm
 .Fl h | Fl V
 .Sh DESCRIPTION
 .Nm
@@ -111,6 +115,20 @@ is the directory to extract into, created if necessary; it defaults
 to the current directory.
 .It Fl i
 List the members of an archive without extracting them.
+.It Fl y
+Check a
+.Ar file
+written with
+.Fl Y
+against its repair data and rebuild the blocks that are damaged, in
+place
+.Pq through a temporary file renamed over it
+or into
+.Ar target ,
+which must not exist.
+It needs no password.
+It fails, changing nothing, if a file has no repair data or more
+damage than its parity can rebuild.
 .It Fl h
 Print usage and exit.
 .It Fl V
@@ -202,6 +220,21 @@ and cannot be combined with
 .Fl G :
 a globally deduplicated chunk can refer to any chunk before it.
 Readers before 4.5 read such a file as any other and ignore the index.
+.It Fl Y Ar percent
+Append repair data: Reed-Solomon parity of
+.Ar percent
+.Pq 1 to 50
+of the compressed file, from which
+.Fl y
+can rebuild damaged blocks.
+Blocks are 4 KB and interleaved, so at 10 a run of 1 MB of damage is
+repaired wherever it falls; scattered damage is repaired while no
+stripe of 4 KB blocks loses more than its share.
+The file grows by the percent given; compressing takes about 0.4 s
+longer per GB of output.
+The output must be a file, not standard output.
+Readers before 4.5 read such a file as any other and ignore the repair
+data.
 .It Fl r Ar offset : Ns Op Ar length
 With
 .Fl d ,

@@ -100,7 +100,7 @@ run_benchmarks() {
 run_fuzz_smoke() {
 	fuzz_time="${FUZZ_SECONDS:-60}"
 	for target in fuzz_decompress fuzz_compress fuzz_crc fuzz_chunk fuzz_manifest \
-	    fuzz_seek_index; do
+	    fuzz_seek_index fuzz_repair; do
 		# fuzz_chunk, fuzz_manifest and fuzz_seek_index start from the
 		# seeds fuzz-build wrote; new inputs go to a scratch corpus, never
 		# into the seed directory.

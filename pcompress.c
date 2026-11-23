@@ -59,6 +59,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <pc_archive.h>
+#include <repair.h>
 #include <filters/dispack/dis.hpp>
 #include "filters/dict/DictFilter.h"
 
@@ -160,6 +161,7 @@ static void * writer_thread(void *dat);
 static int sx_check(pc_ctx_t *pctx, uchar_t *body, uint64_t len, const uchar_t *end,
     const uchar_t *tag, int decrypt);
 static int sx_taglen(pc_ctx_t *pctx);
+static int rp_check_options(pc_ctx_t *pctx, int nrem, char **rem);
 static int init_algo(pc_ctx_t *pctx, const char *algo, int bail);
 extern uint32_t lzma_crc32(const uint8_t *buf, uint64_t size, uint32_t crc);
 
@@ -197,6 +199,9 @@ usage(pc_ctx_t *pctx)
 "                Sets the number of compression threads. Default: core count.\n"
 "       -T       Disable separate metadata stream.\n"
 "       -X       Append a seek index for -r/-R (implies -T; not with -G).\n"
+"       -Y <percent>\n"
+"                Append repair data (Reed-Solomon parity, 1 to 50%% of the file) so\n"
+"                that 'pcompress -y' can rebuild damaged blocks. Not with '-' output.\n"
 "       -S <chunk checksum>\n"
 "                The chunk verification checksum. Default: BLAKE256. Others are: CRC64, SHA256,\n"
 "                SHA512, KECCAK256, KECCAK512, BLAKE256, BLAKE512.\n"
@@ -235,6 +240,8 @@ usage(pc_ctx_t *pctx)
 "       -m        Enable restoring *all* permissions, ACLs, Extended Attributes etc.\n"
 "                 Equivalent to the '-p' option in tar.\n"
 "       -K        Do not overwrite newer files.\n"
+"       -y        Check a file written with -Y and repair it in place\n"
+"                 (or write the repaired copy to the second name given).\n"
 "       -m and -K are only meaningful if the compressed file is an archive. For single file\n"
 "       compressed mode these options are ignored.\n\n"
 "       <compressed file>\n"
@@ -1656,26 +1663,41 @@ dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 }
 
 /*
- * Version 12, after the end record: the file must end there, or with a
- * seek index (an opaque region whose last 8 bytes are its trailer
- * magic; the index reader authenticates it). Anything else was
- * appended to the file, and is refused rather than ignored. Reads to
- * the end, so it works on a pipe too.
+ * Version 12, after the end record (end): the file must end there, or
+ * with a seek index (an opaque region whose last 8 bytes are its trailer
+ * magic; the index reader authenticates it), or with a repair region
+ * whose header is sealed with this end record and gives the length of
+ * what lies between the two (rp_tail_ok()). Anything else was appended
+ * to the file, and is refused rather than ignored. Reads to the end, so
+ * it works on a pipe too; in a file it seeks to the last bytes.
  */
 static int
-dec_check_tail(int compfd)
+dec_check_tail(pc_ctx_t *pctx, int compfd, const uchar_t *end)
 {
-	uchar_t buf[8192], last[8];
-	uint64_t total = 0;
+	uchar_t buf[8192], last[RP_TRAILER_SZ];
+	const int nl = RP_TRAILER_SZ;
+	uint64_t total = 0, rlen;
+	struct stat sb;
+	off_t pos;
 	int64_t n;
 
+	memset(last, 0, sizeof (last));
+	/* A file: skip to its last bytes rather than read the parity through. */
+	if (fstat(compfd, &sb) == 0 && S_ISREG(sb.st_mode) &&
+	    (pos = lseek(compfd, 0, SEEK_CUR)) != (off_t)-1 && sb.st_size - pos > nl) {
+		total = (uint64_t)(sb.st_size - pos - nl);
+		if (lseek(compfd, (off_t)total, SEEK_CUR) == (off_t)-1) {
+			log_msg(LOG_ERR, 1, "Seek: ");
+			return (-1);
+		}
+	}
 	while ((n = Read(compfd, buf, sizeof (buf))) > 0) {
-		/* Keep the last 8 bytes read, across reads of any size. */
-		if (n >= 8) {
-			memcpy(last, buf + n - 8, 8);
+		/* Keep the last nl bytes read, across reads of any size. */
+		if (n >= nl) {
+			memcpy(last, buf + n - nl, nl);
 		} else {
-			memmove(last, last + n, 8 - n);
-			memcpy(last + 8 - n, buf, n);
+			memmove(last, last + n, nl - n);
+			memcpy(last + nl - n, buf, n);
 		}
 		total += n;
 	}
@@ -1683,7 +1705,10 @@ dec_check_tail(int compfd)
 		log_msg(LOG_ERR, 1, "Read: ");
 		return (-1);
 	}
-	if (total == 0 || (total >= 8 && memcmp(last, PZ_TAIL_MAGIC, 8) == 0))
+	if (total == 0 || (total >= 8 && memcmp(last + nl - 8, PZ_TAIL_MAGIC, 8) == 0))
+		return (0);
+	if (total >= (uint64_t)nl &&
+	    rp_tail_ok(last, total, &pctx->pz_aead, end, &rlen) == 0)
 		return (0);
 	log_error_code(PC_ERR_CORRUPT);
 	log_msg(LOG_ERR, 0, "%" PRIu64 " unexpected bytes after the end record. "
@@ -1717,7 +1742,7 @@ dec_check_end(pc_ctx_t *pctx, int compfd, uint64_t ndata, uint64_t nmeta, int ch
 		    "tampered.", ndata, nmeta, wd, wm);
 		return (-1);
 	}
-	return (dec_check_tail(compfd));
+	return (dec_check_tail(pctx, compfd, end));
 }
 
 /*
@@ -2227,8 +2252,12 @@ sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
 	sx_limits_t lim;
 	struct stat sb;
 
-	if (fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode) ||
-	    (uint64_t)sb.st_size < hdr_end + gap + trl ||
+	/* A repair region comes last; the index ends where it starts. */
+	if (fstat(fd, &sb) != 0)
+		sb.st_mode = 0;
+	else if (S_ISREG(sb.st_mode))
+		sb.st_size = (off_t)rp_logical_size(fd, (uint64_t)sb.st_size);
+	if (!S_ISREG(sb.st_mode) || (uint64_t)sb.st_size < hdr_end + gap + trl ||
 	    sx_pread(fd, sb.st_size - trl, tr, trl) != 0 ||
 	    memcmp(tr + t + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ) != 0) {
 		log_error_code(PC_ERR_FORMAT);
@@ -2817,6 +2846,10 @@ uncomp_done:
 	}
 	if (dary != NULL)
 		dec_free_workers(pctx, dary, nprocs);
+	if (err && !pctx->cancelled && !pctx->pipe_mode && filename != NULL && compfd != -1 &&
+	    rp_present(compfd, (uint64_t)sbuf.st_size))
+		log_msg(LOG_ERR, 0, "%s has repair data: 'pcompress -y %s' may repair it.",
+		    filename, filename);
 	if (!pctx->pipe_mode) {
 		if (filename && compfd != -1) close(compfd);
 		/* stdout or the caller's out_fd (decompress to a stream): not ours. */
@@ -3211,6 +3244,24 @@ sx_write_index(pc_ctx_t *pctx, int compfd, const uchar_t *end)
 	}
 	pc_mfree(body);
 	return (rv);
+}
+
+/*
+ * -Y: append the repair region to the finished file. tpos is where the
+ * trailer ended (after the end record in version 12), so what lies
+ * between it and the region (the seek index) is recorded and sealed.
+ */
+static int
+rp_append(pc_ctx_t *pctx, int compfd, off_t tpos, const uchar_t *end)
+{
+	off_t plen = lseek(compfd, 0, SEEK_CUR);
+
+	if (tpos == (off_t)-1 || plen == (off_t)-1) {
+		log_msg(LOG_ERR, 1, "Cannot add repair data: ");
+		return (-1);
+	}
+	return (rp_write(compfd, (uint64_t)plen, (uint64_t)(plen - tpos), pctx->rp_pct,
+	    pctx->pz_v12 ? &pctx->pz_aead : NULL, pctx->pz_v12 ? end : NULL));
 }
 
 /*
@@ -4081,6 +4132,7 @@ comp_done:
 			log_msg(LOG_ERR, 0, "Error compressing");
 	} else {
 		uchar_t end[PZ_END_LEN];
+		off_t tpos;
 
 		/*
 		* Write a trailer of zero chunk length.
@@ -4103,8 +4155,12 @@ comp_done:
 				err = 1;
 			}
 		}
+		tpos = lseek(compfd, 0, SEEK_CUR);
 		if (!err && pctx->sx_w != NULL &&
 		    sx_write_index(pctx, compfd, pctx->pz_v12 ? end : NULL) != 0)
+			err = 1;
+		/* Last: the parity covers every byte before it, index included. */
+		if (!err && pctx->rp_pct && rp_append(pctx, compfd, tpos, end) != 0)
 			err = 1;
 
 		/*
@@ -4464,6 +4520,11 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 			    "Global Deduplication is not supported with pipe mode.");
 			return (1);
 		}
+		/* The parity is computed by reading the finished file back. */
+		if ((pctx->pipe_mode || pctx->pipe_out) && pctx->rp_pct) {
+			log_msg(LOG_ERR, 0, "Repair data (-Y) needs a file, not a stream.");
+			return (1);
+		}
 
 		if (pctx->filename && stat(pctx->filename, &sbuf) == -1) {
 			log_msg(LOG_ERR, 1, "Cannot stat: %s", pctx->filename);
@@ -4627,6 +4688,39 @@ sx_check_options(pc_ctx_t *pctx)
 		    "stream, and cannot be used with -i.");
 		return (-1);
 	}
+	if (pctx->rp_pct && !pctx->do_compress) {
+		log_msg(LOG_ERR, 0, "-Y (repair data) is only for compression.");
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * -y file [out]: repair mode, on its own. The file must exist; out, if
+ * given, must not. Returns what init_pc_context_impl() does: 0, 1 for a
+ * bad argument, 2 for a usage error.
+ */
+static int
+rp_check_options(pc_ctx_t *pctx, int nrem, char **rem)
+{
+	char *real;
+
+	if (pctx->do_compress || pctx->do_uncompress || pctx->pipe_mode || pctx->rp_pct ||
+	    pctx->sx_write || pctx->sx_mode || nrem < 1 || nrem > 2)
+		return (2);
+	if ((pctx->filename = pc_realpath(rem[0])) == NULL) {
+		log_msg(LOG_ERR, 1, "%s", rem[0]);
+		return (1);
+	}
+	if (nrem == 2) {
+		if ((real = pc_realpath(rem[1])) != NULL) {
+			pc_mfree(real);
+			log_msg(LOG_ERR, 0, "File %s exists", rem[1]);
+			return (1);
+		}
+		pctx->to_filename = rem[1];
+	}
+	pctx->inited = 1;
 	return (0);
 }
 
@@ -4662,7 +4756,7 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 		log_msg(LOG_ERR, 0, "Out of memory");
 		return (1);
 	}
-	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhVXr:R:")) != -1) {
+	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhVXr:R:Y:y")) != -1) {
 		char *oarg = g.arg;
 		int ovr;
 		int64_t chunksize;
@@ -4846,6 +4940,19 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->sx_write = 1;
 			break;
 
+		    case 'Y':
+			pctx->rp_pct = atoi(oarg);
+			if (pctx->rp_pct < 1 || pctx->rp_pct > RP_PCT_MAX) {
+				log_msg(LOG_ERR, 0, "Repair data (-Y) must be 1 to %d percent.",
+				    RP_PCT_MAX);
+				{ err = 1; goto opt_done; }
+			}
+			break;
+
+		    case 'y':
+			pctx->do_repair = 1;
+			break;
+
 		    case 'r':
 		    case 'R':
 			/* One range or member per job: a second one would replace the first. */
@@ -4888,6 +4995,8 @@ opt_done:
 	if (err)
 		return (err);
 
+	if (pctx->do_repair)
+		return (rp_check_options(pctx, argc - my_optind, argv + my_optind));
 	if ((pctx->do_compress && pctx->do_uncompress) || (!pctx->do_compress && !pctx->do_uncompress)) {
 		return (2);
 	}
@@ -5130,7 +5239,14 @@ start_pcompress(pc_ctx_t *pctx)
 		return (1);
 
 	err = 0;
-	if (pctx->do_compress)
+	if (pctx->do_repair) {
+		log_state_t *prev = log_bound();
+
+		log_reset(&pctx->log);
+		log_bind(&pctx->log);
+		err = rp_repair(pctx->filename, pctx->to_filename) == 0 ? 0 : 1;
+		log_bind(prev);
+	} else if (pctx->do_compress)
 		err = start_compress(pctx, pctx->filename, pctx->chunksize, pctx->level);
 	else if (pctx->do_uncompress)
 		err = start_decompress(pctx, pctx->filename, pctx->to_filename);

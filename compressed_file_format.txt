@@ -121,7 +121,8 @@ Format version 12 only, the end record:
 16 Bytes - AEAD tag (stream 3, ordinal 0) with the two counts as associated
           data. Readers check it, so chunks cut off the end are detected.
 Then either the end of the file, or a seek index, whose last 8 bytes are
-"PCSEEK01"; readers refuse any other bytes after the end record.
+"PCSEEK01", or repair data, or a seek index and then repair data;
+readers refuse any other bytes after the end record.
 
 ===========================================
 Seek Index (optional, -X, written by 4.5 and later)
@@ -136,3 +137,18 @@ X Bytes - Tag: the chunk checksum of the body, or (version 12) its 16-byte
           as associated data
 8 Bytes - Body length, little-endian
 8 Bytes - "PCSEEK01"
+
+===========================================
+Repair Data (optional, -Y, written by 4.5 and later)
+===========================================
+Last in the file, after the trailer (version 12: the end record) and
+any seek index. Covers every byte before it. Readers stop at the
+trailer, so older readers ignore it. See DESIGN.md, "Repair data".
+80 Bytes - Header: "PCRPAIR1", block size, k, m, G, flags, protected
+          length, seek index length, region length, BLAKE2b-128 of
+          the fields, AEAD tag (version 12, stream 5, ordinal 0) or zero
+X Bytes - CRC-32 of each data block, then of each parity block
+X Bytes - Parity blocks
+X Bytes - The CRC-32 table again
+80 Bytes - The header again
+8 Bytes - "PCREPR01"

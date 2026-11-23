@@ -36,11 +36,11 @@ MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	utils/cpu_features.c utils/cpu_features_x86_64.c \
 	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
 	filters/analyzer/analyzer.c \
-	meta_stream.c pcompress.c chunk.c manifest.c pz_crypt.c utils/pc_cache.c seek_index.c @PLATFORM_SRCS@
+	meta_stream.c pcompress.c chunk.c manifest.c pz_crypt.c utils/pc_cache.c seek_index.c repair.c @PLATFORM_SRCS@
 MAINHDRS = include/pcompress/pcompress.h allocator.h utils/pc_alloc.h utils/pc_cache.h pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
 	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
 	filters/dispack/dis.hpp \
-	meta_stream.h pz_crypt.h seek_index.h filters/analyzer/analyzer.h
+	meta_stream.h pz_crypt.h seek_index.h repair.h filters/analyzer/analyzer.h
 MAINOBJS = $(MAINSRCS:.c=.o)
 
 PROGSRCS = main.c
@@ -601,7 +601,7 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit -I./filters/dict
-UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_blake3 test_sha2 test_api test_filters test_crypto test_algos test_reentrant test_seek_index
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_blake3 test_sha2 test_api test_filters test_crypto test_algos test_reentrant test_seek_index test_repair
 # Tests link the objects directly: the shared library hides internal symbols.
 # LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 
@@ -717,6 +717,8 @@ fuzz-build: $(LIB)
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_seek_index \
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_seek_index.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_repair \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_repair.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		for t in fuzz_chunk fuzz_manifest; do \
 			clang -fsanitize=fuzzer,address -g -Iinclude -o buildtmp/$$t test/fuzz/$$t.c \
 				-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ || exit 1; \
@@ -736,6 +738,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_compress -max_total_time=60"
 	@echo "  buildtmp/fuzz_crc -max_total_time=60"
 	@echo "  buildtmp/fuzz_seek_index -max_total_time=60 corpus/ buildtmp/fuzz-seeds/seek_index"
+	@echo "  buildtmp/fuzz_repair -max_total_time=60 corpus/"
 	@echo "  buildtmp/fuzz_chunk -max_total_time=60 corpus/ buildtmp/fuzz-seeds/chunk"
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
@@ -744,6 +747,7 @@ topclean:
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress buildtmp/fuzz_seek_index
+	$(RM) buildtmp/fuzz_repair
 	$(RM) buildtmp/fuzz_chunk buildtmp/fuzz_manifest buildtmp/fuzz_seeds
 	$(RM_RF) buildtmp/fuzz-seeds
 	$(RM) test.log

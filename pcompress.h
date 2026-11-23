@@ -470,6 +470,10 @@ struct pc_ctx {
 	sx_index_t sx_idx;	/* parsed index; sx_body owns its bytes */
 	unsigned char *sx_body;
 	uint64_t sx_first, sx_last;	/* chunks that hold the range */
+
+	/* Repair data (repair.c). */
+	int rp_pct;		/* -Y: parity percent; 0 none */
+	int do_repair;		/* -y: check and repair a file */
 };
 #define	SX_MODE_RANGE	1
 #define	SX_MODE_MEMBER	2

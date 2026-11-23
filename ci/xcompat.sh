@@ -62,10 +62,12 @@ for dir in new-old old-new; do
 	one "$w" "$r" "$dir lzma -G" -c lzma -l6 -s 2m -G
 	one "$w" "$r" "$dir zstd AES" -c zstd -l6 -s 1m -e AES
 	one "$w" "$r" "$dir zstd SALSA20" -c zstd -l6 -s 1m -e SALSA20
-	# A seek index (4.5 on): older readers stop before it.
+	# A seek index and repair data (4.5 on): older readers stop before them.
 	if [ "$w" = "$NEW" ]; then
 		one "$w" "$r" "$dir zstd -X" -c zstd -l6 -s 256k -X
 		one "$w" "$r" "$dir zstd -X AES" -c zstd -l6 -s 256k -X -e AES
+		one "$w" "$r" "$dir zstd -Y" -c zstd -l6 -s 256k -Y 10
+		one "$w" "$r" "$dir zstd -X -Y" -c zstd -l6 -s 256k -X -Y 10
 	fi
 
 	# Pipe mode.

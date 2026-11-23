@@ -1,4 +1,15 @@
 == Unreleased ==
+New: repair data. -Y <percent> appends Reed-Solomon parity (GF(2^8),
+  Cauchy, 4 KB blocks interleaved 64 stripes deep) after everything
+  else in the file, and "pcompress -y file.pz [out.pz]" rebuilds
+  damaged blocks from it, found by a CRC-32 per block, without the
+  password. At -Y 10 a run of 1 MB of damage is repaired anywhere.
+  A 1.3 GB tar of /usr/lib (zstd -l6, 424 MB) grows by the percent
+  given plus 0.2%, and takes 0.4 to 0.5 s longer to compress, at any
+  percent (c7i.4xlarge). 4.4 reads unencrypted -Y files and ignores the
+  region; in version 12 files the region header is sealed as AEAD
+  stream 5 with the end record, and the reader accepts it after the
+  end record and any seek index, and nothing else.
 Change: a version 12 file with bytes after its end record is refused
   as corrupt, unless they end in the seek index trailer "PCSEEK01".
 Security: the version 12 file key is wiped when each job returns, not
