@@ -62,6 +62,7 @@
 #include <crypto_xsalsa20.h>
 
 #include "crypto_utils.h"
+#include "monocypher/monocypher.h"
 #include "sha2_utils.h"
 #include "sha3_utils.h"
 
@@ -1104,8 +1105,8 @@ get_pw_string(uchar_t pw[PC_PW_MAX + 1], const char *prompt, int twice)
 	memcpy(pw, pw1, len);	/* len - 1 bytes and the NUL */
 	rv = len - 1;
 out:
-	memset(pw1, 0, sz);
-	memset(pw2, 0, sz);
+	pcmono_wipe(pw1, sz);
+	pcmono_wipe(pw2, sz);
 	pc_mfree(pw1);
 	pc_mfree(pw2);
 	if (input != stdin)

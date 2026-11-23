@@ -490,7 +490,15 @@ version 10 and earlier. Chunks are encrypted in place with AES-CTR or
 XSalsa20, using the chunk number in the nonce, and authenticated with
 HMAC over the header and ciphertext, checked before decryption. These
 files have the weaknesses above, which is why new files are version 12.
-Passwords and key material are zeroed after use.
+
+Passwords and key material are zeroed after use, with pcmono_wipe()
+(Monocypher's volatile store, which the compiler cannot drop as a dead
+store): password buffers once the key is derived, the version 12 file
+key when the job returns (compress or decompress, the end record
+written or checked), and the chunk-object subkeys after each call.
+Decrypted chunk buffers are not wiped before they are freed: on enwik8
+(8 MB chunks, 16 threads, x86-64) that cost 45 ms on a 385 ms
+decompression, 11%.
 
 ## Portability
 

@@ -124,6 +124,36 @@ MU_TEST(test_api_userpw)
 	mu_assert(same_files(src, out), "AES round trip via pc_set_userpw");
 }
 
+/* No job leaves its file key in the context once it returns. */
+MU_TEST(test_api_key_wiped)
+{
+	static const uchar_t zero[sizeof (((pc_ctx_t *)0)->pz_aead.key)];
+	unsigned char pw[] = "key hygiene";
+	char args[1024];
+	pc_ctx_t *p;
+	int d;
+
+	for (d = 0; d < 2; d++) {
+		if (d == 0) {
+			reset_files();
+			snprintf(args, sizeof (args), "pcompress -c zstd -l 3 -e SALSA20 %s %s",
+			    src, cmp_);
+		} else {
+			unlink(out);
+			snprintf(args, sizeof (args), "pcompress -d %s %s", cmp_, out);
+		}
+		memcpy(pw, "key hygiene", sizeof (pw));
+		p = create_pc_context();
+		mu_assert_int_eq(0, init_pc_context_argstr(p, args));
+		pc_set_userpw(p, pw, (int)strlen((char *)pw));
+		mu_assert_int_eq(0, start_pcompress(p));
+		mu_assert(p->pz_aead.alg == 0 && memcmp(p->pz_aead.key, zero, sizeof (zero)) == 0,
+		    d ? "file key left after decompress" : "file key left after compress");
+		destroy_pc_context(p);
+	}
+	mu_assert(same_files(src, out), "SALSA20 round trip");
+}
+
 MU_TEST(test_api_return_codes)
 {
 	char args[1024];
@@ -288,6 +318,7 @@ MU_TEST_SUITE(suite_api)
 	MU_RUN_TEST(test_api_option_forms);
 	MU_RUN_TEST(test_api_roundtrip_algos);
 	MU_RUN_TEST(test_api_userpw);
+	MU_RUN_TEST(test_api_key_wiped);
 	MU_RUN_TEST(test_api_return_codes);
 	MU_RUN_TEST(test_api_log_callback);
 	MU_RUN_TEST(test_api_error_codes);

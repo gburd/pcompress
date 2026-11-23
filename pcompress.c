@@ -53,6 +53,7 @@
 #include <crypto/crypto_utils.h>
 #include <crypto/ossl_compat.h>
 #include <crypto_xsalsa20.h>
+#include <monocypher/monocypher.h>
 #include <ctype.h>
 #include <errno.h>
 #include <pc_archive.h>
@@ -1615,7 +1616,7 @@ dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 	if ((len = dec_get_pw(pctx, pw, &upw, NULL)) == -1)
 		return (-1);
 	rv = pc_pz_key_open(&pctx->pz_aead, h->flags & MASK_CRYPTO_ALG, upw, len, pctx->pz_hdr);
-	memset(upw, 0, len);
+	pcmono_wipe(upw, len);
 	if (upw == pctx->user_pw) {
 		pctx->user_pw = NULL;
 		pctx->user_pw_len = 0;
@@ -1705,7 +1706,7 @@ dec_crypto(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 	    h->version < VERSION_KDF) ? 2 : 1;
 	for (t = 0; t < tries && ok == 0; t++)
 		ok = dec_try_key(pctx, h, &c, upw, t == 0 ? upw_len : legacy);
-	memset(upw, 0, upw_len);
+	pcmono_wipe(upw, upw_len);
 	if (ok >= 0 && upw == pctx->user_pw) {
 		pctx->user_pw = NULL;
 		pctx->user_pw_len = 0;
@@ -2946,13 +2947,13 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		if (pctx->user_pw) {
 			rv = pc_pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pctx->user_pw,
 			    pctx->user_pw_len, pctx->pz_hdr);
-			memset(pctx->user_pw, 0, pctx->user_pw_len);
+			pcmono_wipe(pctx->user_pw, pctx->user_pw_len);
 			pctx->user_pw = NULL;
 			pctx->user_pw_len = 0;
 		} else {
 			rv = pc_pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pw, pw_len,
 			    pctx->pz_hdr);
-			memset(pw, 0, sizeof (pw));
+			pcmono_wipe(pw, sizeof (pw));
 		}
 		if (rv != 0) {
 			log_error_code(PC_ERR_CRYPTO);
@@ -3855,10 +3856,10 @@ destroy_pc_context(pc_ctx_t *pctx)
 	pc_mfree((void *)(pctx->exec_name));
 	free_filters(pctx);
 	if (pctx->pw_copy != NULL) {
-		memset(pctx->pw_copy, 0, pctx->pw_copy_len);
+		pcmono_wipe(pctx->pw_copy, pctx->pw_copy_len);
 		pc_mfree(pctx->pw_copy);
 	}
-	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
+	pcmono_wipe(pctx->chunk_key, sizeof (pctx->chunk_key));
 	pc_pz_key_wipe(&pctx->pz_aead);
 	chunk_codecs_free(pctx);
 	pc_mfree(pctx);
@@ -4581,6 +4582,8 @@ start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	log_reset(&pctx->log);
 	log_bind(&pctx->log);
 	rv = start_decompress_impl(pctx, filename, to_filename);
+	/* Every thread that used the file key is joined by now. */
+	pc_pz_key_wipe(&pctx->pz_aead);
 	log_bind(prev);
 	finish_error(pctx, rv, PC_ERR_INTERNAL);
 	return (rv);
@@ -4595,6 +4598,7 @@ start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int lev
 	log_reset(&pctx->log);
 	log_bind(&pctx->log);
 	rv = start_compress_impl(pctx, filename, chunksize, level);
+	pc_pz_key_wipe(&pctx->pz_aead);
 	log_bind(prev);
 	finish_error(pctx, rv, PC_ERR_INTERNAL);
 	return (rv);
@@ -4775,7 +4779,7 @@ int DLL_EXPORT
 pc_set_password(pc_ctx_t *ctx, const void *pw, size_t len)
 {
 	if (ctx->pw_copy != NULL) {
-		memset(ctx->pw_copy, 0, ctx->pw_copy_len);
+		pcmono_wipe(ctx->pw_copy, ctx->pw_copy_len);
 		pc_mfree(ctx->pw_copy);
 		ctx->pw_copy = NULL;
 	}
@@ -4870,11 +4874,12 @@ run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
 				pc_set_userpw(j, pw, (int)ctx->pw_copy_len);
 			}
 		}
+		/* destroy_pc_context() below wipes the job's file key. */
 		if (rv == 0)
 			rv = compress ? start_compress_impl(j, NULL, j->chunksize, j->level) :
 			    start_decompress_impl(j, NULL, NULL);
 		if (pw != NULL) {
-			memset(pw, 0, ctx->pw_copy_len);
+			pcmono_wipe(pw, ctx->pw_copy_len);
 			pc_mfree(pw);
 		}
 	}

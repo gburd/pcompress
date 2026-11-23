@@ -26,6 +26,7 @@
 #include <rabin_dedup.h>
 #include <crypto_scrypt.h>
 #include <aead.h>
+#include <monocypher/monocypher.h>
 #include <blake3.h>
 
 /* --- Content-defined chunker ------------------------------------------- */
@@ -308,7 +309,7 @@ pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32])
 	    (const uchar_t *)purpose, plen);
 	if (rv == 0)
 		memcpy(out, k, 32);
-	memset(k, 0, sizeof (k));
+	pcmono_wipe(k, sizeof (k));
 	return (rv);
 }
 
@@ -428,7 +429,7 @@ subkeys(pc_ctx_t *ctx, uchar_t enc[32], uchar_t mac[32])
 		return (-1);
 	memcpy(enc, k, 32);
 	memcpy(mac, k + 32, 32);
-	memset(k, 0, sizeof (k));
+	pcmono_wipe(k, sizeof (k));
 	return (0);
 }
 
@@ -442,7 +443,7 @@ aead_subkey(pc_ctx_t *ctx, uchar_t k[32])
 	if (blake2b_keyed2(w, 64, ctx->chunk_key, 32, d, sizeof (d) - 1, NULL, 0) != 0)
 		return (-1);
 	memcpy(k, w, 32);
-	memset(w, 0, sizeof (w));
+	pcmono_wipe(w, sizeof (w));
 	return (0);
 }
 
@@ -986,7 +987,7 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 	}
 	rv = 0;
 out:
-	memset(enc, 0, sizeof (enc));
+	pcmono_wipe(enc, sizeof (enc));
 	if (rv != 0)
 		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_chunk_seal: crypto failure"));
 	return (0);
@@ -1112,8 +1113,8 @@ open_keyed(pc_ctx_t *ctx, const uchar_t *p, size_t hdr, uint64_t clen, uchar_t *
 	    xsalsa20_xor(buf, p + hdr, clen, p + 16, enc) == 0) {
 		rv = 0;
 	}
-	memset(enc, 0, sizeof (enc));
-	memset(mac, 0, sizeof (mac));
+	pcmono_wipe(enc, sizeof (enc));
+	pcmono_wipe(mac, sizeof (mac));
 	return (rv);
 }
 
@@ -1179,7 +1180,7 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	rv = 0;
 out:
 	if (buf != NULL) {
-		memset(buf, 0, clen);
+		pcmono_wipe(buf, clen);
 		pc_mfree(buf);
 	}
 	if (rv != 0)
@@ -1190,7 +1191,7 @@ out:
 int DLL_EXPORT
 pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen)
 {
-	memset(ctx->chunk_key, 0, sizeof (ctx->chunk_key));
+	pcmono_wipe(ctx->chunk_key, sizeof (ctx->chunk_key));
 	ctx->chunk_key_set = 0;
 	if (key == NULL && keylen == 0)
 		return (0);
@@ -1304,7 +1305,7 @@ pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out)
 		goto out;
 	rv = 0;
 out:
-	memset(dk, 0, sizeof (dk));
+	pcmono_wipe(dk, sizeof (dk));
 	if (rv != 0) {
 		memset(o, 0, PCK_KF_SIZE);
 		memset(key, 0, 32);
@@ -1331,7 +1332,7 @@ pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, uint8_
 		goto out;
 	rv = 0;
 out:
-	memset(dk, 0, sizeof (dk));
+	pcmono_wipe(dk, sizeof (dk));
 	if (rv != 0)
 		memset(key, 0, 32);
 	return (rv);
