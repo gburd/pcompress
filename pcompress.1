@@ -185,6 +185,53 @@ WAV audio if built in
 .Pq archive mode only .
 .It Fl T
 Do not store archive metadata in a separate stream.
+.It Fl X
+Append a seek index to the compressed file, so that
+.Fl r
+and
+.Fl R
+can later read part of it without decompressing what comes before.
+It costs about 0.5% in size on an archive of /usr/lib and nothing
+measurable in time.
+It turns off the separate metadata stream
+.Pq as Fl T
+and the global deduplication otherwise chosen at levels above 3,
+and cannot be combined with
+.Fl G :
+a globally deduplicated chunk can refer to any chunk before it.
+Readers before 4.5 read such a file as any other and ignore the index.
+.It Fl r Ar offset : Ns Op Ar length
+With
+.Fl d ,
+write only
+.Ar length
+bytes
+.Pq to the end if omitted
+starting at byte
+.Ar offset
+of a compressed single file.
+Both take the
+.Fl s
+suffixes.
+.It Fl R Ar member
+With
+.Fl d ,
+extract only
+.Ar member ,
+a path as
+.Fl i
+lists it, from an archive.
+.Pp
+.Fl r
+and
+.Fl R
+need a file written with
+.Fl X ,
+read from a file, not standard input.
+They read the index, check its tag (the file's checksum, or its HMAC
+when encrypted) and decode only the chunks that hold the range; each of
+those must match the index's record of it.
+A file without an index is refused, not decoded in full.
 .It Fl n
 Do not sort archive members by type before archiving.
 .It Fl v

@@ -96,3 +96,13 @@ File Trailer
 8 Bytes - Zero bytes indicating zero compressed length
           and end of file.
 
+===========================================
+Seek Index (optional, -X, written by 4.5 and later)
+===========================================
+Follows the file trailer. Readers stop at the trailer, so older
+readers ignore it. See DESIGN.md for the body and its checks.
+X Bytes - Index body (encrypted with the file's cipher when encrypting)
+X Bytes - Tag: the chunk checksum of the body, or its HMAC when
+          encrypting (checksum or HMAC size)
+8 Bytes - Body length, little-endian
+8 Bytes - "PCSEEK01"

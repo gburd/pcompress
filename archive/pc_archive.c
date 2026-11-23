@@ -253,7 +253,7 @@ creat_write_callback(struct archive *arc, void *ctx, const void *buf, size_t len
 			break;
 		}
 	}
-
+	pctx->arc_spos += len - remaining;	/* only this thread writes it */
 	return (len - remaining);
 }
 
@@ -1092,11 +1092,20 @@ process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
 	return (wrtn);
 }
 
+/*
+ * Write an entry's header. With a seek index (-X), first record where
+ * the entry starts in the PAX stream: after finishing the previous entry,
+ * whose padding archive_write_header() would otherwise write first.
+ */
 static int
-write_header(struct archive *arc, struct archive_entry *entry)
+write_header(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry)
 {
 	int rv;
 
+	if (pctx->sx_w != NULL) {
+		(void) archive_write_finish_entry(arc);
+		sx_add_member(pctx->sx_w, archive_entry_pathname(entry), pctx->arc_spos);
+	}
 	rv = archive_write_header(arc, entry);
 	if (rv != ARCHIVE_OK) {
 		if (rv == ARCHIVE_FATAL || rv == ARCHIVE_FAILED) {
@@ -1153,7 +1162,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 				if (fout.output_type == FILTER_OUTPUT_MEM) {
 					archive_entry_xattr_add_entry(entry, FILTER_XATTR_ENTRY,
 								      fname, strlen(fname));
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1178,12 +1187,12 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 					return (ARCHIVE_FATAL);
 				}
 			}
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
 		} else {
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
@@ -1232,7 +1241,7 @@ do_map:
 							archive_entry_xattr_add_entry(entry,
 										      FILTER_XATTR_ENTRY,
 										      fname, strlen(fname));
-							if (write_header(arc, entry) == -1) {
+							if (write_header(pctx, arc, entry) == -1) {
 								close(fd);
 								return (-1);
 							}
@@ -1257,7 +1266,7 @@ do_map:
 							return (ARCHIVE_FATAL);
 						}
 					}
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1266,13 +1275,13 @@ do_map:
 					offset = 0;
 					goto do_map;
 				} else {
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
 				}
 			} else {
-				if (write_header(arc, entry) == -1) {
+				if (write_header(pctx, arc, entry) == -1) {
 					close(fd);
 					return (-1);
 				}
@@ -1311,7 +1320,7 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
 	if (archive_entry_size(entry) > 0) {
 		return (copy_file_data(pctx, arc, entry, typ));
 	} else {
-		if (write_header(arc, entry) == -1)
+		if (write_header(pctx, arc, entry) == -1)
 			return (-1);
 	}
 
@@ -1522,6 +1531,11 @@ archiver_thread_run(pc_ctx_t *pctx) {
 	}
 
 done:
+	if (pctx->sx_w != NULL) {
+		/* The last member ends before the end-of-archive blocks. */
+		(void) archive_write_finish_entry(arc);
+		sx_end_member(pctx->sx_w, pctx->arc_spos);
+	}
 	if (pctx->temp_mmap_len > 0)
 		munmap(pctx->temp_mmap_buf, pctx->temp_mmap_len);
 	archive_entry_free(entry);
