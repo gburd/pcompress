@@ -296,7 +296,8 @@ packJPG by Matthias Stirner, 12/2013
 // #define QUN_V(v,cm,bp)	( ( QUANT(cm,bp) > 0 ) ? ( ( v > 0 ) ? ( v + (QUANT(cm,bp)/2) ) /  QUANT(cm,bp) : ( v - (QUANT(cm,bp)/2) ) /  QUANT(cm,bp) ) : 0 )
 
 #define ENVLI(s,v)		( ( v > 0 ) ? v : ( v - 1 ) + ( 1 << s ) )
-#define DEVLI(s,n)		( ( n >= ( 1 << (s - 1) ) ) ? n : n + 1 - ( 1 << s ) )
+// s == 0: a zero-length value, which is 0 (n is 0); no shift by -1.
+#define DEVLI(s,n)		( ( (s) == 0 || n >= ( 1 << (s - 1) ) ) ? n : n + 1 - ( 1 << s ) )
 #define E_ENVLI(s,v)	( v - ( 1 << s ) )
 #define E_DEVLI(s,n)	( n + ( 1 << s ) )
 

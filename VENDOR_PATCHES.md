@@ -289,6 +289,20 @@ is not needed.
 
 ---
 
+## Vendored: packJPG (filters/packjpg/)
+
+packJPG 2.5i is vendored with pcompress's stream interface.  One fix
+to the original code:
+
+- `DEVLI(s, n)` decodes a JPEG coefficient of size category `s`.  For
+  `s == 0` it shifted by -1, which is undefined (UBSan: "shift exponent
+  -1 is negative" in `jpg_decode_block_seq()`).  Category 0 is a
+  zero-length value, so `n` is 0 and the macro now returns it without
+  the shift.  That is what x86-64 and ARM64 computed before, so output
+  is unchanged.
+
+---
+
 ## Initializing Submodules
 
 After cloning the repository, initialize submodules:
