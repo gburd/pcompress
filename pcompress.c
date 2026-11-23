@@ -1668,7 +1668,7 @@ dec_archive_setup(pc_ctx_t *pctx, int compfd, int compfd2, const char *to_filena
 		/*
 		 * Finally create the metadata context.
 		 */
-		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2);
+		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2, chunksize);
 		if (pctx->meta_ctx == NULL)
 			return (-1);	/* compfd2 is closed by the caller */
 	}
@@ -1885,6 +1885,13 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 			if (dec_read_len(pctx, compfd, &tdat->len_cmp_be) != 0)
 				return (-1);
 			tdat->len_cmp_be = LE64(tdat->len_cmp_be);
+			/* Untrusted, and the seek below must go forward. */
+			if (tdat->len_cmp_be > METADATA_CHUNK_SIZE) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk length too big "
+				    "after chunk %d. File corrupt ?", pctx->chunk_num);
+				return (-1);
+			}
 		}
 
 		if (!tdat->compressed_chunk && !is_meta) {
@@ -3436,7 +3443,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	 * metadata chunks.
 	 */
 	if (pctx->meta_stream) {
-		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd);
+		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd, chunksize);
 		if (pctx->meta_ctx == NULL) {
 			COMP_BAIL;
 		}

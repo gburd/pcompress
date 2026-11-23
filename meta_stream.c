@@ -41,8 +41,6 @@
 #include "allocator.h"
 #include "meta_stream.h"
 
-#define	METADATA_CHUNK_SIZE	(3 * 1024 * 1024)
-
 extern int bzip2_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
                int level, uchar_t chdr, int btype, void *data);
 extern int bzip2_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
@@ -64,6 +62,7 @@ struct _meta_ctx {
 	void *bzip2_dat;
 	int comp_level, id;
 	int comp_fd;
+	uint64_t chunksize;	/* decompress: largest data chunk */
 	int running;
 	int delta2_nstrides;
 	int do_compress;
@@ -432,6 +431,17 @@ metadata_decompress(void *dat)
 						Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
 						return (NULL);
 					}
+					/* As the main reader bounds it: no wrap below. */
+					if (len_cmp > mctx->chunksize + 256) {
+						log_error_code(PC_ERR_CORRUPT);
+						log_msg(LOG_ERR, 0, "Data chunk length too big "
+						    "before metadata chunk %d. File corrupt ?",
+						    mctx->id);
+						ack = 0;
+						Write(mctx->meta_pipes[SINK_CHANNEL], &ack,
+						    sizeof (ack));
+						return (NULL);
+					}
 					skiplen = len_cmp + pctx->cksum_bytes + pctx->mac_bytes
 					    + CHUNK_FLAG_SZ;
 					int64_t cpos = lseek(mctx->comp_fd, skiplen, SEEK_CUR);
@@ -539,7 +549,7 @@ meta_ctx_free(meta_ctx_t *mctx)
 }
 
 meta_ctx_t *
-meta_ctx_create(void *pc, int file_version, int comp_fd)
+meta_ctx_create(void *pc, int file_version, int comp_fd, uint64_t chunksize)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)pc;
 	meta_ctx_t *mctx;
@@ -565,6 +575,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 
 	mctx->comp_fd = comp_fd;
+	mctx->chunksize = chunksize;
 	mctx->frombuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	mctx->tobuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	if (!mctx->frombuf || !mctx->tobuf) {

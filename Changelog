@@ -34,7 +34,10 @@ Performance: compressing or decompressing a regular file no longer
 Fix: a metadata chunk (archive mode) whose stored length exceeded the
   3 MB metadata buffer overflowed the heap while it was read, before any
   check (found with ASan); its original length was not bounded either.
-  Both are refused now as corrupt.
+  Both are refused now as corrupt.  So are lengths that wrapped the
+  seek past a chunk back onto itself, where extraction looped for good:
+  a metadata chunk's length as the main reader skips it, and a data
+  chunk's length as the metadata thread skips it.
 CLI: -X appends a seek index to a .pz file, and -d -r offset:length
   (single file) and -d -R member (archive) then decode only the chunks
   they need. On a c7i.4xlarge, one 20 KB member at the end of a 1.3 GB
