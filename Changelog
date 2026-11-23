@@ -31,6 +31,10 @@ Performance: compressing or decompressing a regular file no longer
   28 GB to the page cache and leave 0 to 10 MB of a 1.9 GB file that was
   cached before; now it adds 70 MB and that file stays cached. Time is
   unchanged (288 s each way, bound by the gp3 volume).
+Fix: a metadata chunk (archive mode) whose stored length exceeded the
+  3 MB metadata buffer overflowed the heap while it was read, before any
+  check (found with ASan); its original length was not bounded either.
+  Both are refused now as corrupt.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.

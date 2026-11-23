@@ -177,6 +177,36 @@ else
 	log_fail "archive create"
 fi
 
+# Metadata chunks with lengths past the 3 MB metadata buffer: a stored
+# length (read into the buffer before any check: a heap overflow) and an
+# original length under a CRC32 recomputed to match, as anyone can.
+if command -v python3 >/dev/null 2>&1 &&
+    $PCOMPRESS -a -c lz4 -s 64k "$T/tree" "$T/meta" >/dev/null 2>&1; then
+	python3 - "$T/meta.pz" "$T/mlen.pz" "$T/morig.pz" <<'PYEOF'
+import struct, sys, zlib
+d = open(sys.argv[1], "rb").read()
+pos = 28				# header and its CRC32
+while True:
+    n = struct.unpack(">Q", d[pos:pos + 8])[0]
+    if n == 1:
+        break
+    pos += 8 + n + 32 + 4 + 1		# length, BLAKE256, CRC32, flags, data
+a = bytearray(d)
+a[pos + 8:pos + 16] = struct.pack("<Q", 8 << 20)
+open(sys.argv[2], "wb").write(a + bytes(16 << 20))
+b = bytearray(d)
+b[pos + 16:pos + 24] = struct.pack("<Q", 64 << 20)
+b[pos + 89:pos + 93] = bytes(4)
+b[pos + 89:pos + 93] = struct.pack("<I", zlib.crc32(bytes(b[pos:pos + 93])))
+open(sys.argv[3], "wb").write(b)
+PYEOF
+	mkdir -p "$T/xm1" "$T/xm2"
+	expect 1 "metadata chunk length past its buffer" -d "$T/mlen.pz" "$T/xm1"
+	expect 1 "metadata original length past its buffer" -d "$T/morig.pz" "$T/xm2"
+else
+	SKIP=$((SKIP + 1)); echo "  SKIP: metadata chunk lengths (no python3)"
+fi
+
 # A hand-made archive with an absolute path and a "../" entry must extract
 # only inside the target directory, also for a relative target with "..".
 CRAFT="$(cd "$(dirname "$0")/.." && pwd)/tools/craft_hostile_archive.py"

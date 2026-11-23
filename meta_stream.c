@@ -297,6 +297,13 @@ decompress_data(meta_ctx_t *mctx)
 	type = *(cbuf + 24);
 	cseg = cbuf + METADATA_HDR_SZ;
 	dstlen = origlen;
+	/* A CRC can be recomputed: bound what sizes the output buffer. */
+	if (origlen > METADATA_CHUNK_SIZE) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Metadata chunk %d, invalid length. File corrupt ?",
+		    mctx->id);
+		return (0);
+	}
 
 	/*
 	 * If this was encrypted:
@@ -469,6 +476,15 @@ metadata_decompress(void *dat)
 			U64_P(frombuf) = len_cmp;
 			frombuf += 8;
 			len_cmp = LE64(len_cmp);
+			/* Untrusted: read before the CRC/HMAC is checked. */
+			if (len_cmp > METADATA_CHUNK_SIZE) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk %d, invalid length. "
+				    "File corrupt ?", mctx->id);
+				ack = 0;
+				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+				return (NULL);
+			}
 
 			/*
 			 * Now read the rest of the chunk. This is rest of the header plus the
