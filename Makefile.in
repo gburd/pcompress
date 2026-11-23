@@ -36,8 +36,8 @@ MAINSRCS = utils/utils.c allocator.c lzma_compress.c ppmd_compress.c \
 	utils/cpu_features.c utils/cpu_features_x86_64.c \
 	utils/cpu_features_arm64.c utils/cpu_features_riscv.c \
 	filters/analyzer/analyzer.c \
-	meta_stream.c pcompress.c chunk.c manifest.c @PLATFORM_SRCS@
-MAINHDRS = include/pcompress/pcompress.h allocator.h utils/pc_alloc.h pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
+	meta_stream.c pcompress.c chunk.c manifest.c utils/pc_cache.c @PLATFORM_SRCS@
+MAINHDRS = include/pcompress/pcompress.h allocator.h utils/pc_alloc.h utils/pc_cache.h pcompress.h  utils/utils.h utils/xxhash.h utils/heap.h \
 	utils/cpuid.h utils/cpu_features.h utils/xxhash.h archive/pc_archive.h \
 	filters/dispack/dis.hpp \
 	meta_stream.h filters/analyzer/analyzer.h

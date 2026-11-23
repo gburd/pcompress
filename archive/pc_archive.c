@@ -57,6 +57,7 @@
 #include <phash/standard.h>
 #include "archive/pc_archive.h"
 #include "meta_stream.h"
+#include "utils/pc_cache.h"
 
 #include <ftw.h>
 #include <locale.h>
@@ -1135,6 +1136,9 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 		log_msg(LOG_ERR, 1, "Failed to open %s.", fpath);
 		return (-1);
 	}
+#ifdef POSIX_FADV_SEQUENTIAL
+	(void) posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 
 	if (typ != TYPE_UNKNOWN) {
 		if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
@@ -1289,6 +1293,8 @@ do_map:
 		bytes_to_write -= wrtn;
 		if (rv == -1) break;
 		munmap(mapbuf, len);
+		/* Each member is read once: its pages need not stay cached. */
+		pc_cache_drop(fd, offset - len, len);
 	}
 	close(fd);
 

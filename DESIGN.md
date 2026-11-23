@@ -360,6 +360,25 @@ number in the nonce, and authenticated with HMAC over the header and
 ciphertext. The HMAC is checked before decryption. Passwords and key
 material are zeroed after use.
 
+## Page cache
+
+A file pcompress reads or writes is used once, front to back, and
+would otherwise fill the page cache and push out what the rest of the
+machine had cached (`utils/pc_cache.c`). For regular files only (never
+pipes): the input is opened with `POSIX_FADV_SEQUENTIAL`, and every
+32 MB consumed is dropped with `POSIX_FADV_DONTNEED`; an archive member
+is dropped one 1 MB map at a time as it is copied. Output pages are
+dirty, and `DONTNEED` ignores dirty pages, so on Linux the writer hands
+each 32 MB window to writeback with `sync_file_range()` and drops it one
+window later, by which time most of it is written. It does so only past
+a tenth of RAM (the kernel's default background writeback threshold): a
+smaller output stays cached, since starting writeback earlier made a
+1.5 GB job wait for the disk (8.2 s against 0.4 s). Elsewhere (FreeBSD,
+illumos) only input is dropped; macOS and Windows have no
+`posix_fadvise()` and get no hints. The output of a global-dedupe
+restore stays cached, since later chunks map it to copy references.
+The hints are always on: they cost no throughput (see the Changelog).
+
 ## Portability
 
 - POSIX threads and semaphores, `mmap`, `socketpair` and libarchive are

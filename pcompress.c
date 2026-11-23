@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <utils.h>
+#include <utils/pc_cache.h>
 #include <pcompress.h>
 #include <allocator.h>
 #include <rabin_dedup.h>
@@ -71,6 +72,7 @@ struct wdata {
 	int nprocs;
 	int64_t chunksize;
 	pc_ctx_t *pctx;
+	pc_cache_t *wcache;	/* page-cache hints for wfd */
 };
 
 /*
@@ -1964,6 +1966,7 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
     uint32_t *np)
 {
 	struct cmp_data *tdat;
+	pc_cache_t rcache;
 	uint64_t in = 0;
 	uint32_t p;
 	int rv;
@@ -1972,6 +1975,7 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 	*np = 0;
 	if (j->nprocs == 0)
 		return (0);
+	pc_cache_open(&rcache, compfd, 0);
 	for (;;) {
 		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
 			return (0);
@@ -1993,6 +1997,7 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 				break;
 			/* The length field and the chunk; the worker changes rbytes. */
 			in += sizeof (uint64_t) + (uint64_t)tdat->rbytes;
+			pc_cache_step(&rcache);
 			Sem_Post(&tdat->start_sem);
 			++(pctx->chunk_num);
 			if (report_progress(pctx, in))
@@ -2088,6 +2093,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	char algorithm[ALGO_SZ];
 	struct stat sbuf;
 	struct wdata w;
+	pc_cache_t wcache;
 	struct dec_hdr h;
 	struct dec_job job;
 	int compfd = -1, compfd2 = -1, uncompfd = -1, own_uncompfd = 0, err = 0;
@@ -2214,6 +2220,12 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		w.nprocs = nprocs;
 		w.chunksize = h.chunksize;
 		w.pctx = pctx;
+		/*
+		 * Global dedupe restores references from the output file
+		 * (dedupe_decompress() maps it): its pages stay cached.
+		 */
+		pc_cache_open(&wcache, pctx->enable_rabin_global ? -1 : uncompfd, 1);
+		w.wcache = &wcache;
 		if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
 			UNCOMP_BAIL;
@@ -2614,6 +2626,7 @@ repeat:
 		} else {
 			pthread_mutex_lock(&pctx->write_mutex);
 			wbytes = Write(w->wfd, tdat->cmp_seg, tdat->len_cmp);
+			pc_cache_step(w->wcache);
 			pthread_mutex_unlock(&pctx->write_mutex);
 		}
 		if (pctx->archive_temp_fd != -1 && wbytes == tdat->len_cmp) {
@@ -2658,6 +2671,7 @@ static int
 start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level)
 {
 	struct wdata w;
+	pc_cache_t wcache, rcache;
 	char tmpfile1[MAXPATHLEN], tmpdir[MAXPATHLEN];
 	char to_filename[MAXPATHLEN];
 	uint64_t compressed_chunksize, n_chunksize, file_offset;
@@ -3115,6 +3129,8 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	w.wfd = compfd;
 	w.nprocs = nprocs;
 	w.pctx = pctx;
+	pc_cache_open(&wcache, compfd, 1);
+	w.wcache = &wcache;
 	if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 		log_msg(LOG_ERR, 1, "Error in thread creation: ");
 		COMP_BAIL;
@@ -3240,6 +3256,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	 */
 	file_offset = 0;
 	pctx->interesting = 0;
+	pc_cache_open(&rcache, pctx->archive_mode ? -1 : uncompfd, 0);
 	if (pctx->enable_rabin_split) {
 		rctx = create_dedupe_context(chunksize, 0, pctx->rab_blk_size, pctx->algo, &props,
 		    pctx->enable_delta_encode, pctx->enable_fixed_scan, VERSION, COMPRESS, 0, NULL,
@@ -3348,6 +3365,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				else
 					rbytes = Read(uncompfd, cread_buf, chunksize);
 			}
+			pc_cache_step(&rcache);
 		}
 	}
 
