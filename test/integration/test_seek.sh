@@ -186,6 +186,15 @@ x = bytearray(b); x[body + 45] ^= 1; put("d_body.pz", x)
 x = bytearray(b); x[-17] ^= 1; put("d_tag.pz", x)
 x = bytearray(b); x[-16:-8] = struct.pack("<Q", 1 << 40); put("d_len.pz", x)
 x = bytearray(b); x[body - 40] ^= 0x55; put("d_chunk.pz", x)
+# Chunk 0's length in the index one byte short, under a recomputed tag
+# (BLAKE256: BLAKE2b-256, stored byte-reversed), as anyone can forge an
+# unencrypted index: its chunk then decodes to more than the index says.
+import hashlib
+x = bytearray(b)
+u = body + 40 + 8
+x[u:u + 8] = struct.pack("<Q", struct.unpack("<Q", b[u:u + 8])[0] - 1)
+x[-16 - t:-16] = hashlib.blake2b(bytes(x[body:body + n]), digest_size=32).digest()[::-1]
+put("d_ulen.pz", x)
 PYEOF
 	# Two equal-length encrypted chunks swapped: each still has a valid
 	# HMAC, so only the index's copy of their tags tells them apart.
@@ -209,7 +218,7 @@ PYEOF
 	rm -f "$T/part"
 	expect_fail "swapped encrypted chunks refused" $PCOMPRESS -d -w "$T/pw5" \
 	    -r 300000:10 "$T/d_swap.pz" "$T/part"
-	for f in d_body d_tag d_len d_chunk; do
+	for f in d_body d_tag d_len d_chunk d_ulen; do
 		rm -f "$T/part"
 		expect_fail "damaged $f refused" $PCOMPRESS -d -r 0: "$T/$f.pz" "$T/part"
 	done

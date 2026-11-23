@@ -2923,20 +2923,30 @@ sx_write_index(pc_ctx_t *pctx, int compfd)
 /*
  * A random read: the part of a decoded chunk that lies in the requested
  * stream range, as an offset into the chunk (*skip) and a length (0 if
- * none of it does).
+ * none of it does) in *wlen. The chunk must decode to the length the
+ * index gives it, or the offsets of the range would be wrong: -1 if it
+ * does not (the index of an unencrypted file can be forged).
  */
-static uint64_t
-sx_clip(pc_ctx_t *pctx, const struct cmp_data *tdat, uint64_t *skip)
+static int
+sx_clip(pc_ctx_t *pctx, const struct cmp_data *tdat, uint64_t *skip, uint64_t *wlen)
 {
 	uint64_t start = pctx->sx_idx.uoff[tdat->id], end = start + tdat->len_cmp;
 	uint64_t lo = pctx->sx_off, hi = pctx->sx_off + pctx->sx_len;
 
+	if (end != pctx->sx_idx.uoff[tdat->id + 1]) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Chunk %u decodes to %" PRIu64 " bytes, the seek "
+		    "index says %" PRIu64 ". File corrupt ?", tdat->id, tdat->len_cmp,
+		    pctx->sx_idx.uoff[tdat->id + 1] - start);
+		return (-1);
+	}
 	if (lo < start)
 		lo = start;
 	if (hi > end)
 		hi = end;
 	*skip = lo - start;
-	return (lo < hi ? hi - lo : 0);
+	*wlen = lo < hi ? hi - lo : 0;
+	return (0);
 }
 
 static void *
@@ -2976,7 +2986,10 @@ repeat:
 		wbuf = tdat->cmp_seg;
 		wlen = tdat->len_cmp;
 		if (pctx->sx_mode && tdat->decompressing) {
-			wlen = sx_clip(pctx, tdat, &skip);
+			if (sx_clip(pctx, tdat, &skip, &wlen) != 0) {
+				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+				goto do_cancel;
+			}
 			wbuf += skip;
 		}
 		if (wlen == 0) {

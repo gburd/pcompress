@@ -199,7 +199,8 @@ the parser.
   with a message. It never falls back to a full decode.
 - Decoding the chosen chunks runs on the usual workers. `dec_feed()`
   seeks to each one and starts numbering at the first (the number keys
-  its cipher stream). The writer keeps the part inside the range.
+  its cipher stream). The writer checks that each chunk decodes to the
+  length the index gives it, and keeps the part inside the range.
 
 Cost, on a c7i.4xlarge, zstd -l6, cold cache: a 1.3 GB tar of /usr/lib
 (21525 files) with `-T -D` against `-T -D -X` grows from 426.6 MB to
