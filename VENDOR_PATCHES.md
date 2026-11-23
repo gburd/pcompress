@@ -333,9 +333,10 @@ the value monocypher.org publishes).
 **License**: BSD-2-Clause or CC0 1.0, at the user's choice (`LICENCE.md`).
 **Modifications**: only the prefix. `src/monocypher.c` and
 `src/monocypher.h` had `crypto_` replaced by `pcmono_` (upstream's
-`change-prefix.sh pcmono` does the same), so the symbols cannot clash
-with a host program's own Monocypher or libsodium. The `CRYPTO_ARGON2_*`
-constants keep their names. With the prefix put back the files are
+`change-prefix.sh pcmono` does the same), and `CRYPTO_ARGON2_*` and the
+include guard `MONOCYPHER_H` became `PCMONO_ARGON2_*` and `PCMONO_H`, so
+neither the symbols nor the macros clash with a host program's own
+Monocypher or libsodium. With the prefixes put back the files are
 byte-identical to upstream's.
 
 Used for two things only (`crypto/aead.c`): HChaCha20, for the

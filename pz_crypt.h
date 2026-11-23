@@ -60,7 +60,7 @@ typedef struct {
 } pz_aead_t;
 
 /** The AEAD a header's cipher flag names: AES 0x10 GCM, SALSA20 0x20 XChaCha. */
-int pz_aead_alg(int crypto_flag);
+int pc_pz_aead_alg(int crypto_flag);
 
 /**
  * New file: a random salt and the default Argon2id cost into the
@@ -68,7 +68,7 @@ int pz_aead_alg(int crypto_flag);
  * Fails (-1) if the system has no random bytes: a repeated salt would
  * repeat the key and with it every nonce.
  */
-int pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
+int pc_pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
     uchar_t hdr[PZ_HDR_CRYPTO]);
 
 /**
@@ -76,29 +76,29 @@ int pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
  * work) and derive the key. -2 on a bad id or cost (a corrupt or hostile
  * header), -1 if the KDF fails (no memory).
  */
-int pz_key_open(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
+int pc_pz_key_open(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
     const uchar_t hdr[PZ_HDR_CRYPTO]);
 
 /** Wipe the key. Safe on a zeroed or already wiped a. */
-void pz_key_wipe(pz_aead_t *a);
+void pc_pz_key_wipe(pz_aead_t *a);
 
 /**
  * Seal len bytes at buf in place as piece ord of stream, with associated
  * data (stream, ord, then ad); write the tag. adlen is at most PZ_AD_MAX.
  */
-int pz_seal(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+int pc_pz_seal(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
     size_t adlen, uchar_t *buf, size_t len, uchar_t tag[AEAD_TAGLEN]);
 
-/** Open what pz_seal() made, in place. -1 if anything differs. */
-int pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+/** Open what pc_pz_seal() made, in place. -1 if anything differs. */
+int pc_pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
     size_t adlen, uchar_t *buf, size_t len, const uchar_t tag[AEAD_TAGLEN]);
 
 /** The end record: the data and metadata chunk counts, authenticated. */
-int pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta,
+int pc_pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta,
     uchar_t out[PZ_END_LEN]);
 
 /** Check an end record's tag and return its counts. -1 if forged. */
-int pz_end_check(const pz_aead_t *a, const uchar_t in[PZ_END_LEN], uint64_t *ndata,
+int pc_pz_end_check(const pz_aead_t *a, const uchar_t in[PZ_END_LEN], uint64_t *ndata,
     uint64_t *nmeta);
 
 #ifdef	__cplusplus

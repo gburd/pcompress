@@ -249,8 +249,8 @@ static const char lady[] = "Ladies and Gentlemen of the class of '99: If I could
 
 /*
  * HChaCha20 (draft-irtf-cfrg-xchacha-03 section 2.2.1) and the
- * AEAD_XCHACHA20_POLY1305 vector (appendix A.3.1) through aead_seal()
- * and aead_open(): the extended-nonce construction and its OpenSSL
+ * AEAD_XCHACHA20_POLY1305 vector (appendix A.3.1) through pc_aead_seal()
+ * and pc_aead_open(): the extended-nonce construction and its OpenSSL
  * ChaCha20-Poly1305 core end to end.
  */
 MU_TEST(test_xchacha_kat)
@@ -273,12 +273,12 @@ MU_TEST(test_xchacha_kat)
 	    "2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9"
 	    "21f9664c97637da9768812f615c68b13b52e", wct);
 	unhex("c0875924c1c7987947deafd8780acf49", wtag);
-	mu_assert(aead_nonce_len(AEAD_XCHACHA20) == 24, "XChaCha nonce length");
-	mu_assert_int_eq(0, aead_seal(AEAD_XCHACHA20, key, nonce, ad, adl,
+	mu_assert(pc_aead_nonce_len(AEAD_XCHACHA20) == 24, "XChaCha nonce length");
+	mu_assert_int_eq(0, pc_aead_seal(AEAD_XCHACHA20, key, nonce, ad, adl,
 	    (const uchar_t *)lady, ct, len, tag));
 	mu_assert(memcmp(ct, wct, len) == 0, "XChaCha20-Poly1305 ciphertext");
 	mu_assert(memcmp(tag, wtag, 16) == 0, "XChaCha20-Poly1305 tag");
-	mu_assert_int_eq(0, aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag));
+	mu_assert_int_eq(0, pc_aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag));
 	mu_assert(memcmp(pt, lady, len) == 0, "XChaCha20-Poly1305 open");
 
 	/* Any changed bit of tag, data or associated data fails, output zeroed. */
@@ -287,15 +287,15 @@ MU_TEST(test_xchacha_kat)
 
 		*p ^= 0x10;
 		memset(pt, 0xaa, len);
-		mu_assert(aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
+		mu_assert(pc_aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
 		    "tampered AEAD input accepted");
 		mu_assert(pt[0] == 0 && pt[len - 1] == 0, "unauthenticated plaintext left");
 		*p ^= 0x10;
 	}
 	nonce[23] ^= 1;
-	mu_assert(aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
+	mu_assert(pc_aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
 	    "wrong nonce accepted");
-	mu_assert(aead_seal(99, key, nonce, ad, adl, ct, pt, len, tag) != 0, "unknown AEAD");
+	mu_assert(pc_aead_seal(99, key, nonce, ad, adl, ct, pt, len, tag) != 0, "unknown AEAD");
 }
 
 /*
@@ -343,19 +343,19 @@ MU_TEST(test_gcm_kat)
 	unhex("522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa"
 	    "8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662", wct);
 	unhex("76fc6ece0f4e1768cddf8853bb2d551b", wtag);
-	mu_assert(aead_nonce_len(AEAD_AES256GCM) == 12, "GCM nonce length");
-	mu_assert_int_eq(0, aead_seal(AEAD_AES256GCM, key, iv, ad, adl, in, ct, len, tag));
+	mu_assert(pc_aead_nonce_len(AEAD_AES256GCM) == 12, "GCM nonce length");
+	mu_assert_int_eq(0, pc_aead_seal(AEAD_AES256GCM, key, iv, ad, adl, in, ct, len, tag));
 	mu_assert(memcmp(ct, wct, len) == 0 && memcmp(tag, wtag, 16) == 0, "GCM vector");
-	mu_assert_int_eq(0, aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag));
+	mu_assert_int_eq(0, pc_aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag));
 	mu_assert(memcmp(pt, in, len) == 0, "GCM open");
 	tag[0] ^= 1;
-	mu_assert(aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag) != 0,
+	mu_assert(pc_aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag) != 0,
 	    "GCM bad tag accepted");
 }
 
 /*
  * Argon2id: RFC 9106 section 5.3 (secret and associated data, so through
- * Monocypher directly), and argon2id_derive() against the reference
+ * Monocypher directly), and pc_argon2id_derive() against the reference
  * implementation (phc-winner-argon2 20190702, Ubuntu's argon2 CLI:
  * echo -n password | argon2 somesaltsomesalt -id -m 10 -t 3 -p 4 -l 32).
  */
@@ -363,7 +363,7 @@ MU_TEST(test_argon2id_kat)
 {
 	uchar_t pw[32], salt[16], secret[8], ad[12], out[32], want[32];
 	static uint64_t work[32 * 128];
-	pcmono_argon2_config cf = { CRYPTO_ARGON2_ID, 32, 3, 4 };
+	pcmono_argon2_config cf = { PCMONO_ARGON2_ID, 32, 3, 4 };
 	pcmono_argon2_inputs in = { pw, salt, 32, 16 };
 	pcmono_argon2_extras ex = { secret, ad, 8, 12 };
 	argon2_params_t kp = { 1024, 3, 4 };
@@ -379,15 +379,16 @@ MU_TEST(test_argon2id_kat)
 	unhex("0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659", want);
 	mu_assert(memcmp(out, want, 32) == 0, "Argon2id RFC 9106 vector");
 
-	mu_assert_int_eq(0, argon2id_derive((const uchar_t *)"password", 8,
+	mu_assert_int_eq(0, pc_argon2id_derive((const uchar_t *)"password", 8,
 	    (const uchar_t *)"somesaltsomesalt", 16, &kp, out, 32));
 	unhex("d488a244d764d18a6db69e08a29c66824d78ddfacf324c13239e35dce7517eea", want);
 	mu_assert(memcmp(out, want, 32) == 0, "Argon2id reference CLI vector");
 
-	mu_assert(argon2_params_ok(&kp), "valid cost refused");
+	mu_assert(pc_argon2_params_ok(&kp), "valid cost refused");
 	for (i = 0; i < sizeof (bad) / sizeof (bad[0]); i++)
-		mu_assert(argon2id_derive((const uchar_t *)"pw", 2, (const uchar_t *)"somesalt", 8,
-		    &bad[i], out, 32) == -1, "out-of-bounds Argon2 cost accepted");
+		mu_assert(pc_argon2id_derive((const uchar_t *)"pw", 2,
+		    (const uchar_t *)"somesalt", 8, &bad[i], out, 32) == -1,
+		    "out-of-bounds Argon2 cost accepted");
 }
 
 /*
@@ -408,51 +409,52 @@ MU_TEST(test_pz_v12)
 	memset(&a, 0, sizeof (a));
 	memset(&b, 0, sizeof (b));
 	for (f = 0; f < 2; f++) {
-		mu_assert_int_eq(0, pz_key_new(&a, flags[f], (const uchar_t *)"pw", 2, hdr));
+		mu_assert_int_eq(0, pc_pz_key_new(&a, flags[f], (const uchar_t *)"pw", 2, hdr));
 		memcpy(p, buf, sizeof (p));
-		mu_assert_int_eq(0, pz_seal(&a, PZ_STREAM_DATA, 7, ad, 9, p, sizeof (p), tag));
+		mu_assert_int_eq(0, pc_pz_seal(&a, PZ_STREAM_DATA, 7, ad, 9, p, sizeof (p), tag));
 		memcpy(q, p, sizeof (q));
-		mu_assert_int_eq(0, pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
+		mu_assert_int_eq(0, pc_pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
 		mu_assert(memcmp(q, buf, sizeof (q)) == 0, "v12 round trip");
 		/* Another ordinal or stream: the 4.4 two-time pad and reordering. */
 		memcpy(q, p, sizeof (q));
-		mu_assert(pz_open(&a, PZ_STREAM_DATA, 8, ad, 9, q, sizeof (q), tag) != 0,
+		mu_assert(pc_pz_open(&a, PZ_STREAM_DATA, 8, ad, 9, q, sizeof (q), tag) != 0,
 		    "chunk opened at another ordinal");
 		memcpy(q, p, sizeof (q));
-		mu_assert(pz_open(&a, PZ_STREAM_META, 7, ad, 9, q, sizeof (q), tag) != 0,
+		mu_assert(pc_pz_open(&a, PZ_STREAM_META, 7, ad, 9, q, sizeof (q), tag) != 0,
 		    "data chunk opened as metadata");
 		ad[0] ^= 1;
 		memcpy(q, p, sizeof (q));
-		mu_assert(pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
+		mu_assert(pc_pz_open(&a, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
 		    "changed chunk header accepted");
 		ad[0] ^= 1;
 		/* Same password, same salt: same key; new salt: another key. */
-		mu_assert_int_eq(0, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, hdr));
+		mu_assert_int_eq(0, pc_pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, hdr));
 		memcpy(q, p, sizeof (q));
-		mu_assert_int_eq(0, pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
-		mu_assert_int_eq(0, pz_key_open(&b, flags[f], (const uchar_t *)"pW", 2, hdr));
+		mu_assert_int_eq(0, pc_pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag));
+		mu_assert_int_eq(0, pc_pz_key_open(&b, flags[f], (const uchar_t *)"pW", 2, hdr));
 		memcpy(q, p, sizeof (q));
-		mu_assert(pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
+		mu_assert(pc_pz_open(&b, PZ_STREAM_DATA, 7, ad, 9, q, sizeof (q), tag) != 0,
 		    "wrong password accepted");
-		mu_assert_int_eq(0, pz_key_new(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		mu_assert_int_eq(0, pc_pz_key_new(&b, flags[f], (const uchar_t *)"pw", 2, bad));
 		mu_assert(memcmp(bad, hdr, PZ_SALT_LEN) != 0, "salt repeated");
 		/* The end record. */
-		mu_assert_int_eq(0, pz_end_make(&a, 12345, 6, end));
-		mu_assert(pz_end_check(&a, end, &nd, &nm) == 0 && nd == 12345 && nm == 6, "end");
+		mu_assert_int_eq(0, pc_pz_end_make(&a, 12345, 6, end));
+		mu_assert(pc_pz_end_check(&a, end, &nd, &nm) == 0 && nd == 12345 && nm == 6, "end");
 		end[7] ^= 1;
-		mu_assert(pz_end_check(&a, end, &nd, &nm) != 0, "forged chunk count accepted");
+		mu_assert(pc_pz_end_check(&a, end, &nd, &nm) != 0, "forged chunk count accepted");
 		/* Costs out of bounds: -2 before any work. */
 		memcpy(bad, hdr, sizeof (bad));
 		bad[PZ_SALT_LEN + 4] = 0x40;	/* 1 TiB */
-		mu_assert_int_eq(-2, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		mu_assert_int_eq(-2, pc_pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
 		memcpy(bad, hdr, sizeof (bad));
 		bad[PZ_SALT_LEN + 3] = 1;	/* scrypt id */
-		mu_assert_int_eq(-2, pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
-		pz_key_wipe(&a);
-		mu_assert(pz_seal(&a, PZ_STREAM_DATA, 0, NULL, 0, p, 1, tag) != 0, "wiped key used");
+		mu_assert_int_eq(-2, pc_pz_key_open(&b, flags[f], (const uchar_t *)"pw", 2, bad));
+		pc_pz_key_wipe(&a);
+		mu_assert(pc_pz_seal(&a, PZ_STREAM_DATA, 0, NULL, 0, p, 1, tag) != 0,
+		    "wiped key used");
 	}
-	mu_assert(pz_key_new(&a, 0x40, (const uchar_t *)"pw", 2, hdr) != 0, "unknown cipher");
-	pz_key_wipe(&b);
+	mu_assert(pc_pz_key_new(&a, 0x40, (const uchar_t *)"pw", 2, hdr) != 0, "unknown cipher");
+	pc_pz_key_wipe(&b);
 }
 
 MU_TEST_SUITE(suite_crypto)

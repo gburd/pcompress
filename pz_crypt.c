@@ -49,7 +49,7 @@ get_be64(const uchar_t *p)
 }
 
 int
-pz_aead_alg(int crypto_flag)
+pc_pz_aead_alg(int crypto_flag)
 {
 	if (crypto_flag == CRYPTO_ALG_AES)
 		return (AEAD_AES256GCM);
@@ -65,26 +65,26 @@ pz_derive(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
 {
 	argon2_params_t kp;
 
-	pz_key_wipe(a);
-	if ((a->alg = pz_aead_alg(crypto_flag)) == 0 || pwlen < 0)
+	pc_pz_key_wipe(a);
+	if ((a->alg = pc_pz_aead_alg(crypto_flag)) == 0 || pwlen < 0)
 		return (-1);
 	kp.m_kib = get_be32(hdr + PZ_SALT_LEN + 4);
 	kp.t = get_be32(hdr + PZ_SALT_LEN + 8);
 	kp.p = get_be32(hdr + PZ_SALT_LEN + 12);
-	if (get_be32(hdr + PZ_SALT_LEN) != PZ_KDF_ARGON2ID || !argon2_params_ok(&kp)) {
-		pz_key_wipe(a);
+	if (get_be32(hdr + PZ_SALT_LEN) != PZ_KDF_ARGON2ID || !pc_argon2_params_ok(&kp)) {
+		pc_pz_key_wipe(a);
 		return (-2);
 	}
-	if (argon2id_derive(pw, (size_t)pwlen, hdr, PZ_SALT_LEN, &kp, a->key,
+	if (pc_argon2id_derive(pw, (size_t)pwlen, hdr, PZ_SALT_LEN, &kp, a->key,
 	    AEAD_KEYLEN) != 0) {
-		pz_key_wipe(a);
+		pc_pz_key_wipe(a);
 		return (-1);
 	}
 	return (0);
 }
 
 int
-pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
+pc_pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
     uchar_t hdr[PZ_HDR_CRYPTO])
 {
 	/* No fallback to clock or pid: a guessable salt is a repeated key. */
@@ -98,14 +98,14 @@ pz_key_new(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
 }
 
 int
-pz_key_open(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
+pc_pz_key_open(pz_aead_t *a, int crypto_flag, const uchar_t *pw, int pwlen,
     const uchar_t hdr[PZ_HDR_CRYPTO])
 {
 	return (pz_derive(a, crypto_flag, pw, pwlen, hdr));
 }
 
 void
-pz_key_wipe(pz_aead_t *a)
+pc_pz_key_wipe(pz_aead_t *a)
 {
 	pcmono_wipe(a->key, sizeof (a->key));
 	a->alg = 0;
@@ -133,40 +133,40 @@ pz_frame(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad, size_t
 }
 
 int
-pz_seal(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+pc_pz_seal(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
     size_t adlen, uchar_t *buf, size_t len, uchar_t tag[AEAD_TAGLEN])
 {
 	uchar_t nonce[AEAD_NONCE_MAX], full[12 + PZ_AD_MAX];
 
 	if (pz_frame(a, stream, ord, ad, adlen, nonce, full) != 0)
 		return (-1);
-	return (aead_seal(a->alg, a->key, nonce, full, 12 + adlen, buf, buf, len, tag));
+	return (pc_aead_seal(a->alg, a->key, nonce, full, 12 + adlen, buf, buf, len, tag));
 }
 
 int
-pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
+pc_pz_open(const pz_aead_t *a, int stream, uint64_t ord, const uchar_t *ad,
     size_t adlen, uchar_t *buf, size_t len, const uchar_t tag[AEAD_TAGLEN])
 {
 	uchar_t nonce[AEAD_NONCE_MAX], full[12 + PZ_AD_MAX];
 
 	if (pz_frame(a, stream, ord, ad, adlen, nonce, full) != 0)
 		return (-1);
-	return (aead_open(a->alg, a->key, nonce, full, 12 + adlen, buf, buf, len, tag));
+	return (pc_aead_open(a->alg, a->key, nonce, full, 12 + adlen, buf, buf, len, tag));
 }
 
 int
-pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta, uchar_t out[PZ_END_LEN])
+pc_pz_end_make(const pz_aead_t *a, uint64_t ndata, uint64_t nmeta, uchar_t out[PZ_END_LEN])
 {
 	put_be64(out, ndata);
 	put_be64(out + 8, nmeta);
-	return (pz_seal(a, PZ_STREAM_END, 0, out, 16, NULL, 0, out + 16));
+	return (pc_pz_seal(a, PZ_STREAM_END, 0, out, 16, NULL, 0, out + 16));
 }
 
 int
-pz_end_check(const pz_aead_t *a, const uchar_t in[PZ_END_LEN], uint64_t *ndata,
+pc_pz_end_check(const pz_aead_t *a, const uchar_t in[PZ_END_LEN], uint64_t *ndata,
     uint64_t *nmeta)
 {
-	if (pz_open(a, PZ_STREAM_END, 0, in, 16, NULL, 0, in + 16) != 0)
+	if (pc_pz_open(a, PZ_STREAM_END, 0, in, 16, NULL, 0, in + 16) != 0)
 		return (-1);
 	*ndata = get_be64(in);
 	*nmeta = get_be64(in + 8);

@@ -613,7 +613,7 @@ preproc_decompress(pc_ctx_t *pctx, compress_func_ptr dec_func, void *src, uint64
  * The associated data of a version 12 data chunk, from its stored bytes
  * at seg (length field, tag, flags, payload of plen bytes, then the
  * original size when the flags say so): the length field, the flags and
- * the original size. With pz_seal()'s stream and ordinal, every byte of
+ * the original size. With pc_pz_seal()'s stream and ordinal, every byte of
  * the chunk outside the payload is bound to it. Returns the length.
  */
 static size_t
@@ -638,7 +638,7 @@ pz_seal_chunk(pc_ctx_t *pctx, uchar_t *seg, uint64_t plen, uchar_t flags, unsign
 	uchar_t ad[17], *tag = seg + COMPRESSED_CHUNKSZ, *pay = tag + AEAD_TAGLEN + CHUNK_FLAG_SZ;
 	size_t adl = pz_chunk_ad(seg, flags, pay + plen, ad);
 
-	return (pz_seal(&pctx->pz_aead, PZ_STREAM_DATA, id, ad, adl, pay, plen, tag));
+	return (pc_pz_seal(&pctx->pz_aead, PZ_STREAM_DATA, id, ad, adl, pay, plen, tag));
 }
 
 /*
@@ -729,7 +729,7 @@ redo:
 		size_t adl = pz_chunk_ad((uchar_t *)&tdat->len_cmp_be, HDR,
 		    tdat->compressed_chunk + tdat->rbytes, ad);
 
-		if (pz_open(&pctx->pz_aead, PZ_STREAM_DATA, tdat->id, ad, adl, cseg,
+		if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_DATA, tdat->id, ad, adl, cseg,
 		    tdat->len_cmp, tdat->compressed_chunk) != 0) {
 			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Chunk %d, authentication failed", tdat->id);
@@ -1606,7 +1606,7 @@ dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 	memcpy(pos + 16, pctx->pz_hdr, PZ_HDR_CRYPTO);
 	if ((len = dec_get_pw(pctx, pw, &upw, NULL)) == -1)
 		return (-1);
-	rv = pz_key_open(&pctx->pz_aead, h->flags & MASK_CRYPTO_ALG, upw, len, pctx->pz_hdr);
+	rv = pc_pz_key_open(&pctx->pz_aead, h->flags & MASK_CRYPTO_ALG, upw, len, pctx->pz_hdr);
 	memset(upw, 0, len);
 	if (upw == pctx->user_pw) {
 		pctx->user_pw = NULL;
@@ -1622,8 +1622,8 @@ dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 		log_msg(LOG_ERR, 0, "Failed to initialize crypto");
 		return (-1);
 	}
-	if (pz_open(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, sizeof (hdr), NULL, 0, tag) != 0) {
-		pz_key_wipe(&pctx->pz_aead);
+	if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, sizeof (hdr), NULL, 0, tag) != 0) {
+		pc_pz_key_wipe(&pctx->pz_aead);
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "Header verification failed! File "
 		    "tampered or wrong password.");
@@ -1646,7 +1646,7 @@ dec_check_end(pc_ctx_t *pctx, int compfd, uint64_t ndata, uint64_t nmeta, int ch
 	uint64_t wd, wm;
 
 	if (Read(compfd, end, sizeof (end)) != sizeof (end) ||
-	    pz_end_check(&pctx->pz_aead, end, &wd, &wm) != 0) {
+	    pc_pz_end_check(&pctx->pz_aead, end, &wd, &wm) != 0) {
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "End record missing or not authentic: file truncated "
 		    "or tampered.");
@@ -2821,7 +2821,7 @@ write_file_header(pc_ctx_t *pctx, int compfd, unsigned short flags, uint64_t chu
 	if (pctx->encrypt_type) {
 		memcpy(pos, pctx->pz_hdr, PZ_HDR_CRYPTO);
 		pos += PZ_HDR_CRYPTO;
-		if (pz_seal(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, pos - hdr, NULL, 0,
+		if (pc_pz_seal(&pctx->pz_aead, PZ_STREAM_HEADER, 0, hdr, pos - hdr, NULL, 0,
 		    pos) != 0) {
 			log_error_code(PC_ERR_CRYPTO);
 			log_msg(LOG_ERR, 0, "Cannot authenticate the header.");
@@ -2906,13 +2906,13 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		}
 		/* Format version 12: one Argon2id key per file, for the AEAD. */
 		if (pctx->user_pw) {
-			rv = pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pctx->user_pw,
+			rv = pc_pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pctx->user_pw,
 			    pctx->user_pw_len, pctx->pz_hdr);
 			memset(pctx->user_pw, 0, pctx->user_pw_len);
 			pctx->user_pw = NULL;
 			pctx->user_pw_len = 0;
 		} else {
-			rv = pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pw, pw_len,
+			rv = pc_pz_key_new(&pctx->pz_aead, pctx->encrypt_type, pw, pw_len,
 			    pctx->pz_hdr);
 			memset(pw, 0, sizeof (pw));
 		}
@@ -3527,7 +3527,8 @@ comp_done:
 		if (!err && pctx->pz_v12) {
 			uchar_t end[PZ_END_LEN];
 
-			if (pz_end_make(&pctx->pz_aead, pctx->chunk_num, pctx->pz_nmeta, end) != 0 ||
+			if (pc_pz_end_make(&pctx->pz_aead, pctx->chunk_num, pctx->pz_nmeta,
+			    end) != 0 ||
 			    Write(compfd, end, sizeof (end)) != sizeof (end)) {
 				log_msg(LOG_ERR, 1, "Write ");
 				err = 1;
@@ -3820,7 +3821,7 @@ destroy_pc_context(pc_ctx_t *pctx)
 		pc_mfree(pctx->pw_copy);
 	}
 	memset(pctx->chunk_key, 0, sizeof (pctx->chunk_key));
-	pz_key_wipe(&pctx->pz_aead);
+	pc_pz_key_wipe(&pctx->pz_aead);
 	chunk_codecs_free(pctx);
 	pc_mfree(pctx);
 }

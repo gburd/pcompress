@@ -34,7 +34,7 @@
 #include "monocypher/monocypher.h"
 
 int
-aead_nonce_len(int alg)
+pc_aead_nonce_len(int alg)
 {
 	if (alg == AEAD_XCHACHA20)
 		return (24);
@@ -124,7 +124,7 @@ out:
 }
 
 int
-aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
+pc_aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
     const uint8_t *ad, size_t adlen, const uint8_t *in, uint8_t *out, size_t len,
     uint8_t tag[AEAD_TAGLEN])
 {
@@ -132,7 +132,7 @@ aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
 }
 
 int
-aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
+pc_aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
     const uint8_t *ad, size_t adlen, const uint8_t *in, uint8_t *out, size_t len,
     const uint8_t tag[AEAD_TAGLEN])
 {
@@ -144,7 +144,7 @@ aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
 }
 
 int
-argon2_params_ok(const argon2_params_t *kp)
+pc_argon2_params_ok(const argon2_params_t *kp)
 {
 	if (kp->p < 1 || kp->p > ARGON2_P_MAX || kp->t < 1 || kp->t > ARGON2_T_MAX)
 		return (0);
@@ -155,20 +155,20 @@ argon2_params_ok(const argon2_params_t *kp)
 }
 
 int
-argon2id_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
+pc_argon2id_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
     size_t saltlen, const argon2_params_t *kp, uint8_t *out, size_t outlen)
 {
 	pcmono_argon2_config cf;
 	pcmono_argon2_inputs in;
 	void *work;
 
-	if (!argon2_params_ok(kp) || outlen < 4 || outlen > UINT32_MAX ||
+	if (!pc_argon2_params_ok(kp) || outlen < 4 || outlen > UINT32_MAX ||
 	    pwlen > UINT32_MAX || saltlen < 8 || saltlen > UINT32_MAX)
 		return (-1);
 	/* 1 KiB blocks of 64-bit words: pc_malloc() alignment is enough. */
 	if ((work = pc_malloc((size_t)kp->m_kib * 1024)) == NULL)
 		return (-1);
-	cf.algorithm = CRYPTO_ARGON2_ID;
+	cf.algorithm = PCMONO_ARGON2_ID;
 	cf.nb_blocks = kp->m_kib;
 	cf.nb_passes = kp->t;
 	cf.nb_lanes = kp->p;

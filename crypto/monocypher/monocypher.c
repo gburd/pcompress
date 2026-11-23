@@ -787,7 +787,7 @@ void pcmono_argon2(u8 *hash, u32 hash_size, void *work_area,
 	}
 
 	// Argon2i and Argon2id start with constant time indexing
-	int constant_time = config.algorithm != CRYPTO_ARGON2_D;
+	int constant_time = config.algorithm != PCMONO_ARGON2_D;
 
 	// Fill (and re-fill) the rest of the blocks
 	//
@@ -808,7 +808,7 @@ void pcmono_argon2(u8 *hash, u32 hash_size, void *work_area,
 
 			// Argon2id switches back to non-constant time indexing
 			// after the first two slices of the first pass
-			if (slice == 2 && config.algorithm == CRYPTO_ARGON2_ID) {
+			if (slice == 2 && config.algorithm == PCMONO_ARGON2_ID) {
 				constant_time = 0;
 			}
 

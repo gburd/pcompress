@@ -51,8 +51,8 @@
 // with this software.  If not, see
 // <https://creativecommons.org/publicdomain/zero/1.0/>
 
-#ifndef MONOCYPHER_H
-#define MONOCYPHER_H
+#ifndef PCMONO_H
+#define PCMONO_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -151,9 +151,9 @@ void pcmono_blake2b_final(pcmono_blake2b_ctx *ctx, uint8_t *hash);
 
 // Password key derivation (Argon2)
 // --------------------------------
-#define CRYPTO_ARGON2_D  0
-#define CRYPTO_ARGON2_I  1
-#define CRYPTO_ARGON2_ID 2
+#define PCMONO_ARGON2_D  0
+#define PCMONO_ARGON2_I  1
+#define PCMONO_ARGON2_ID 2
 
 typedef struct {
 	uint32_t algorithm;  // Argon2d, Argon2i, Argon2id
@@ -318,4 +318,4 @@ void pcmono_elligator_key_pair(uint8_t hidden[32], uint8_t secret_key[32],
 }
 #endif
 
-#endif // MONOCYPHER_H
+#endif // PCMONO_H

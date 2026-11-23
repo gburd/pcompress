@@ -165,7 +165,7 @@ compress_and_write(meta_ctx_t *mctx)
 		 * checksum was and covers the length fields and flags.
 		 */
 		memset(tobuf + 25, 0, CKSUM_MAX + CRC32_SIZE);
-		if (pz_seal(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, tobuf, 25,
+		if (pc_pz_seal(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, tobuf, 25,
 		    comp_chunk, dstlen, tobuf + 25) != 0) {
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -329,7 +329,7 @@ decompress_data(meta_ctx_t *mctx)
 			}
 		}
 		memcpy(checksum, cbuf + 25, AEAD_TAGLEN);
-		if (pz_open(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, cbuf, 25, cseg,
+		if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, cbuf, 25, cseg,
 		    len_cmp, checksum) != 0) {
 			log_error_code(PC_ERR_VERIFY);
 			log_msg(LOG_ERR, 0, "Metadata chunk %d, authentication failed", mctx->id);
@@ -429,7 +429,7 @@ meta_check_end(meta_ctx_t *mctx)
 	uint64_t nd, nm;
 
 	if (Read(mctx->comp_fd, end, sizeof (end)) != sizeof (end) ||
-	    pz_end_check(&mctx->pctx->pz_aead, end, &nd, &nm) != 0 ||
+	    pc_pz_end_check(&mctx->pctx->pz_aead, end, &nd, &nm) != 0 ||
 	    nm != (uint64_t)mctx->id) {
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "Metadata stream: end record missing, forged or "

@@ -972,7 +972,7 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 			memset(o, 0, hdr + clen);
 			return (seal_err(ctx, PC_ERR_CRYPTO, "pc_chunk_seal: no random bytes"));
 		}
-		if (aead_subkey(ctx, enc) != 0 || aead_seal(AEAD_XCHACHA20, enc, o + 16, o, hdr,
+		if (aead_subkey(ctx, enc) != 0 || pc_aead_seal(AEAD_XCHACHA20, enc, o + 16, o, hdr,
 		    payload, payload, clen, payload + clen) != 0)
 			goto out;
 		*outlen = hdr + clen + PCK2_TAG;
@@ -1103,7 +1103,7 @@ open_keyed(pc_ctx_t *ctx, const uchar_t *p, size_t hdr, uint64_t clen, uchar_t *
 	int rv = -1;
 
 	if (p[4] == PCK2_VERSION) {
-		if (aead_subkey(ctx, enc) == 0 && aead_open(AEAD_XCHACHA20, enc, p + 16, p, hdr,
+		if (aead_subkey(ctx, enc) == 0 && pc_aead_open(AEAD_XCHACHA20, enc, p + 16, p, hdr,
 		    p + hdr, buf, clen, p + hdr + clen) == 0)
 			rv = 0;
 	} else if (subkeys(ctx, enc, mac) == 0 &&
@@ -1248,7 +1248,7 @@ get_le32(const uchar_t *p)
 
 /*
  * The key-file KDF named in hdr, with the parameters stored there, into
- * dk. Parameters outside scrypt_params_ok() or argon2_params_ok() are
+ * dk. Parameters outside scrypt_params_ok() or pc_argon2_params_ok() are
  * refused before any work. 0, or -1 (unknown KDF, bad cost, failure).
  */
 static int
@@ -1271,7 +1271,7 @@ kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
 		ap.p = hdr[7];
 		ap.m_kib = get_le32(hdr + 8);
 		ap.t = get_le32(hdr + 12);
-		return (argon2id_derive(pw, pwlen, hdr + 16, 16, &ap, dk, 64));
+		return (pc_argon2id_derive(pw, pwlen, hdr + 16, 16, &ap, dk, 64));
 	}
 	return (-1);
 }

@@ -40,15 +40,15 @@ extern "C" {
 #define	AEAD_NONCE_MAX	24
 
 /** Nonce length of alg (24 or 12), or 0 for an unknown algorithm. */
-int aead_nonce_len(int alg);
+int pc_aead_nonce_len(int alg);
 
 /**
  * Encrypt len bytes from in to out (they may be the same buffer) and
- * authenticate them together with ad. nonce is aead_nonce_len(alg) bytes
+ * authenticate them together with ad. nonce is pc_aead_nonce_len(alg) bytes
  * and must never repeat under one key. Returns 0, or -1 on an unknown
  * algorithm or an OpenSSL failure.
  */
-int aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
+int pc_aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
     const uint8_t *ad, size_t adlen, const uint8_t *in, uint8_t *out, size_t len,
     uint8_t tag[AEAD_TAGLEN]);
 
@@ -56,7 +56,7 @@ int aead_seal(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
  * Check tag over ad and the ciphertext, and decrypt in to out. Returns 0,
  * or -1 if the tag does not match (out is then zeroed) or on an error.
  */
-int aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
+int pc_aead_open(int alg, const uint8_t key[AEAD_KEYLEN], const uint8_t *nonce,
     const uint8_t *ad, size_t adlen, const uint8_t *in, uint8_t *out, size_t len,
     const uint8_t tag[AEAD_TAGLEN]);
 
@@ -87,14 +87,14 @@ typedef struct {
 #define	ARGON2_PZ_P	4
 
 /** 1 if kp is within the bounds above, else 0. */
-int argon2_params_ok(const argon2_params_t *kp);
+int pc_argon2_params_ok(const argon2_params_t *kp);
 
 /**
  * Argon2id (RFC 9106, version 0x13) of pw with salt, no secret or
  * associated data, into out (outlen bytes, 4 or more). Refuses a cost
- * outside argon2_params_ok(). Returns 0, or -1 (bad cost, no memory).
+ * outside pc_argon2_params_ok(). Returns 0, or -1 (bad cost, no memory).
  */
-int argon2id_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
+int pc_argon2id_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
     size_t saltlen, const argon2_params_t *kp, uint8_t *out, size_t outlen);
 
 #ifdef	__cplusplus
