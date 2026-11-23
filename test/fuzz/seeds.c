@@ -9,7 +9,9 @@
  * <dir>/manifest/ (an empty manifest, one with a file, a directory and
  * a symlink, and one with every kind of metadata record). A fuzzer that starts from valid inputs reaches the
  * decoders' inner paths far sooner than one that must find the magic
- * bytes first. Run by "make fuzz-build".
+ * bytes first. <dir>/seek_index/ holds seek index bodies for
+ * fuzz_seek_index, built byte by byte (the index has no public API).
+ * Run by "make fuzz-build".
  */
 
 #include <stdio.h>
@@ -235,6 +237,46 @@ manifest_seeds(const char *dir)
 	}
 }
 
+static void
+le64(uint8_t *p, uint64_t v)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+/*
+ * Seek index bodies (DESIGN.md) that fuzz_seek_index's limits accept:
+ * end marker at 2^20, two chunks with 4-byte tags, one member. Then the
+ * same body with chunk 0 at 2^64 - 4, where an "off + 8" bound wraps.
+ */
+static void
+seek_seeds(const char *dir)
+{
+	uint8_t b[40 + 2 * 20 + 18 + 5];
+
+	memset(b, 0, sizeof (b));
+	memcpy(b, "PCSXIDX1", 8);
+	b[8] = 4;
+	le64(b + 16, 1 << 20);
+	le64(b + 24, 2);
+	le64(b + 32, 1);
+	le64(b + 40, 30);		/* chunk 0: file offset, length, tag */
+	le64(b + 48, 600);
+	memcpy(b + 56, "\x01\x02\x03\x04", 4);
+	le64(b + 60, 500);		/* chunk 1 */
+	le64(b + 68, 400);
+	memcpy(b + 76, "\x05\x06\x07\x08", 4);
+	le64(b + 80, 512);		/* member: offset, length, name */
+	le64(b + 88, 300);
+	b[96] = 5;
+	memcpy(b + 98, "a/b.c", 5);
+	put(dir, "two-chunks", -1, b, sizeof (b));
+	le64(b + 40, UINT64_MAX - 3);
+	put(dir, "chunk-offset-wraps", -1, b, sizeof (b));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -248,5 +290,7 @@ main(int argc, char **argv)
 	chunk_seeds(d);
 	snprintf(d, sizeof (d), "%s/manifest", argv[1]);
 	manifest_seeds(d);
+	snprintf(d, sizeof (d), "%s/seek_index", argv[1]);
+	seek_seeds(d);
 	return (0);
 }

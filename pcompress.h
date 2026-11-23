@@ -57,6 +57,7 @@ extern "C" {
 #include <filters/analyzer/analyzer.h>
 #include <meta_stream.h>
 #include <pz_crypt.h>
+#include <seek_index.h>
 
 /** @name File Format Constants */
 /**@{*/
@@ -411,6 +412,7 @@ struct pc_ctx {
 	uchar_t *arc_buf;
 	uint64_t arc_buf_size, arc_buf_pos;
 	int arc_closed, arc_writing;
+	int arc_eof;		/* the extractor reached the end-of-archive blocks */
 	int btype, ctype;
 	int interesting;
 	int min_chunk;
@@ -454,7 +456,25 @@ struct pc_ctx {
 	pz_aead_t pz_aead;	/* its file key */
 	uchar_t pz_hdr[PZ_HDR_CRYPTO];	/* its salt and KDF cost, as stored */
 	uint64_t pz_nmeta;	/* metadata chunks written or skipped so far */
+
+	/* Seek index, compression (-X): pcompress.c, archive/pc_archive.c. */
+	int sx_write;		/* -X given */
+	sx_writer_t *sx_w;	/* this job's index; NULL: none */
+	uint64_t sx_wpos;	/* bytes of the .pz written: header and chunks */
+	uint64_t arc_spos;	/* archive mode: bytes of PAX stream produced */
+	mac_ctx_t sx_mac;	/* encrypted: keyed for the index tag */
+	int sx_mac_ok;
+
+	/* Seek index, decompression (-r, -R). */
+	int sx_mode;		/* 0 off, SX_MODE_RANGE, SX_MODE_MEMBER */
+	const char *sx_member;	/* -R */
+	uint64_t sx_off, sx_len;	/* -r, then the stream range to write */
+	sx_index_t sx_idx;	/* parsed index; sx_body owns its bytes */
+	unsigned char *sx_body;
+	uint64_t sx_first, sx_last;	/* chunks that hold the range */
 };
+#define	SX_MODE_RANGE	1
+#define	SX_MODE_MEMBER	2
 
 /**
  * @brief Per-thread data structure for compression and decompression.
@@ -487,6 +507,7 @@ struct cmp_data {
 	void *data;
 	pthread_t thr;
 	mac_ctx_t chunk_hmac;
+	uint64_t ulen;		/* compress: bytes of input in this chunk */
 	algo_props_t *props;
 	int decompressing;
 	int btype;

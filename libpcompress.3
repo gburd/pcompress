@@ -272,7 +272,13 @@ stream to
 .Fn pc_decompress_fd
 does the reverse and checks every chunk's checksum, or its HMAC if the
 stream is encrypted.
-Neither function closes its descriptors.
+Neither function closes its descriptors, and neither gives the system
+page-cache hints for them
+.Po
+.Fn posix_fadvise ,
+.Fn sync_file_range
+.Pc ;
+it does for files it opens itself.
 Both return 0 on success and \-1 on failure.
 The output of a failed job is incomplete and must not be used.
 .Pp

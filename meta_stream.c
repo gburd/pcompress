@@ -41,8 +41,6 @@
 #include "allocator.h"
 #include "meta_stream.h"
 
-#define	METADATA_CHUNK_SIZE	(3 * 1024 * 1024)
-
 extern int bzip2_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
                int level, uchar_t chdr, int btype, void *data);
 extern int bzip2_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
@@ -65,6 +63,7 @@ struct _meta_ctx {
 	int comp_level;
 	int64_t id;	/* metadata chunk number, -1 before the first: the v12 ordinal */
 	int comp_fd;
+	uint64_t chunksize;	/* decompress: largest data chunk */
 	int running;
 	int delta2_nstrides;
 	int do_compress;
@@ -316,6 +315,13 @@ decompress_data(meta_ctx_t *mctx)
 	type = *(cbuf + 24);
 	cseg = cbuf + METADATA_HDR_SZ;
 	dstlen = origlen;
+	/* A CRC can be recomputed: bound what sizes the output buffer. */
+	if (origlen > METADATA_CHUNK_SIZE) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", invalid length. File corrupt ?",
+		    mctx->id);
+		return (0);
+	}
 
 	/* Version 12: open as metadata chunk mctx->id (see compress_and_write()). */
 	if (pctx->pz_v12) {
@@ -503,6 +509,17 @@ metadata_decompress(void *dat)
 						Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
 						return (NULL);
 					}
+					/* As the main reader bounds it: no wrap below. */
+					if (len_cmp > mctx->chunksize + 256) {
+						log_error_code(PC_ERR_CORRUPT);
+						log_msg(LOG_ERR, 0, "Data chunk length too big "
+						    "before metadata chunk %" PRId64 ". File corrupt ?",
+						    mctx->id);
+						ack = 0;
+						Write(mctx->meta_pipes[SINK_CHANNEL], &ack,
+						    sizeof (ack));
+						return (NULL);
+					}
 					skiplen = len_cmp + pctx->cksum_bytes + pctx->mac_bytes
 					    + CHUNK_FLAG_SZ;
 					int64_t cpos = lseek(mctx->comp_fd, skiplen, SEEK_CUR);
@@ -556,6 +573,15 @@ metadata_decompress(void *dat)
 			U64_P(frombuf) = len_cmp;
 			frombuf += 8;
 			len_cmp = LE64(len_cmp);
+			/* Untrusted: read before the CRC/HMAC is checked. */
+			if (len_cmp > METADATA_CHUNK_SIZE) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", invalid length. "
+				    "File corrupt ?", mctx->id);
+				ack = 0;
+				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+				return (NULL);
+			}
 
 			/*
 			 * Now read the rest of the chunk. This is rest of the header plus the
@@ -610,7 +636,7 @@ meta_ctx_free(meta_ctx_t *mctx)
 }
 
 meta_ctx_t *
-meta_ctx_create(void *pc, int file_version, int comp_fd)
+meta_ctx_create(void *pc, int file_version, int comp_fd, uint64_t chunksize)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)pc;
 	meta_ctx_t *mctx;
@@ -636,6 +662,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 
 	mctx->comp_fd = comp_fd;
+	mctx->chunksize = chunksize;
 	mctx->frombuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	mctx->tobuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	if (!mctx->frombuf || !mctx->tobuf) {

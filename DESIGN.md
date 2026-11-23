@@ -128,6 +128,97 @@ teardown then releases and joins every thread; `cancelled` makes the
 job fail (a cancel is not a worker failure, so `t_errored` stays 0) and
 removes the output file the job created.
 
+## Seek index
+
+`-X` appends an index after the end-of-stream marker, so that `-r`
+(a byte range of a single file) and `-R` (one archive member) decode
+only the chunks they need (`seek_index.c` builds and parses the body;
+`pcompress.c` places, authenticates and uses it).
+
+```
+... chunk*  0[8]  body  tag[t]  len[8]  "PCSEEK01"
+```
+
+`len` (little-endian) is the body's size and `t` is the chunk tag size:
+the checksum size, or the HMAC size when encrypted. The body is
+little-endian:
+
+| field | size |
+|-------|------|
+| magic `PCSXIDX1` | 8 |
+| t, then 7 zero bytes | 8 |
+| file offset of the end-of-stream marker | 8 |
+| chunk count, member count | 8 + 8 |
+| per chunk: file offset of its length field, uncompressed length, its tag (the `t` bytes after its length field) | 16 + t |
+| per member: PAX stream offset, length, u16 name length, name | 18 + n |
+
+**Old readers.** A reader stops at the end-of-stream marker and never
+reads past it, so 4.4 and earlier read a `-X` file byte for byte as
+any other (checked with the 4.4.0 binary, for plain, encrypted and
+archive files, also with the index damaged). This needs no new
+version or flag, and an old reader cannot misread the index because it
+never reads it.
+
+**Authentication.** `sx_tag()` is the one place the tag is defined.
+Without encryption it is the file's chunk checksum over the body.
+With encryption the body is encrypted with the file's cipher, under
+chunk id 2^63, a stream no 32-bit chunk id reaches. The tag is HMAC
+with the file's key over "pcompress seek index\0", the body, and its
+length. A chunk's HMAC input begins with its big-endian length, which
+cannot equal those first bytes, so a chunk cannot pass as an index.
+The body records the end marker's offset, so it cannot be moved onto
+another stream. Each chunk entry holds that chunk's own tag, and a
+random read checks every chunk it decodes against it. That check is
+what binds a chunk to its place: a chunk HMAC covers its length and
+bytes, not its ordinal, so two encrypted chunks of equal length could
+be swapped without it (test_seek.sh does this). When `.pz` encryption
+gets its own nonce domains and binds the ordinal (format version 12),
+`sx_tag()` and `sx_crypt()` move to it and the per-chunk check stays.
+
+**Untrusted.** The reader checks the trailer magic, then bounds `len`
+by the file and by 1 GB, reads the 8 bytes before the body (they must
+be the zero marker), and verifies the tag in constant time over the
+body mapped from the file, so a forged length costs no memory. Only
+then is the body read into memory; its tag is checked again on that
+copy (the file may have changed), and it is decrypted and parsed. `sx_parse()` checks every count against the body's
+size, the end marker against the file, every chunk inside
+[header, marker) in increasing order and decoding to 1 to chunksize
+bytes, and every member inside the stream, in order, with a nonempty
+name and no NUL. `test_seek_index` pins the encoding with a vector
+built independently in Python, and `test/fuzz/fuzz_seek_index.c` fuzzes
+the parser.
+
+**What it serves.**
+
+- Global dedupe (`-G`, and the automatic choice at level > 3) makes a
+  chunk depend on any chunk before it. `-X` turns the automatic choice
+  off and refuses `-G`. Per-chunk dedupe (`-D`, `-F`) and delta (`-E`)
+  stay chunk-local and work.
+- The metadata stream puts entry headers in chunks of their own, so a
+  member would be two streams. `-X` turns it off (as `-T` does). A
+  member is then one range of the PAX stream: its record runs from its
+  header to the end of its padding, written by `write_header()` after it
+  finishes the previous entry. A member read feeds that range to the
+  extractor, followed by two zero blocks, so libarchive sees a
+  one-member archive and applies the usual path checks.
+- Pipe output works, since the index goes at the end. Reading needs a
+  seekable file: `-r`/`-R` on standard input, on a file without the
+  trailer, or on a global-dedupe or metadata-stream file is refused
+  with a message. It never falls back to a full decode.
+- Decoding the chosen chunks runs on the usual workers. `dec_feed()`
+  seeks to each one and starts numbering at the first (the number keys
+  its cipher stream). The writer checks that each chunk decodes to the
+  length the index gives it, and keeps the part inside the range.
+
+Cost, on a c7i.4xlarge, zstd -l6, cold cache: a 1.3 GB tar of /usr/lib
+(21525 files) with `-T -D` against `-T -D -X` grows from 426.6 MB to
+428.6 MB (+0.47%: a 2.0 MB index plus 0.1% from the PAX stream's
+per-member alignment). Time is 25.7 s against 26.0 s, within run-to-run
+noise (25.2 to 26.3 s). Extracting one 20 KB member near the end takes
+0.08 s with the index and 3.0 s without. The index is opt-in because
+`-X` gives up global dedupe and the metadata stream (those make the
+default archive 419.5 MB), not because of its own size.
+
 ## Library and contexts
 
 One `pc_ctx_t` is one job; the struct is private (`pcompress.h`) and
@@ -502,6 +593,41 @@ written or checked), and the chunk-object subkeys after each call.
 Decrypted chunk buffers are not wiped before they are freed: on enwik8
 (8 MB chunks, 16 threads, x86-64) that cost 45 ms on a 385 ms
 decompression, 11%.
+
+## Page cache
+
+A file pcompress reads or writes is used once, front to back, and
+would otherwise fill the page cache and push out what the rest of the
+machine had cached (`utils/pc_cache.c`). For regular files only (never
+pipes): the input is opened with `POSIX_FADV_SEQUENTIAL`, and every
+32 MB consumed is dropped with `POSIX_FADV_DONTNEED`; an archive member
+is dropped one 1 MB map at a time as it is copied. Output pages are
+dirty, and `DONTNEED` ignores dirty pages, so on Linux the writer hands
+each 32 MB window to writeback with `sync_file_range()` and drops it one
+window later, by which time most of it is written. It does so only past
+a tenth of RAM (the kernel's default background writeback threshold): a
+smaller output stays cached, since starting writeback earlier made a
+1.5 GB job wait for the disk (8.2 s against 0.4 s). Elsewhere (FreeBSD,
+illumos) only input is dropped; macOS and Windows have no
+`posix_fadvise()` and get no hints. The output of a global-dedupe
+restore stays cached, since later chunks map it to copy references.
+The hints are always on: they cost no throughput (see the Changelog).
+They apply only to files the library opens: descriptors a caller hands
+to `pc_compress_fd()` or `pc_decompress_fd()` are the caller's to
+manage (`own_fd()`).
+
+Archive extraction with a metadata stream reads the file through two
+descriptors: the main reader, which drops pages behind it, and the
+metadata thread's. Pages the main reader drops are not read again from
+disk. The main reader seeks over metadata chunks without reading them,
+and the metadata thread seeks over data chunks, so the only pages both
+read are those holding chunk length fields, at most one per chunk.
+Measured cold-cache extractions on a c7i.4xlarge (lz4 archives of
+/usr/lib at 1.3 GB, of /usr/share and /usr/include, of 100000 files of
+200 B to 3 KB, and of a mix of those with 60 MB files; chunks from
+64 KB to 64 MB) read 0.5 to 0.7% more from disk than the file's size,
+the same as a build without the hints, while adding half as much to
+the page cache (569 MB against 1049 MB for the 520 MB mixed archive).
 
 ## Portability
 

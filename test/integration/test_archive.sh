@@ -156,6 +156,21 @@ else
 	log_skip "-j filter (no test JPEG)"
 fi
 
+# The tar stream's zero padding after the end-of-archive blocks can land in
+# a chunk of its own; extraction stops at the end blocks and must accept it.
+PDIR="datafiles/padtest"
+wipe "$PDIR"; wipe datafiles/pout; rm -f "$PDIR.pz"
+mkdir -p "$PDIR" datafiles/pout
+seq 1 100000 > "$PDIR/a"; echo hi > "$PDIR/b"
+if $PCOMPRESS -a -c lz4 -s 64k "$PDIR" 2>/dev/null &&
+    $PCOMPRESS -d "$PDIR.pz" datafiles/pout 2>/dev/null &&
+    cmp -s "$PDIR/a" "datafiles/pout/$PDIR/a" && cmp -s "$PDIR/b" "datafiles/pout/$PDIR/b"; then
+	log_pass "archive whose last chunk is tar padding extracts with status 0"
+else
+	log_fail "archive whose last chunk is tar padding"
+fi
+wipe "$PDIR"; wipe datafiles/pout; rm -f "$PDIR.pz"
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

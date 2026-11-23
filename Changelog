@@ -110,6 +110,32 @@ Fix: a failed compress to a named output (pcompress file target, or the
 Fix: archive compression with -T (no metadata stream) hung for good
   when a worker or the writer failed, or when the job was cancelled:
   the archiver thread was never released.
+Performance: compressing or decompressing a regular file no longer
+  fills the page cache: input is read with POSIX_FADV_SEQUENTIAL and
+  dropped every 32 MB, archive members as they are copied, and on Linux
+  output past a tenth of RAM is handed to writeback and dropped. On a
+  c7i.4xlarge (32 GB) compressing a 20 GB file with lz4 used to add
+  28 GB to the page cache and leave 0 to 10 MB of a 1.9 GB file that was
+  cached before; now it adds 70 MB and that file stays cached. Time is
+  unchanged (288 s each way, bound by the gp3 volume). Descriptors
+  passed to pc_compress_fd() and pc_decompress_fd() get no hints: how
+  the caller's files stay cached is the caller's business.
+Fix: a metadata chunk (archive mode) whose stored length exceeded the
+  3 MB metadata buffer overflowed the heap while it was read, before any
+  check (found with ASan); its original length was not bounded either.
+  Both are refused now as corrupt.  So are lengths that wrapped the
+  seek past a chunk back onto itself, where extraction looped for good:
+  a metadata chunk's length as the main reader skips it, and a data
+  chunk's length as the metadata thread skips it.
+CLI: -X appends a seek index to a .pz file, and -d -r offset:length
+  (single file) and -d -R member (archive) then decode only the chunks
+  they need. On a c7i.4xlarge, one 20 KB member at the end of a 1.3 GB
+  archive of /usr/lib comes out in 0.08 s instead of 3.0 s. The index
+  costs 0.47% in size and no measurable time; -X turns off the metadata
+  stream and the automatic global dedupe, and refuses -G. Readers before
+  4.5 read -X files unchanged (the index follows the end-of-stream
+  marker). A random read checks the index's tag (checksum, or HMAC when
+  encrypted) and that each chunk it decodes is the one the index names.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.

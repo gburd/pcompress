@@ -34,12 +34,14 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <limits.h>
 #include <unistd.h>
 #include <libgen.h>
 #include <utils.h>
+#include <utils/pc_cache.h>
 #include <pcompress.h>
 #include <allocator.h>
 #include <rabin_dedup.h>
@@ -72,6 +74,7 @@ struct wdata {
 	int nprocs;
 	int64_t chunksize;
 	pc_ctx_t *pctx;
+	pc_cache_t *wcache;	/* page-cache hints for wfd */
 };
 
 /*
@@ -154,6 +157,9 @@ pc_getopt(struct pc_getopt *g, int argc, char *argv[], const char *spec)
 }
 
 static void * writer_thread(void *dat);
+static int sx_tag(pc_ctx_t *pctx, const uchar_t *body, uint64_t len, uchar_t *out);
+static int sx_crypt(pc_ctx_t *pctx, uchar_t *body, uint64_t len);
+static int sx_taglen(pc_ctx_t *pctx);
 static int init_algo(pc_ctx_t *pctx, const char *algo, int bail);
 extern uint32_t lzma_crc32(const uint8_t *buf, uint64_t size, uint32_t crc);
 
@@ -190,6 +196,7 @@ usage(pc_ctx_t *pctx)
 "       -t <number>\n"
 "                Sets the number of compression threads. Default: core count.\n"
 "       -T       Disable separate metadata stream.\n"
+"       -X       Append a seek index for -r/-R (implies -T; not with -G).\n"
 "       -S <chunk checksum>\n"
 "                The chunk verification checksum. Default: BLAKE256. Others are: CRC64, SHA256,\n"
 "                SHA512, KECCAK256, KECCAK512, BLAKE256, BLAKE512.\n"
@@ -213,12 +220,18 @@ usage(pc_ctx_t *pctx)
 "                      chunks may not necessarily produce better compression.\n"
 "       -p       Make Pcompress work in streaming mode. Input is stdin, output is stdout.\n\n"
 "       <target file>\n"
-"                Pathname of the compressed file to be created or '-' for stdout.\n\n"
+"                Pathname of the compressed file to be created or '-' for stdout.\n\n",
+	    UTILITY_VERSION, LICENSE_STRING, pctx->exec_name, pctx->exec_name);
+	fprintf(stderr,
 "    Decompression, Listing and Archive extraction\n"
 "    ---------------------------------------------\n"
 "       %s <-d|-i>  [-m] [-K] <compressed file or '-'> [<target file or directory>]\n\n"
 "       -d        Extract archive to target dir or current dir.\n"
 "       -i        Only list contents of the archive, do not extract.\n\n"
+"       -r <offset:length>\n"
+"                 Only write length bytes from offset of a single file (-X files).\n"
+"       -R <member>\n"
+"                 Only extract this member of an archive (-X files).\n"
 "       -m        Enable restoring *all* permissions, ACLs, Extended Attributes etc.\n"
 "                 Equivalent to the '-p' option in tar.\n"
 "       -K        Do not overwrite newer files.\n"
@@ -232,7 +245,7 @@ usage(pc_ctx_t *pctx)
 "                 Default output name if omitted: <input filename>.out\n\n"
 "                 If Archiving was done then this should be the name of a directory into which\n"
 "                 extracted files are restored. Default if omitted: Current directory.\n\n",
-	    UTILITY_VERSION, LICENSE_STRING, pctx->exec_name, pctx->exec_name, pctx->exec_name);
+	    pctx->exec_name);
 	fprintf(stderr,
 "    Encryption\n"
 "    ----------\n"
@@ -1856,7 +1869,7 @@ dec_archive_setup(pc_ctx_t *pctx, int compfd, int compfd2, const char *to_filena
 		/*
 		 * Finally create the metadata context.
 		 */
-		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2);
+		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd2, chunksize);
 		if (pctx->meta_ctx == NULL)
 			return (-1);	/* compfd2 is closed by the caller */
 	}
@@ -2074,6 +2087,13 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 			if (dec_read_len(pctx, compfd, &tdat->len_cmp_be) != 0)
 				return (-1);
 			tdat->len_cmp_be = LE64(tdat->len_cmp_be);
+			/* Untrusted, and the seek below must go forward. */
+			if (tdat->len_cmp_be > METADATA_CHUNK_SIZE) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk length too big "
+				    "after chunk %" PRIu64 ". File corrupt ?", pctx->chunk_num);
+				return (-1);
+			}
 		}
 
 		if (!tdat->compressed_chunk && !is_meta) {
@@ -2137,6 +2157,213 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 	return (0);
 }
 
+/* Equal without an early exit: the index tag is a MAC. */
+static int
+sx_tag_eq(const uchar_t *a, const uchar_t *b, int n)
+{
+	uchar_t d = 0;
+	int i;
+
+	for (i = 0; i < n; i++)
+		d |= a[i] ^ b[i];
+	return (d == 0);
+}
+
+/* Read len bytes at file offset off; -1 on a short read. */
+static int
+sx_pread(int fd, uint64_t off, void *buf, uint64_t len)
+{
+	if (lseek(fd, (off_t)off, SEEK_SET) == (off_t)-1 ||
+	    Read(fd, buf, len) != (int64_t)len)
+		return (-1);
+	return (0);
+}
+
+/*
+ * Check the index tag (t bytes, want) against the body as it lies in
+ * the file, mapped read-only: a forged length costs address space, not
+ * memory, until the tag matches. 0 if it does.
+ */
+static int
+sx_verify_mapped(pc_ctx_t *pctx, int fd, uint64_t body_off, uint64_t len,
+    const uchar_t *want, int t)
+{
+	uint64_t adj = body_off % (uint64_t)pctx->pagesize;
+	uchar_t tag[CKSUM_MAX_BYTES], *map;
+	int ok;
+
+	map = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, fd, (off_t)(body_off - adj));
+	if (map == MAP_FAILED) {
+		log_msg(LOG_ERR, 1, "Cannot map the seek index: ");
+		return (-1);
+	}
+	ok = sx_tag(pctx, map + adj, len, tag) == t && sx_tag_eq(tag, want, t);
+	munmap(map, len + adj);
+	return (ok ? 0 : -1);
+}
+
+/*
+ * Random reads (-r, -R): find the seek index at the end of the file,
+ * check its tag, decrypt and parse it into pctx->sx_idx. hdr_end is
+ * where the chunks start (just after the verified header); the key must
+ * still be set up. Every value from the file is checked before use:
+ * the trailer's length against the file, the tag before anything in the
+ * body is believed, then the body itself (sx_parse()).
+ */
+static int
+sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
+{
+	uchar_t tr[CKSUM_MAX_BYTES + 8 + SX_MAGIC_SZ], tag[CKSUM_MAX_BYTES];
+	int t = sx_taglen(pctx), trl = t + 8 + SX_MAGIC_SZ;
+	uint64_t len, body_off, zero;
+	sx_limits_t lim;
+	struct stat sb;
+
+	if (fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode) ||
+	    (uint64_t)sb.st_size < hdr_end + 8 + trl ||
+	    sx_pread(fd, sb.st_size - trl, tr, trl) != 0 ||
+	    memcmp(tr + t + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ) != 0) {
+		log_error_code(PC_ERR_FORMAT);
+		log_msg(LOG_ERR, 0, "No seek index in this file: random reads need "
+		    "a file compressed with -X.");
+		return (-1);
+	}
+	memcpy(&len, tr + t, 8);
+	len = LE64(len);
+	if (len < SX_BODY_MIN || len > SX_BODY_MAX ||
+	    len > (uint64_t)sb.st_size - trl - 8 - hdr_end) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Invalid seek index length. File corrupt ?");
+		return (-1);
+	}
+	body_off = sb.st_size - trl - len;
+	if (pctx->encrypt_type) {
+		if (hmac_init(&pctx->sx_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1)
+			return (-1);
+		pctx->sx_mac_ok = 1;
+	}
+	/*
+	 * The tag is checked in the file before the body is read into
+	 * memory, then again on the copy, which is what is parsed: the file
+	 * may change in between.
+	 */
+	if (sx_pread(fd, body_off - 8, &zero, 8) != 0 || zero != 0 ||
+	    sx_verify_mapped(pctx, fd, body_off, len, tr, t) != 0) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
+		return (-1);
+	}
+	if ((pctx->sx_body = pc_malloc(len)) == NULL) {
+		log_error_code(PC_ERR_NOMEM);
+		log_msg(LOG_ERR, 0, "Out of memory");
+		return (-1);
+	}
+	if (sx_pread(fd, body_off, pctx->sx_body, len) != 0 ||
+	    sx_tag(pctx, pctx->sx_body, len, tag) != t || !sx_tag_eq(tag, tr, t)) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
+		return (-1);
+	}
+	lim.file_lo = hdr_end;
+	lim.file_hi = body_off - 8;
+	lim.chunksize = chunksize;
+	lim.taglen = t;
+	if (sx_crypt(pctx, pctx->sx_body, len) != 0 ||
+	    sx_parse(pctx->sx_body, len, &lim, &pctx->sx_idx) != 0) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Invalid seek index. File corrupt ?");
+		return (-1);
+	}
+	return (0);
+}
+
+/*
+ * Turn -r or -R into a stream range and the chunks that hold it. -r is
+ * for single files, -R for archives; a range that starts past the end
+ * is an error, one that runs past the end is cut there.
+ */
+static int
+sx_resolve(pc_ctx_t *pctx, int archive)
+{
+	sx_index_t *x = &pctx->sx_idx;
+
+	if (archive != (pctx->sx_mode == SX_MODE_MEMBER)) {
+		log_error_code(PC_ERR_ARGS);
+		log_msg(LOG_ERR, 0, archive ? "Use -R <member> to read from an archive." :
+		    "Use -r <offset:length> to read from a single file.");
+		return (-1);
+	}
+	if (archive) {
+		if (!sx_find_member(x, pctx->sx_member, &pctx->sx_off, &pctx->sx_len)) {
+			log_error_code(PC_ERR_ARGS);
+			log_msg(LOG_ERR, 0, "%s: no such member in the archive.",
+			    pctx->sx_member);
+			return (-1);
+		}
+	} else {
+		if (pctx->sx_off >= x->total) {
+			log_error_code(PC_ERR_ARGS);
+			log_msg(LOG_ERR, 0, "Range starts at %" PRIu64 ", past the end (%"
+			    PRIu64 " bytes).", pctx->sx_off, x->total);
+			return (-1);
+		}
+		if (pctx->sx_len > x->total - pctx->sx_off)
+			pctx->sx_len = x->total - pctx->sx_off;
+	}
+	pctx->sx_first = sx_chunk_of(x, pctx->sx_off);
+	pctx->sx_last = sx_chunk_of(x, pctx->sx_off + pctx->sx_len - 1);
+	return (0);
+}
+
+/*
+ * Before reading chunk i of a random read: seek to where the index puts
+ * it. After reading it: its verification field must be the one the index
+ * holds, so the authenticated index pins every chunk it hands out.
+ */
+static int
+sx_check_chunk(pc_ctx_t *pctx, const struct cmp_data *tdat)
+{
+	if (sx_tag_eq(tdat->compressed_chunk, sx_chunk_tag(&pctx->sx_idx, tdat->id),
+	    pctx->sx_idx.taglen))
+		return (0);
+	log_error_code(PC_ERR_VERIFY);
+	log_msg(LOG_ERR, 0, "Chunk %" PRIu64 " does not match the seek index. File corrupt ?",
+	    tdat->id);
+	return (-1);
+}
+
+/* Release a job's seek index state, either direction. */
+static void
+sx_done(pc_ctx_t *pctx)
+{
+	if (pctx->sx_w != NULL) {
+		sx_writer_free(pctx->sx_w);
+		pc_mfree(pctx->sx_w);
+		pctx->sx_w = NULL;
+	}
+	sx_index_free(&pctx->sx_idx);
+	pc_mfree(pctx->sx_body);
+	pctx->sx_body = NULL;
+	if (pctx->sx_mac_ok) {
+		hmac_cleanup(&pctx->sx_mac);
+		pctx->sx_mac_ok = 0;
+	}
+}
+
+/*
+ * fd, or -1 if it is one the caller of pc_compress_fd()/pc_decompress_fd()
+ * passed in: page-cache hints change how the caller's file stays cached,
+ * which is the caller's business, so they apply only to files the
+ * library opened itself.
+ */
+static int
+own_fd(const pc_ctx_t *pctx, int fd)
+{
+	if (fd >= 0 && (fd == pctx->in_fd || fd == pctx->out_fd))
+		return (-1);
+	return (fd);
+}
+
 /*
  * Report progress after the calling thread hands out a chunk: in bytes of
  * input so far, and what the writer has written. If the pc_set_progress()
@@ -2172,14 +2399,17 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
     uint32_t *np)
 {
 	struct cmp_data *tdat;
+	pc_cache_t rcache;
 	uint64_t in = 0;
 	uint32_t p;
 	int rv;
 
-	pctx->chunk_num = 0;
+	/* Random reads start at the range's first chunk: its id keys its cipher. */
+	pctx->chunk_num = pctx->sx_mode ? pctx->sx_first : 0;
 	*np = 0;
 	if (j->nprocs == 0)
 		return (0);
+	pc_cache_open(&rcache, own_fd(pctx, compfd), 0);
 	for (;;) {
 		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
 			return (0);
@@ -2201,16 +2431,34 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 			}
 			tdat->id = pctx->chunk_num;
 			if (tdat->rctx) tdat->rctx->id = tdat->id;
+			if (pctx->sx_mode) {
+				if (tdat->id > pctx->sx_last)
+					return (0);	/* past the range: the end */
+				if (lseek(compfd, (off_t)sx_chunk_file_off(&pctx->sx_idx,
+				    tdat->id), SEEK_SET) == (off_t)-1) {
+					log_msg(LOG_ERR, 1, "Seek: ");
+					return (-1);
+				}
+			}
 			rv = dec_read_chunk(pctx, compfd, tdat, j->h->chunksize,
 			    j->compressed_chunksize);
 			if (rv == -1)
 				return (-1);
-			if (rv == 1)
-				return (0);
+			if (rv == 1) {
+				if (!pctx->sx_mode)
+					return (0);
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Chunk %" PRIu64 " is missing. File corrupt ?",
+				    tdat->id);
+				return (-1);
+			}
 			if (rv == 2)
 				break;
+			if (pctx->sx_mode && sx_check_chunk(pctx, tdat) != 0)
+				return (-1);
 			/* The length field and the chunk; the worker changes rbytes. */
 			in += sizeof (uint64_t) + (uint64_t)tdat->rbytes;
+			pc_cache_step(&rcache);
 			Sem_Post(&tdat->start_sem);
 			++(pctx->chunk_num);
 			if (report_progress(pctx, in))
@@ -2294,6 +2542,33 @@ dec_archive_done(pc_ctx_t *pctx, int err)
 }
 
 /*
+ * A random read (-r, -R), after the header is verified and before any
+ * chunk is read: refuse what the index cannot serve, then load it and
+ * find the chunks the range needs. dec_feed() then reads only those.
+ */
+static int
+dec_seek_setup(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
+{
+	off_t hdr_end;
+
+	if (pctx->pipe_mode) {
+		log_error_code(PC_ERR_ARGS);
+		log_msg(LOG_ERR, 0, "Random reads need a compressed file, not a stream.");
+		return (-1);
+	}
+	if (pctx->enable_rabin_global || pctx->meta_stream) {
+		log_error_code(PC_ERR_FORMAT);
+		log_msg(LOG_ERR, 0, "No seek index in this file: random reads need "
+		    "a file compressed with -X.");
+		return (-1);
+	}
+	if ((hdr_end = lseek(compfd, 0, SEEK_CUR)) == (off_t)-1 ||
+	    sx_load(pctx, compfd, (uint64_t)hdr_end, h->chunksize) != 0)
+		return (-1);
+	return (sx_resolve(pctx, (h->flags & FLAG_ARCHIVE) != 0));
+}
+
+/*
  * Decompress filename (or the job's input stream) to to_filename (or the
  * output stream), or extract an archive into the to_filename directory.
  * Reads and verifies the header, starts one worker per thread and a
@@ -2306,6 +2581,7 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	char algorithm[ALGO_SZ];
 	struct stat sbuf;
 	struct wdata w;
+	pc_cache_t wcache;
 	struct dec_hdr h;
 	struct dec_job job;
 	int compfd = -1, compfd2 = -1, uncompfd = -1, own_uncompfd = 0, err = 0;
@@ -2380,6 +2656,9 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	} else if (h.version >= 5 && dec_header_crc(pctx, compfd, &h) != 0) {
 		UNCOMP_BAIL;
 	}
+	if (pctx->sx_mode && dec_seek_setup(pctx, compfd, &h) != 0) {
+		UNCOMP_BAIL;
+	}
 
 	if (h.flags & FLAG_ARCHIVE) {
 		uncompfd = -1;
@@ -2451,6 +2730,13 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		w.nprocs = nprocs;
 		w.chunksize = h.chunksize;
 		w.pctx = pctx;
+		/*
+		 * Global dedupe restores references from the output file
+		 * (dedupe_decompress() maps it): its pages stay cached.
+		 */
+		pc_cache_open(&wcache, pctx->enable_rabin_global ? -1 :
+		    own_fd(pctx, uncompfd), 1);
+		w.wcache = &wcache;
 		if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
 			UNCOMP_BAIL;
@@ -2475,6 +2761,18 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			Sem_Wait(&dary[i]->write_done_sem);
 			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) break;
 		}
+	}
+	/*
+	 * One archive member is a PAX fragment: end it as an archive ends
+	 * (two zero blocks), so the extractor stops after it. Every chunk is
+	 * written, so the writer thread no longer hands buffers over.
+	 */
+	if (pctx->sx_mode && pctx->archive_mode &&
+	    !__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED)) {
+		static uchar_t eoa[1024];
+
+		(void) archiver_write(pctx, eoa, sizeof (eoa));
+		archiver_close(pctx);
 	}
 uncomp_done:
 	/*
@@ -2533,6 +2831,7 @@ uncomp_done:
 	if (compfd2 != -1) close(compfd2);
 
 	if (!pctx->hide_cmp_stats) show_compression_stats(pctx);
+	sx_done(pctx);
 
 	return (err);
 }
@@ -2794,12 +3093,135 @@ plain_index:
 	goto redo;
 }
 
+/*
+ * The seek index tag: what authenticates the index body (as stored, so
+ * encrypted when the file is) into out. Encrypted files: HMAC with the
+ * file's key over a domain string, the body and its length. A chunk's
+ * HMAC input starts with its 8-byte big-endian length, which is far
+ * below the domain string's first 8 bytes read as a number, so a chunk
+ * and its HMAC can never pass as an index. Unencrypted files: the
+ * file's chunk checksum over the body, which begins with its own magic.
+ * Returns the tag length, or -1.
+ *
+ * NB: this is the only place the index tag is defined. A new encryption
+ * scheme (an AEAD) replaces this function and the body cipher in
+ * sx_crypt(), and nothing else.
+ */
+static int
+sx_tag(pc_ctx_t *pctx, const uchar_t *body, uint64_t len, uchar_t *out)
+{
+	static const char domain[] = "pcompress seek index";
+	uchar_t tag[CKSUM_MAX_BYTES];
+	unsigned int hlen;
+	uint64_t le = LE64(len);
+
+	if (!pctx->encrypt_type) {
+		if (compute_checksum(tag, pctx->cksum, (uchar_t *)body, len, 0, 0) != 0)
+			return (-1);
+		serialize_checksum(tag, out, pctx->cksum_bytes);
+		return (pctx->cksum_bytes);
+	}
+	if (!pctx->sx_mac_ok || hmac_reinit(&pctx->sx_mac) != 0)
+		return (-1);
+	hmac_update(&pctx->sx_mac, (uchar_t *)domain, sizeof (domain));
+	hmac_update(&pctx->sx_mac, (uchar_t *)body, len);
+	hmac_update(&pctx->sx_mac, (uchar_t *)&le, sizeof (le));
+	hmac_final(&pctx->sx_mac, tag, &hlen);
+	serialize_checksum(tag, out, pctx->mac_bytes);
+	return (pctx->mac_bytes);
+}
+
+/*
+ * Encrypt or decrypt the index body in place with the file's cipher, in
+ * a stream of its own: chunk ids are 32-bit, SX_NONCE_ID is 2^63.
+ */
+static int
+sx_crypt(pc_ctx_t *pctx, uchar_t *body, uint64_t len)
+{
+	if (!pctx->encrypt_type)
+		return (0);
+	return (crypto_buf(&(pctx->crypto_ctx), body, body, len, SX_NONCE_ID));
+}
+
+/* Bytes of each chunk's verification field the index stores. */
+static int
+sx_taglen(pc_ctx_t *pctx)
+{
+	return (pctx->encrypt_type ? pctx->mac_bytes : pctx->cksum_bytes);
+}
+
+/*
+ * Compression with -X: after the end-of-stream marker, append the index
+ * body (encrypted with the file), its tag, its length and the trailer
+ * magic. The file is complete and valid without these bytes; readers
+ * before 4.5 stop at the marker and never see them.
+ */
+static int
+sx_write_index(pc_ctx_t *pctx, int compfd)
+{
+	uchar_t trailer[CKSUM_MAX_BYTES + 8 + SX_MAGIC_SZ], *body;
+	uint64_t len, le;
+	int t, rv = -1;
+
+	body = sx_body(pctx->sx_w, pctx->sx_wpos, &len);
+	if (body == NULL) {
+		log_error_code(PC_ERR_NOMEM);
+		log_msg(LOG_ERR, 0, "Out of memory building the seek index.");
+		return (-1);
+	}
+	if (sx_crypt(pctx, body, len) == 0 && (t = sx_tag(pctx, body, len, trailer)) >= 0) {
+		le = LE64(len);
+		memcpy(trailer + t, &le, 8);
+		memcpy(trailer + t + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ);
+		if (Write(compfd, body, len) == (int64_t)len &&
+		    Write(compfd, trailer, t + 8 + SX_MAGIC_SZ) == t + 8 + SX_MAGIC_SZ)
+			rv = 0;
+		else
+			log_msg(LOG_ERR, 1, "Write ");
+	} else {
+		log_msg(LOG_ERR, 0, "Cannot compute the seek index tag.");
+	}
+	pc_mfree(body);
+	return (rv);
+}
+
+/*
+ * A random read: the part of a decoded chunk that lies in the requested
+ * stream range, as an offset into the chunk (*skip) and a length (0 if
+ * none of it does) in *wlen. The chunk must decode to the length the
+ * index gives it, or the offsets of the range would be wrong: -1 if it
+ * does not (the index of an unencrypted file can be forged).
+ */
+static int
+sx_clip(pc_ctx_t *pctx, const struct cmp_data *tdat, uint64_t *skip, uint64_t *wlen)
+{
+	uint64_t start = pctx->sx_idx.uoff[tdat->id], end = start + tdat->len_cmp;
+	uint64_t lo = pctx->sx_off, hi = pctx->sx_off + pctx->sx_len;
+
+	if (end != pctx->sx_idx.uoff[tdat->id + 1]) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Chunk %" PRIu64 " decodes to %" PRIu64 " bytes, the seek "
+		    "index says %" PRIu64 ". File corrupt ?", tdat->id, tdat->len_cmp,
+		    pctx->sx_idx.uoff[tdat->id + 1] - start);
+		return (-1);
+	}
+	if (lo < start)
+		lo = start;
+	if (hi > end)
+		hi = end;
+	*skip = lo - start;
+	*wlen = lo < hi ? hi - lo : 0;
+	return (0);
+}
+
 static void *
 writer_thread(void *dat) {
 	int p;
 	struct wdata *w = (struct wdata *)dat;
 	struct cmp_data *tdat;
 	int64_t wbytes;
+	uint64_t wlen, skip;
+	uchar_t *wbuf;
 	pc_ctx_t *pctx;
 
 	pctx = w->pctx;
@@ -2825,19 +3247,39 @@ repeat:
 			pctx->avg_chunk += tdat->len_cmp;
 		}
 
-		if (pctx->archive_mode && tdat->decompressing) {
-			wbytes = archiver_write(pctx, tdat->cmp_seg, tdat->len_cmp);
+		/* What to write: all of it, or a random read's part of it. */
+		wbuf = tdat->cmp_seg;
+		wlen = tdat->len_cmp;
+		if (pctx->sx_mode && tdat->decompressing) {
+			if (sx_clip(pctx, tdat, &skip, &wlen) != 0) {
+				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+				goto do_cancel;
+			}
+			wbuf += skip;
+		}
+		if (wlen == 0) {
+			wbytes = 0;	/* a random read: nothing of the range here */
+		} else if (pctx->archive_mode && tdat->decompressing) {
+			wbytes = archiver_write(pctx, wbuf, wlen);
 		} else {
 			pthread_mutex_lock(&pctx->write_mutex);
-			wbytes = Write(w->wfd, tdat->cmp_seg, tdat->len_cmp);
+			wbytes = Write(w->wfd, wbuf, wlen);
+			pc_cache_step(w->wcache);
 			pthread_mutex_unlock(&pctx->write_mutex);
+			if (pctx->sx_w != NULL && !tdat->decompressing &&
+			    wbytes == (int64_t)wlen) {
+				/* The tag: the chunk's digest or HMAC, after its length. */
+				sx_add_chunk(pctx->sx_w, pctx->sx_wpos, tdat->ulen,
+				    tdat->cmp_seg + COMPRESSED_CHUNKSZ);
+				pctx->sx_wpos += wbytes;
+			}
 		}
-		if (pctx->archive_temp_fd != -1 && wbytes == tdat->len_cmp) {
-			wbytes = Write(pctx->archive_temp_fd, tdat->cmp_seg, tdat->len_cmp);
+		if (pctx->archive_temp_fd != -1 && wbytes == (int64_t)wlen) {
+			wbytes = Write(pctx->archive_temp_fd, wbuf, wlen);
 		}
-		if (unlikely(wbytes != tdat->len_cmp)) {
+		if (unlikely(wbytes != (int64_t)wlen)) {
 			log_msg(LOG_ERR, 1, "Chunk Write (expected: %" PRIu64
-			    ", written: %" PRId64 ") : ", tdat->len_cmp, wbytes);
+			    ", written: %" PRId64 ") : ", wlen, wbytes);
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 do_cancel:
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
@@ -2913,6 +3355,7 @@ write_file_header(pc_ctx_t *pctx, int compfd, unsigned short flags, uint64_t chu
 		log_msg(LOG_ERR, 1, "Write ");
 		return (-1);
 	}
+	pctx->sx_wpos = pos - hdr;
 	return (0);
 }
 
@@ -2927,6 +3370,7 @@ static int
 start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int level)
 {
 	struct wdata w;
+	pc_cache_t wcache, rcache;
 	char tmpfile1[MAXPATHLEN], tmpdir[MAXPATHLEN];
 	char to_filename[MAXPATHLEN];
 	uint64_t compressed_chunksize, file_offset;
@@ -3328,7 +3772,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	 * metadata chunks.
 	 */
 	if (pctx->meta_stream) {
-		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd);
+		pctx->meta_ctx = meta_ctx_create(pctx, VERSION, compfd, chunksize);
 		if (pctx->meta_ctx == NULL) {
 			COMP_BAIL;
 		}
@@ -3377,10 +3821,26 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		Sem_Post(&(dary[0]->index_sem));
 	}
 
+	/*
+	 * -X: the index of this job, filled by the writer and archiver
+	 * threads, so it is set up before either starts.
+	 */
+	pctx->arc_spos = 0;
+	if (pctx->sx_write) {
+		if ((pctx->sx_w = pc_malloc(sizeof (sx_writer_t))) == NULL) {
+			log_error_code(PC_ERR_NOMEM);
+			log_msg(LOG_ERR, 0, "Out of memory");
+			COMP_BAIL;
+		}
+		sx_writer_init(pctx->sx_w, sx_taglen(pctx));
+	}
+
 	w.dary = dary;
 	w.wfd = compfd;
 	w.nprocs = nprocs;
 	w.pctx = pctx;
+	pc_cache_open(&wcache, own_fd(pctx, compfd), 1);
+	w.wcache = &wcache;
 	if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 		log_msg(LOG_ERR, 1, "Error in thread creation: ");
 		COMP_BAIL;
@@ -3420,6 +3880,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	 */
 	file_offset = 0;
 	pctx->interesting = 0;
+	pc_cache_open(&rcache, pctx->archive_mode ? -1 : own_fd(pctx, uncompfd), 0);
 	if (pctx->enable_rabin_split) {
 		rctx = create_dedupe_context(chunksize, 0, pctx->rab_blk_size, pctx->algo, &props,
 		    pctx->enable_delta_encode, pctx->enable_fixed_scan, VERSION, COMPRESS, 0, NULL,
@@ -3490,6 +3951,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				cread_buf = tmp;
 			}
 			file_offset += tdat->rbytes;
+			tdat->ulen = tdat->rbytes;
 
 			if (rbytes < chunksize) {
 				if (rbytes < 0) {
@@ -3528,6 +3990,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 				else
 					rbytes = Read(uncompfd, cread_buf, chunksize);
 			}
+			pc_cache_step(&rcache);
 		}
 	}
 
@@ -3596,6 +4059,8 @@ comp_done:
 		if (Write(compfd, &compressed_chunksize,
 		    sizeof (compressed_chunksize)) < 0) {
 			log_msg(LOG_ERR, 1, "Write ");
+			err = 1;
+		} else if (pctx->sx_w != NULL && sx_write_index(pctx, compfd) != 0) {
 			err = 1;
 		}
 		/* Version 12: the authenticated chunk counts, so truncation shows. */
@@ -3687,6 +4152,7 @@ comp_done:
 	}
 	if (!pctx->hide_cmp_stats) show_compression_stats(pctx);
 	pctx->_stats_func(!pctx->hide_cmp_stats);
+	sx_done(pctx);
 
 	return (err);
 }
@@ -3988,7 +4454,8 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 				pctx->meta_stream = 0;
 		}
 
-		if (pctx->pipe_mode)
+		/* Seekable members are byte ranges of one PAX stream (DESIGN.md). */
+		if (pctx->pipe_mode || pctx->sx_write)
 			pctx->meta_stream = 0;
 
 		/*
@@ -4025,7 +4492,7 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 				 * "pcompress -p -c <algo> -l<n>" stream would be
 				 * undecodable via "pcompress -d -".
 				 */
-				if (!pctx->pipe_mode && !pctx->pipe_out &&
+				if (!pctx->pipe_mode && !pctx->pipe_out && !pctx->sx_write &&
 				    pctx->chunksize >= RAB_MIN_CHUNK_SIZE_GLOBAL)
 					pctx->enable_rabin_global = 1;
 				if (pctx->chunksize >= RAB_MIN_CHUNK_SIZE) {
@@ -4067,6 +4534,70 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 	return (0);
 }
 
+/*
+ * -r offset:length (decimal, or with a k/m/g suffix as -s takes).
+ * length may be omitted ("offset:" or "offset"): to the end.
+ */
+static int
+sx_parse_range(pc_ctx_t *pctx, const char *arg)
+{
+	char buf[64], *colon;
+	int64_t v;
+
+	if (strlen(arg) >= sizeof (buf)) {
+		log_msg(LOG_ERR, 0, "Invalid range %s", arg);
+		return (-1);
+	}
+	strcpy(buf, arg);
+	pctx->sx_mode = SX_MODE_RANGE;
+	pctx->sx_len = UINT64_MAX;
+	if ((colon = strchr(buf, ':')) != NULL) {
+		*colon = '\0';
+		if (colon[1] != '\0') {
+			if (parse_numeric(&v, colon + 1) != 0 || v <= 0) {
+				log_msg(LOG_ERR, 0, "Invalid range length in %s", arg);
+				return (-1);
+			}
+			pctx->sx_len = (uint64_t)v;
+		}
+	}
+	if (buf[0] == '\0' || parse_numeric(&v, buf) != 0 || v < 0) {
+		log_msg(LOG_ERR, 0, "Invalid range offset in %s", arg);
+		return (-1);
+	}
+	pctx->sx_off = (uint64_t)v;
+	return (0);
+}
+
+/*
+ * The seek index options against the rest: -X only when compressing and
+ * not with global dedupe (a chunk would need every chunk before it),
+ * -r/-R only when decompressing a file (the index is at its end).
+ */
+static int
+sx_check_options(pc_ctx_t *pctx)
+{
+	if (pctx->sx_write && !pctx->do_compress) {
+		log_msg(LOG_ERR, 0, "-X (seek index) is only for compression.");
+		return (-1);
+	}
+	if (pctx->sx_write && pctx->enable_rabin_global) {
+		log_msg(LOG_ERR, 0, "-X cannot be combined with -G: a globally "
+		    "deduplicated chunk can refer to every chunk before it.");
+		return (-1);
+	}
+	if (pctx->sx_mode && !pctx->do_uncompress) {
+		log_msg(LOG_ERR, 0, "-r and -R are only for decompression.");
+		return (-1);
+	}
+	if (pctx->sx_mode && (pctx->pipe_mode || pctx->list_mode)) {
+		log_msg(LOG_ERR, 0, "-r and -R need a compressed file, not a "
+		    "stream, and cannot be used with -i.");
+		return (-1);
+	}
+	return (0);
+}
+
 static int
 init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 {
@@ -4099,7 +4630,7 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 		log_msg(LOG_ERR, 0, "Out of memory");
 		return (1);
 	}
-	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhV")) != -1) {
+	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhVXr:R:")) != -1) {
 		char *oarg = g.arg;
 		int ovr;
 		int64_t chunksize;
@@ -4279,6 +4810,27 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->meta_stream = -1;
 			break;
 
+		    case 'X':
+			pctx->sx_write = 1;
+			break;
+
+		    case 'r':
+		    case 'R':
+			/* One range or member per job: a second one would replace the first. */
+			if (pctx->sx_mode != 0) {
+				log_msg(LOG_ERR, 0, "Give one -r or one -R, not several.");
+				err = 1;
+				goto opt_done;
+			}
+			if (opt == 'R') {
+				pctx->sx_mode = SX_MODE_MEMBER;
+				pctx->sx_member = oarg;
+			} else if (sx_parse_range(pctx, oarg) != 0) {
+				err = 1;
+				goto opt_done;
+			}
+			break;
+
 		   case 'n':
 			pctx->enable_archive_sort = -1;
 			break;
@@ -4312,6 +4864,8 @@ opt_done:
 		log_msg(LOG_ERR, 0, "'-a' flag is only for archive creation.");
 		return (1);
 	}
+	if (sx_check_options(pctx) != 0)
+		return (1);
 
 	if (pctx->archive_mode && pctx->pipe_mode) {
 		log_msg(LOG_ERR, 0, "Full pipeline mode is meaningless with archiver.");

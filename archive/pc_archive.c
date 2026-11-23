@@ -57,6 +57,7 @@
 #include <phash/standard.h>
 #include "archive/pc_archive.h"
 #include "meta_stream.h"
+#include "utils/pc_cache.h"
 
 #include <ftw.h>
 #include <locale.h>
@@ -252,7 +253,7 @@ creat_write_callback(struct archive *arc, void *ctx, const void *buf, size_t len
 			break;
 		}
 	}
-
+	pctx->arc_spos += len - remaining;	/* only this thread writes it */
 	return (len - remaining);
 }
 
@@ -390,6 +391,20 @@ archiver_write(void *ctx, void *buf, uint64_t count)
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
 	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
+		uchar_t *b = (uchar_t *)buf;
+		uint64_t i;
+
+		/*
+		 * libarchive stops reading at the end-of-archive blocks, but the
+		 * tar stream goes on with zero padding to its record size, which
+		 * can fill a later chunk. Zeros after a clean end are that
+		 * padding: take them. Anything else is data the extractor never
+		 * read.
+		 */
+		for (i = 0; pctx->arc_eof && i < count && b[i] == 0; i++)
+			;
+		if (pctx->arc_eof && i == count)
+			return ((int64_t)count);
 		log_msg(LOG_WARN, 0, "Archive extractor closed unexpectedly");
 		return (0);
 	}
@@ -1091,11 +1106,20 @@ process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
 	return (wrtn);
 }
 
+/*
+ * Write an entry's header. With a seek index (-X), first record where
+ * the entry starts in the PAX stream: after finishing the previous entry,
+ * whose padding archive_write_header() would otherwise write first.
+ */
 static int
-write_header(struct archive *arc, struct archive_entry *entry)
+write_header(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry)
 {
 	int rv;
 
+	if (pctx->sx_w != NULL) {
+		(void) archive_write_finish_entry(arc);
+		sx_add_member(pctx->sx_w, archive_entry_pathname(entry), pctx->arc_spos);
+	}
 	rv = archive_write_header(arc, entry);
 	if (rv != ARCHIVE_OK) {
 		if (rv == ARCHIVE_FATAL || rv == ARCHIVE_FAILED) {
@@ -1135,6 +1159,9 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 		log_msg(LOG_ERR, 1, "Failed to open %s.", fpath);
 		return (-1);
 	}
+#ifdef POSIX_FADV_SEQUENTIAL
+	(void) posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 
 	if (typ != TYPE_UNKNOWN) {
 		if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
@@ -1149,7 +1176,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 				if (fout.output_type == FILTER_OUTPUT_MEM) {
 					archive_entry_xattr_add_entry(entry, FILTER_XATTR_ENTRY,
 								      fname, strlen(fname));
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1174,12 +1201,12 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 					return (ARCHIVE_FATAL);
 				}
 			}
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
 		} else {
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
@@ -1228,7 +1255,7 @@ do_map:
 							archive_entry_xattr_add_entry(entry,
 										      FILTER_XATTR_ENTRY,
 										      fname, strlen(fname));
-							if (write_header(arc, entry) == -1) {
+							if (write_header(pctx, arc, entry) == -1) {
 								close(fd);
 								return (-1);
 							}
@@ -1253,7 +1280,7 @@ do_map:
 							return (ARCHIVE_FATAL);
 						}
 					}
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1262,13 +1289,13 @@ do_map:
 					offset = 0;
 					goto do_map;
 				} else {
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
 				}
 			} else {
-				if (write_header(arc, entry) == -1) {
+				if (write_header(pctx, arc, entry) == -1) {
 					close(fd);
 					return (-1);
 				}
@@ -1289,6 +1316,8 @@ do_map:
 		bytes_to_write -= wrtn;
 		if (rv == -1) break;
 		munmap(mapbuf, len);
+		/* Each member is read once: its pages need not stay cached. */
+		pc_cache_drop(fd, offset - len, len);
 	}
 	close(fd);
 
@@ -1305,7 +1334,7 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
 	if (archive_entry_size(entry) > 0) {
 		return (copy_file_data(pctx, arc, entry, typ));
 	} else {
-		if (write_header(arc, entry) == -1)
+		if (write_header(pctx, arc, entry) == -1)
 			return (-1);
 	}
 
@@ -1516,6 +1545,11 @@ archiver_thread_run(pc_ctx_t *pctx) {
 	}
 
 done:
+	if (pctx->sx_w != NULL) {
+		/* The last member ends before the end-of-archive blocks. */
+		(void) archive_write_finish_entry(arc);
+		sx_end_member(pctx->sx_w, pctx->arc_spos);
+	}
 	if (pctx->temp_mmap_len > 0)
 		munmap(pctx->temp_mmap_buf, pctx->temp_mmap_len);
 	archive_entry_free(entry);
@@ -1842,6 +1876,7 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	/*
 	 * Read archive entries and extract to disk.
 	 */
+	pctx->arc_eof = 0;
 	while ((rv = archive_read_next_header(arc, &entry)) != ARCHIVE_EOF) {
 #ifndef	__APPLE__
 		const char *xt_name, *xt_value;
@@ -1929,6 +1964,9 @@ extractor_thread_run(pc_ctx_t *pctx) {
 			}
 		}
 	}
+	/* A clean end of the archive: trailing zero padding may follow. */
+	if (rv == ARCHIVE_EOF)
+		__atomic_store_n(&pctx->arc_eof, 1, __ATOMIC_RELAXED);
 	archive_read_free(arc);
 	archive_write_free(awd);
 
