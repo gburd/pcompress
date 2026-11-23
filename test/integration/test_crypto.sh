@@ -151,6 +151,17 @@ if [ "$(byte_at "$KTF.pz" 9)" = 10 ]; then
 else
 	log_fail "plain file: version $(byte_at "$KTF.pz" 9)"
 fi
+# A password with a plain file: refused, not silently decompressed (the
+# plain file could be anyone's substitute for the encrypted one).
+printf 'kdf-test-password\n' > "$PWFILE"
+rm -f "$KTF.out"
+if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
+	log_fail "password with a plain file accepted"
+elif echo "$msg" | grep -q 'file is not encrypted' && [ ! -s "$KTF.out" ]; then
+	log_pass "password with a plain file refused"
+else
+	log_fail "password with a plain file: $msg"
+fi
 # 1 TiB of memory: refused before any work, not attempted.
 cp "$KTF.good" "$KTF.pz"
 printf '\100' | dd of="$KTF.pz" bs=1 seek=60 conv=notrunc 2>/dev/null

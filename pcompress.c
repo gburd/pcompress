@@ -2288,6 +2288,15 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	if (rv != 0 || dec_read_header(pctx, compfd, filename, algorithm, &h) != 0) {
 		UNCOMP_BAIL;
 	}
+	/*
+	 * A password says the caller expects an encrypted file: anyone can
+	 * substitute a plain one, which nothing would then authenticate.
+	 */
+	if (!(h.flags & MASK_CRYPTO_ALG) && (pctx->pwd_file != NULL || pctx->user_pw != NULL)) {
+		log_error_code(PC_ERR_CRYPTO);
+		log_msg(LOG_ERR, 0, "A password was given, but the file is not encrypted.");
+		UNCOMP_BAIL;
+	}
 	if (h.flags & FLAG_ARCHIVE) {
 		if (dec_archive_target(pctx, filename, &to_filename, &h, &compfd2) != 0) {
 			UNCOMP_BAIL;

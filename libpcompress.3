@@ -255,6 +255,11 @@ bytes.
 The password, used by the next job; all of it feeds the key derivation
 (Argon2id for new files, scrypt for files from 4.4 and earlier).
 It is copied; the caller's buffer is not changed.
+Decompressing a file that is not encrypted with a password set fails
+with
+.Dv PC_ERR_CRYPTO :
+a plain file in place of the expected encrypted one would be
+authenticated by nothing.
 .El
 .Ss Jobs
 .Fn pc_compress_fd
@@ -346,7 +351,8 @@ damaged data
 .It Dv PC_ERR_VERIFY
 a checksum, CRC or HMAC did not match, or the password is wrong
 .It Dv PC_ERR_CRYPTO
-key setup failed or no password was given
+key setup failed, no password was given, or one was given for a file
+that is not encrypted
 .It Dv PC_ERR_INTERNAL
 anything else
 .It Dv PC_ERR_CANCELLED

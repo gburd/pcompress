@@ -215,6 +215,10 @@ Read the password from
 which is overwritten with zeros afterwards.
 Otherwise the password is prompted for on the terminal.
 Required in pipe mode.
+With
+.Fl d ,
+a file that is not encrypted is refused: given a password, pcompress
+does not decompress data nothing authenticates.
 .It Fl k Ar keylen
 Key length in bytes, 16 or 32; default 32.
 Accepted for compatibility: the authenticated ciphers always use 32-byte

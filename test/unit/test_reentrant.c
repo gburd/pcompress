@@ -272,9 +272,13 @@ worker(void *arg)
 			j->failures++;
 			continue;
 		}
+		/* A password with a plain file is refused: give it only when encrypted. */
 		write_pw(j->pw);
-		snprintf(args, sizeof (args), "pcompress -d -w %s %s.pz %s", j->pw,
-		    j->cmp, j->out);
+		if (strstr(m, " -e ") != NULL)
+			snprintf(args, sizeof (args), "pcompress -d -w %s %s.pz %s", j->pw,
+			    j->cmp, j->out);
+		else
+			snprintf(args, sizeof (args), "pcompress -d %s.pz %s", j->cmp, j->out);
 		if (run(args) != 0 || !same_files(j->in, j->out)) {
 			fprintf(stderr, "job %d round %d: round trip failed (%s)\n", j->id, r, m);
 			j->failures++;

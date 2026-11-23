@@ -169,6 +169,27 @@ MU_TEST(test_pub_long_password)
 	pc_free(c);
 }
 
+/* A password given for a plain file is refused, not ignored. */
+MU_TEST(test_pub_password_plain_file)
+{
+	pc_ctx_t *c;
+	int in, o, rv;
+
+	mu_assert_int_eq(0, roundtrip("zstd", 3, PC_DEDUPE_NONE, NULL, NULL));
+	c = pc_new();
+	pc_set_log(c, NULL, NULL, PC_LOG_NONE);
+	pc_set_password(c, "pw", 2);
+	in = open(cmp_, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	rv = pc_decompress_fd(c, in, o);
+	close(in);
+	close(o);
+	mu_assert(rv != 0, "password with a plain file accepted");
+	mu_assert_int_eq(PC_ERR_CRYPTO, pc_last_error_code(c));
+	mu_assert(strstr(pc_last_error(c), "not encrypted") != NULL, "message");
+	pc_free(c);
+}
+
 MU_TEST(test_pub_password_not_wiped)
 {
 	char pw[] = "caller's buffer";
@@ -628,6 +649,7 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_version);
 	MU_RUN_TEST(test_pub_roundtrips);
 	MU_RUN_TEST(test_pub_algorithm_name_copied);
+	MU_RUN_TEST(test_pub_password_plain_file);
 	MU_RUN_TEST(test_pub_password_not_wiped);
 	MU_RUN_TEST(test_pub_long_password);
 	MU_RUN_TEST(test_pub_wrong_password);

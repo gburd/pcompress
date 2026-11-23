@@ -124,6 +124,8 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 	rm -f "$T/in.pz"
 	echo "secretpassw0rd" > "$T/pw"
 	case "$o" in *"-s "*) cs="" ;; *) cs="-s 64k" ;; esac
+	# A password with a plain file is refused before any chunk is read.
+	case "$o" in *"-e "*) dw="-w $T/pw" ;; *) dw="" ;; esac
 	if ! $PCOMPRESS -c $a $cs $o "$T/in" >/dev/null 2>&1; then
 		log_fail "$a $o: compress"; continue
 	fi
@@ -135,7 +137,7 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 		cp "$T/in.pz" "$T/c.pz"; flip "$T/c.pz" $off
 		echo "secretpassw0rd" > "$T/pw"
 		rm -f "$T/c.out"
-		timeout 120 $PCOMPRESS -d -w "$T/pw" "$T/c.pz" "$T/c.out" >/dev/null 2>&1
+		timeout 120 $PCOMPRESS -d $dw "$T/c.pz" "$T/c.out" >/dev/null 2>&1
 		st=$?
 		if [ $st -ge 124 ]; then
 			log_fail "$a $o: flip@$off crashed/hung ($st)"; ok=0
@@ -148,7 +150,7 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 		dd if="$T/in.pz" of="$T/c.pz" bs=$len count=1 2>/dev/null
 		echo "secretpassw0rd" > "$T/pw"
 		rm -f "$T/c.out"
-		timeout 120 $PCOMPRESS -d -w "$T/pw" "$T/c.pz" "$T/c.out" >/dev/null 2>&1
+		timeout 120 $PCOMPRESS -d $dw "$T/c.pz" "$T/c.out" >/dev/null 2>&1
 		st=$?
 		if [ $st -ge 124 ] || [ $st -eq 0 ]; then
 			log_fail "$a $o: truncated to $len: status $st"; ok=0

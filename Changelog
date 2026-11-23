@@ -1,4 +1,8 @@
 == Unreleased ==
+Security: decompressing with a password (-w, pc_set_password()) refuses
+  a file that is not encrypted ("the file is not encrypted",
+  PC_ERR_CRYPTO), where it decompressed it: anyone can substitute a
+  plain file for an encrypted one, and nothing would authenticate it.
 Fix: a data chunk whose stored length was at most 256 bytes over the
   chunk size, which the reader accepted, was read into a buffer with
   less slack than that (about 50 bytes for zstd at 64 KB chunks): a
