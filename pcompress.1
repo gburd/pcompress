@@ -27,7 +27,7 @@
 .Fl a
 .Op Fl c Ar algorithm
 .Op Fl l Ar level
-.Op Fl jnTvx
+.Op Fl jnTvxZ
 .Op Ar options
 .Ar path ...
 .Ar archive | Fl
@@ -203,6 +203,20 @@ Dispack filter for 32-bit x86 Windows executables
 PackJPG and PackPNM filters for JPEG and PNM images, and WavPack for
 WAV audio if built in
 .Pq archive mode only .
+.It Fl Z
+Store the deflate streams in zip containers (zip, jar, odt, docx, xlsx,
+apk and the like), gzip files and PNG images inflated, so they compress
+and deduplicate with the rest, and deflate them again bit for bit on
+extraction
+.Pq archive mode only .
+A stream is kept only if pcompress's own copy of zlib reproduces it
+exactly, which is the case for most Java and LibreOffice files and
+rarely for those made by Microsoft Office, 7-Zip or GNU gzip; others
+are stored as they are.
+Archives of jar files shrink by 40 to 50%, of office documents by 4 to
+7%; compressing takes several times longer, most where few streams
+match.
+Readers before 4.5 refuse the archive.
 .It Fl T
 Do not store archive metadata in a separate stream.
 .It Fl X

@@ -122,6 +122,8 @@ pthread_mutex_t nftw_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int detect_type_by_ext(const char *path, int pathlen);
 static int detect_type_from_ext(const char *ext, int len);
 static int detect_type_by_data(uchar_t *buf, size_t len);
+static int detect_deflate_container(const uchar_t *buf, size_t len);
+static int64_t filter_orig_size(struct archive_entry *entry);
 
 /*
  * Archive writer callback routines for archive creation operation.
@@ -1085,6 +1087,7 @@ process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
 	int64_t wrtn;
 
 	fout->hdr_valid = 1;
+	fout->grown = 0;
 	fi.source_arc = source_arc;
 	fi.target_arc = target_arc;
 	fi.entry = entry;
@@ -1135,6 +1138,27 @@ write_header(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry)
 }
 
 /*
+ * A filter whose output is larger than the member (reflate): the entry
+ * is stored with the output's size, and the original size goes in an
+ * xattr for extraction to restore (archive_extract_entry()).
+ */
+static void
+filter_resize(struct archive_entry *entry, const filter_output_t *fout)
+{
+	unsigned char b[8];
+	uint64_t sz = archive_entry_size(entry);
+	int i;
+
+	if (!fout->grown)
+		return;
+	for (i = 0; i < 8; i++)
+		b[i] = (unsigned char)(sz >> (8 * i));
+	archive_entry_xattr_add_entry(entry, FILTER_XATTR_SIZE, b, sizeof (b));
+	archive_entry_set_size(entry, (fout->hdr_valid ? sizeof (fout->hdr) : 0) +
+	    fout->out_size);
+}
+
+/*
  * Routines to archive members and write the file data to the callback. Portions of
  * the following code is adapted from some of the Libarchive bsdtar code.
  */
@@ -1176,6 +1200,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 				if (fout.output_type == FILTER_OUTPUT_MEM) {
 					archive_entry_xattr_add_entry(entry, FILTER_XATTR_ENTRY,
 								      fname, strlen(fname));
+					filter_resize(entry, &fout);
 					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
@@ -1239,7 +1264,13 @@ do_map:
 		wlen = len;
 
 		if (typ == TYPE_UNKNOWN) {
+			int by_magic = 0;
+
 			pctx->ctype = detect_type_by_data(src, len);
+			if (pctx->ctype == TYPE_UNKNOWN && pctx->enable_reflate) {
+				pctx->ctype = detect_deflate_container(src, len);
+				by_magic = pctx->ctype != TYPE_UNKNOWN;
+			}
 			typ = pctx->ctype;
 			if (typ != TYPE_UNKNOWN) {
 				if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
@@ -1255,6 +1286,7 @@ do_map:
 							archive_entry_xattr_add_entry(entry,
 										      FILTER_XATTR_ENTRY,
 										      fname, strlen(fname));
+							filter_resize(entry, &fout);
 							if (write_header(pctx, arc, entry) == -1) {
 								close(fd);
 								return (-1);
@@ -1280,6 +1312,12 @@ do_map:
 							return (ARCHIVE_FATAL);
 						}
 					}
+					/*
+					 * Not reflated: typed as it would be without -Z,
+					 * header included (a type change ends a chunk).
+					 */
+					if (by_magic)
+						pctx->ctype = TYPE_UNKNOWN;
 					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
@@ -1652,6 +1690,23 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 	return (ret);
 }
 
+/* The size filter_resize() recorded, or -1 if the entry has none. */
+static int64_t
+filter_orig_size(struct archive_entry *entry)
+{
+	const unsigned char *b;
+	int64_t v = 0;
+	size_t n;
+	int i;
+
+	if (!archive_entry_has_xattr(entry, FILTER_XATTR_SIZE, (const void **)&b, &n) ||
+	    n != 8)
+		return (-1);
+	for (i = 7; i >= 0; i--)
+		v = (v << 8) | b[i];
+	return (v < 0 ? -1 : v);
+}
+
 static int
 archive_extract_entry(struct archive *a, struct archive_entry *entry,
     struct archive *ad, int typ, pc_ctx_t *pctx)
@@ -1659,6 +1714,7 @@ archive_extract_entry(struct archive *a, struct archive_entry *entry,
 	int r, r2;
 	char *filter_name;
 	size_t name_size;
+	int64_t stored = archive_entry_size(entry), orig;
 
 	/*
 	 * If the entry is tagged with our custom xattr we get the filter which
@@ -1670,7 +1726,18 @@ archive_extract_entry(struct archive *a, struct archive_entry *entry,
 		typ = type_tag_from_filter_name(FILTERS(pctx), filter_name, name_size);
 		archive_entry_xattr_delete_entry(entry, FILTER_XATTR_ENTRY);
 	}
+	/*
+	 * A filter stored more than the member's size (filter_resize()):
+	 * the disk writer gets the original size, which it cuts the file
+	 * to; the filter still reads the stored bytes.
+	 */
+	if ((orig = filter_orig_size(entry)) >= 0) {
+		archive_entry_xattr_delete_entry(entry, FILTER_XATTR_SIZE);
+		archive_entry_set_size(entry, orig);
+	}
 	r = archive_write_header(ad, entry);
+	if (orig >= 0)
+		archive_entry_set_size(entry, stored);	/* the writer took a copy */
 	if (r < ARCHIVE_WARN)
 		r = ARCHIVE_WARN;
 	if (r != ARCHIVE_OK) {
@@ -1742,8 +1809,10 @@ archive_list_entry(struct archive *a, struct archive_entry *entry, int typ)
 	}
 
 	if (archive_entry_size_is_set(entry)) {
-		int64_t sz = archive_entry_size(entry);
-		printf("%12" PRId64 " %13s %s\n", sz, strtm, archive_entry_pathname(entry));
+		int64_t sz = archive_entry_size(entry), shown = filter_orig_size(entry);
+
+		printf("%12" PRId64 " %13s %s\n", shown >= 0 ? shown : sz, strtm,
+		    archive_entry_pathname(entry));
 		if (sz > 0)
 			return (copy_data_skip(a, entry, typ));
 	} else {
@@ -2133,6 +2202,24 @@ out:
 /*
  * Detect a few file types from looking at magic signatures.
  */
+/*
+ * -Z: deflate containers whatever their extension (docx, xlsx, ott, apk
+ * ...), as the types the extension table gives zip, gz and png. Only
+ * for the reflate filter: without it these members stay TYPE_UNKNOWN,
+ * as they always were, and are typed by the analyzer.
+ */
+static int
+detect_deflate_container(const uchar_t *buf, size_t len)
+{
+	if (len >= 8 && memcmp(buf, "PK\003\004", 4) == 0)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_ZIP);
+	if (len >= 8 && buf[0] == 0x1f && buf[1] == 0x8b && buf[2] == 8)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_GZ);
+	if (len >= 8 && memcmp(buf, "\211PNG\r\n\032\n", 8) == 0)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_GZ);
+	return (TYPE_UNKNOWN);
+}
+
 static int
 detect_type_by_data(uchar_t *buf, size_t len)
 {

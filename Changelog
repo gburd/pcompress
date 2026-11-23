@@ -1,4 +1,13 @@
 == Unreleased ==
+New: -Z (archive mode) stores the deflate streams of zip containers
+  (jar, odt, docx, xlsx, apk ...), gzip files and PNG images inflated,
+  when pcompress's bundled zlib 1.3.1 deflate reproduces them bit for
+  bit, and rebuilds them on extraction. Archives of jars shrink by 38
+  to 50%, of OpenDocument and Office files by 4 to 7%, of
+  /usr/share/doc by 6%; compressing /usr/share/doc took 6.7 s in place
+  of 0.8 s, and gzip files, which rarely match, 2.8 s for 13 MB. Off by
+  default. Such archives are format version 13 with flag 0x40 (4.4
+  refuses them).
 Format: version 13, for features that change how data is decoded: the
   version 10 layout (version 12 when encrypted), and a reader refuses
   any header flag bit it does not know, where 10 to 12 ignored them.

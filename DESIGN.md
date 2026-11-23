@@ -66,7 +66,8 @@ output. A file that uses no such feature keeps version 10 or 12, so
 older releases still read it. Encrypted version 13 files follow every
 version 12 rule (Argon2id, the AEAD streams, the end record); an
 unencrypted one is a version 10 file in all but the number. Taken
-bits: none yet. Free: 0x8, 0x40, 0x80, 0x2000, 0x4000, 0x8000.
+bits: 0x40 `FLAG_REFLATE` (archive members may be reflate records, see
+"Reflate"). Free: 0x8, 0x80, 0x2000, 0x4000, 0x8000.
 
 ## Pipeline
 
@@ -626,6 +627,96 @@ pcompress carries a small patch to libarchive
 On extraction, filters are reversed per entry; if a filter cannot decode
 an entry the stored bytes are written unchanged and the path is listed in
 `filter_failures.txt`.
+
+## Reflate
+
+`-Z` (archive mode only, off by default) stores the deflate streams of
+zip containers (zip, jar, odt and the other OpenDocument types, docx,
+xlsx, apk), gzip files and PNG images inflated, so the compressor and
+dedupe see the data inside them, and re-deflates them on extraction
+(`filters/reflate/`). It is the precomp approach: a stream is kept only
+if deflating its inflated bytes again reproduces it bit for bit with
+one of a few zlib parameter sets. preflate (Apache-2.0), which records
+a deflater's decisions so any stream can be rebuilt, was the other
+option; it is C++, unmaintained since 2018, and much larger.
+
+**Reproducing deflate forever.** zlib's output for given parameters is
+not promised across versions, and zlib-ng's differs from zlib's, so
+re-deflating with the system library could fail years later. The filter
+deflates with its own copy of zlib 1.3.1 (`filters/reflate/zlib`: the
+deflate half only, portable C, every symbol prefixed `pcz_` so it never
+meets the system's), and inflates with the system zlib. That copy must
+never change; a newer deflate would go beside it, chosen by a new value
+in the record. Each record is decoded again at compress time and the
+member is stored as is unless the result is identical, so what is
+written always extracts; on extraction a record that does not rebuild
+(or fails its checksum) is written as stored and listed in
+`filter_failures.txt`, as for the other filters.
+
+**Finding streams.** By structure only: gzip members from the start of
+the file; zip local file entries walked from the start (method 8, sizes
+from the header or, with a data descriptor, from where inflate ends;
+encrypted and zip64 entries are skipped or end the walk); a PNG's IDAT
+data when it is one chunk holding one zlib stream. A container is
+recognised by extension or, under `-Z`, by its magic bytes. Streams
+under 256 bytes are left alone. The parameter sets tried are
+(level, memLevel) = (6, 8), (9, 8), (1, 8), (6, 9), (9, 9), (1, 9),
+(4, 8), and (6, 8) with the filtered strategy, window from the
+container: every set that matched a stream of the measured corpus, the
+one that matched the member's previous stream first. A wrong set is
+rejected within its first output block (`rf_deflate_match()` compares
+as it deflates).
+
+**The record** (little-endian) replaces the member's data, behind the
+8-byte length the filters share:
+
+| field | size |
+|-------|------|
+| magic `PCRF`, version 1, zero | 4 + 1 + 1 |
+| stream count | 2 |
+| original length | 8 |
+| check of the original (FNV-1a over 8-byte words, xor length) | 8 |
+| per stream: offset in the original, deflated length, inflated length, level, memLevel, window bits, strategy | 28 |
+| the original with each stream replaced by its inflated bytes | rest |
+
+Members are at most 64 MB and records at most 256 MB. The record is
+usually larger than the member, so the entry is stored with the
+record's size and the member's size goes in a second private xattr
+(`_._pc_filter_size`), which extraction and listing use. The decoder
+treats the record as hostile: it checks the magic, version, counts,
+every offset against the original length and the ones before it,
+every parameter's range, and that the body is exactly the gaps plus
+the inflated lengths, before allocating; a failed re-deflate or
+checksum yields no output (`test_reflate`, `fuzz_reflate`).
+
+**Old readers.** An archive with `-Z` sets `FLAG_REFLATE` and is format
+version 13, so 4.4 refuses it as newer and a version 13 reader without
+the filter would refuse the flag. Without the flag, readers before
+this one would extract a record as the member's bytes.
+
+**What it buys.** Measured on a c7i.4xlarge (adapt2, 16 threads, best
+of three; every archive extracted and compared):
+
+| corpus | size | -l6 | -l6 -Z | -l9 | -l9 -Z | -l6 time, -Z time |
+|--------|------|-----|--------|-----|--------|-------|
+| 10 jars (Maven Central, Ubuntu) | 8.1 MB | 7.21 | 4.46 (-38%) | 7.21 | 4.37 (-39%) | 0.10 s, 1.08 s |
+| 10 versions of 3 jars (guava, commons-lang3, pgjdbc) | 17.2 MB | 10.29 | 6.08 (-41%) | 10.98 | 5.51 (-50%) | 0.10 s, 2.04 s |
+| 80 LibreOffice templates (ott, ots, otp) | 8.1 MB | 7.91 | 7.53 (-4.8%) | 7.91 | 7.52 (-5.0%) | 0.08 s, 0.65 s |
+| 123 docx/xlsx (Apache POI test data) | 24.2 MB | 18.42 | 17.16 (-6.9%) | 17.83 | 17.20 (-3.6%) | 0.25 s, 4.55 s |
+| 203 gzip files (`/usr/share/doc`, 3 tarballs) | 13.3 MB | 12.47 | 12.45 (-0.2%) | 12.44 | 12.35 (-0.8%) | 0.07 s, 2.77 s |
+| 23 PNG (`/usr/share`) | 0.5 MB | 0.480 | 0.465 (-3.2%) | 0.478 | 0.461 (-3.6%) | 0.02 s, 1.28 s |
+| `/usr/share/doc` | 39.2 MB | 14.93 | 14.06 (-5.9%) | 14.89 | 13.90 (-6.7%) | 0.80 s, 6.70 s |
+
+Sizes in MB. Extraction took 0.2 to 1.5 s in place of 0.01 to 0.8 s.
+Java tools and LibreOffice use zlib at its default, so nearly all their
+streams are kept (98 to 99% of their deflated bytes). Most Office files
+are written by other deflaters, and only 17 of the 123 had a stream
+kept. Debian's `.gz` files come from GNU gzip, whose deflate is not
+zlib's: none of the 124 made with `gzip -9` matched, while the 78 made
+with zlib did; release tarballs did not match either. The time goes to
+the search: on streams no set reproduces, `longest_match` of each
+failed attempt (87% of the profile), so it is slowest where it helps
+least.
 
 ## Encryption
 

@@ -99,12 +99,17 @@ extern "C" {
 /**
  * The header flag bits of versions 10 to 12 (0x700 is the checksum id,
  * CKSUM_MASK). A file whose flags have any other bit is written as
- * version 13. Free bits: 0x8, 0x40, 0x80, 0x2000, 0x4000, 0x8000.
+ * version 13. Free bits: 0x8, 0x80, 0x2000, 0x4000, 0x8000.
  */
 #define	FLAG_V12	(FLAG_DEDUP | FLAG_DEDUP_FIXED | FLAG_SINGLE_CHUNK | \
 	MASK_CRYPTO_ALG | 0x700 | FLAG_ARCHIVE | FLAG_META_STREAM)
+/**
+ * Version 13 file flag: archive members may be stored by the reflate
+ * filter (-Z), whose records a reader without it would extract as is.
+ */
+#define	FLAG_REFLATE	0x40
 /** Every header flag bit this build understands. */
-#define	FLAG_KNOWN	FLAG_V12
+#define	FLAG_KNOWN	(FLAG_V12 | FLAG_REFLATE)
 #define	MAX_LEVEL	14      /**< Maximum compression level. */
 /**@}*/
 
@@ -436,6 +441,7 @@ struct pc_ctx {
 	int min_chunk;
 	int enable_packjpg;
 	int enable_wavpack;
+	int enable_reflate;	/* -Z */
 	void *filter_table;	/* struct type_data[NUM_SUB_TYPES+1], archive filters */
 	int list_mode;
 	FILE *err_paths_fd;

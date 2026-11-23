@@ -199,6 +199,8 @@ usage(pc_ctx_t *pctx)
 "                Sets the number of compression threads. Default: core count.\n"
 "       -T       Disable separate metadata stream.\n"
 "       -X       Append a seek index for -r/-R (implies -T; not with -G).\n"
+"       -Z       Store the deflate streams of zip, jar, odt, docx, gzip and PNG\n"
+"                members inflated, when they can be rebuilt bit for bit.\n"
 "       -Y <percent>\n"
 "                Append repair data (Reed-Solomon parity, 1 to 50%% of the file) so\n"
 "                that 'pcompress -y' can rebuild damaged blocks. Not with '-' output.\n"
@@ -3945,6 +3947,8 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 		flags |= FLAG_ARCHIVE;
 		if (pctx->meta_stream)
 			flags |= FLAG_META_STREAM;
+		if (pctx->enable_reflate)
+			flags |= FLAG_REFLATE;
 	}
 
 	flags |= pctx->cksum;
@@ -4610,6 +4614,7 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 		 * only for the level-based choice, so -j and -x were ignored.
 		 */
 		if (pctx->archive_mode) {
+			ff.enable_reflate = pctx->enable_reflate;
 			init_filters(pctx, &ff);
 			pctx->enable_packjpg = ff.enable_packjpg;
 			pctx->enable_wavpack = ff.enable_wavpack;
@@ -4626,6 +4631,7 @@ finish_settings(pc_ctx_t *pctx, struct filter_flags *ff_in)
 		ff.enable_packjpg = 1;
 		ff.enable_wavpack = 1;
 		ff.exe_preprocess = 1;
+		ff.enable_reflate = 1;
 		pctx->enable_packjpg = 1;
 		pctx->enable_wavpack = 1;
 		pctx->exe_preprocess = 1;
@@ -4753,6 +4759,7 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 	ff.enable_packjpg = 0;
 	ff.enable_wavpack = 0;
 	ff.exe_preprocess = 0;
+	ff.enable_reflate = 0;
 
 	memset(&g, 0, sizeof (g));
 	g.ind = 1;
@@ -4765,7 +4772,7 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 		log_msg(LOG_ERR, 0, "Out of memory");
 		return (1);
 	}
-	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhVXr:R:Y:y")) != -1) {
+	while ((opt = pc_getopt(&g, argc, argv, "dc:s:l:pt:MCDGEe:w:LPS:B:Fk:avmKjxiTnhVXr:R:Y:yZ")) != -1) {
 		char *oarg = g.arg;
 		int ovr;
 		int64_t chunksize;
@@ -4949,6 +4956,10 @@ init_pc_context_impl(pc_ctx_t *pctx, int argc, char *argv[])
 			pctx->sx_write = 1;
 			break;
 
+		    case 'Z':
+			pctx->enable_reflate = 1;
+			break;
+
 		    case 'Y':
 			pctx->rp_pct = atoi(oarg);
 			if (pctx->rp_pct < 1 || pctx->rp_pct > RP_PCT_MAX) {
@@ -5111,6 +5122,10 @@ opt_done:
 	/*
 	 * EXE, PackJPG and WavPack are only valid when archiving files.
 	 */
+	if (pctx->enable_reflate && !pctx->archive_mode) {
+		log_msg(LOG_ERR, 0, "-Z (reflate) is only valid when archiving.");
+		return (1);
+	}
 	if ((pctx->exe_preprocess || ff.enable_packjpg || ff.enable_wavpack)
 	    && !pctx->archive_mode) {
 		log_msg(LOG_ERR, 0, "Executable File Preprocessor and PackJPG are "
@@ -5552,7 +5567,7 @@ pc_set_password(pc_ctx_t *ctx, const void *pw, size_t len)
 static int
 run_fd_job(pc_ctx_t *ctx, int in_fd, int out_fd, int compress)
 {
-	struct filter_flags ff = { 0, 0, 0 };
+	struct filter_flags ff = { 0, 0, 0, 0 };
 	log_state_t *prev;
 	pc_ctx_t *j;
 	int rv;

@@ -192,7 +192,7 @@ DELTA2OBJS = $(DELTA2SRCS:.c=.o)
 ARCHIVESRCS = archive/pc_archive.c archive/pc_arc_filter.c utils/phash/phash.c \
 	utils/phash/lookupa.c utils/phash/recycle.c
 ARCHIVEHDRS = pcompress.h  utils/utils.h archive/pc_archive.h utils/phash/standard.h \
-	utils/phash/lookupa.h utils/phash/recycle.h utils/phash/phash.h archive/pc_arc_filter.h \
+	filters/reflate/reflate.h utils/phash/lookupa.h utils/phash/recycle.h utils/phash/phash.h archive/pc_arc_filter.h \
 	utils/phash/extensions.h
 ARCHIVEOBJS = $(ARCHIVESRCS:.c=.o)
 
@@ -213,6 +213,17 @@ WAVPKOBJS = $(WAVPKSRCS:.c=.o)
 DISPACKSRCS = filters/dispack/dis.cpp archive/dispack_helper.cpp
 DISPACKHDRS = filters/dispack/dis.hpp filters/dispack/types.hpp
 DISPACKOBJS = $(DISPACKSRCS:.cpp=.o)
+
+# The reflate filter's pinned deflate: zlib 1.3.1, symbols prefixed pcz_
+# (filters/reflate/zlib/zconf.h). reflate.c inflates with the system zlib.
+REFLATESRCS = filters/reflate/reflate.c filters/reflate/rf_deflate.c
+REFLATEZSRCS = filters/reflate/zlib/deflate.c filters/reflate/zlib/trees.c \
+	filters/reflate/zlib/adler32.c filters/reflate/zlib/zutil.c
+REFLATEHDRS = filters/reflate/reflate.h filters/reflate/rf_deflate.h \
+	filters/reflate/zlib/zlib.h filters/reflate/zlib/zconf.h filters/reflate/zlib/deflate.h \
+	filters/reflate/zlib/zutil.h filters/reflate/zlib/trees.h $(MAINHDRS)
+REFLATEOBJS = $(REFLATESRCS:.c=.o)
+REFLATEZOBJS = $(REFLATEZSRCS:.c=.o)
 
 DICTSRCS = filters/dict/DictFilter.cpp
 DICTHDRS = filters/dict/DictFilter.h filters/dict/Common.h
@@ -323,7 +334,7 @@ $(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS)
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
 $(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2_OBJS) $(BLAKE3_OBJS) \
 @CRYPTO_COMPAT_OBJS@ $(CRYPTO_ASM_OBJS) $(ARCHIVEOBJS) $(PJPGOBJS) $(DISPACKOBJS) $(PPNMOBJS) \
-$(WAVPKOBJS) $(DICTOBJS)
+$(WAVPKOBJS) $(DICTOBJS) $(REFLATEOBJS) $(REFLATEZOBJS)
 
 DEBUG_LINK = $(GPP) -pthread @LIBBSCGEN_OPT@ @EXTRA_OPT_FLAGS@ @OMP_FLAGS@ -fPIC
 DEBUG_COMPILE = $(GCC) -g -c @EXTRA_OPT_FLAGS@ -fPIC @USE_CLANG_AS@
@@ -411,6 +422,13 @@ $(DELTA2OBJS): $(DELTA2SRCS) $(DELTA2HDRS)
 
 $(ARCHIVEOBJS): $(ARCHIVESRCS) $(ARCHIVEHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
+
+$(REFLATEOBJS): $(REFLATESRCS) $(REFLATEHDRS)
+	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) -DZ_SOLO $(@:.o=.c) -o $@
+
+# Vendored code, built as zlib builds it: its own warnings are not ours.
+$(REFLATEZOBJS): $(REFLATEZSRCS) $(REFLATEHDRS)
+	$(COMPILE) $(GEN_OPT) -I./filters/reflate/zlib -DNO_GZIP -DZ_SOLO -w $(@:.o=.c) -o $@
 
 $(PJPGOBJS): $(PJPGSRCS) $(PJPGHDRS)
 	$(COMPILE_cpp) $(COMMON_VEC_FLAGS) @SSE_OPT_FLAGS@ @USE_CLANG_AS@ -O2 @GCC_SCHED_FLAGS@ \
@@ -601,7 +619,7 @@ test: all
 # --- Enhanced Test Framework Targets ---
 
 TEST_CPPFLAGS = $(COMMON_CPPFLAGS) -I./test/unit -I./filters/dict
-UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_blake3 test_sha2 test_api test_filters test_crypto test_algos test_reentrant test_seek_index test_repair
+UNIT_TESTS = test_compress test_xxhash test_crc test_slab test_sem test_blake2 test_blake3 test_sha2 test_api test_filters test_crypto test_algos test_reentrant test_seek_index test_repair test_reflate
 # Tests link the objects directly: the shared library hides internal symbols.
 # LINK.PROG carries the same LTO/OpenMP/linker flags as the real binary.
 
@@ -684,7 +702,7 @@ COV_EXCLUDE = '*/lz4/*' '*/zstd/*' '*/bsc/*' '*/archive/libarchive/*' \
 	'*/lzma/*' '*/crypto/blake2/*' '*/crypto/blake3/*' '*/crypto/keccak/*' '*/crypto/skein/*' \
 	'*/crypto/sha2/*' '*/crypto/aes/*' '*/crypto/scrypt/*' '*/crypto/xsalsa20/*' \
 	'*/crypto/old/*' '*/utils/phash/*' '*/filters/packjpg/*' '*/filters/packpnm/*' \
-	'*/filters/dispack/*' '*/filters/dict/*' '*/test/*' '/nix/*' '/usr/*'
+	'*/filters/dispack/*' '*/filters/dict/*' '*/filters/reflate/zlib/*' '*/test/*' '/nix/*' '/usr/*'
 coverage: all test-unit-build
 	lcov -q --zerocounters --directory .
 	-$(MAKE) test-unit
@@ -719,6 +737,8 @@ fuzz-build: $(LIB)
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_seek_index.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_repair \
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_repair.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_reflate \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_reflate.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		for t in fuzz_chunk fuzz_manifest; do \
 			clang -fsanitize=fuzzer,address -g -Iinclude -o buildtmp/$$t test/fuzz/$$t.c \
 				-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ || exit 1; \
@@ -726,7 +746,8 @@ fuzz-build: $(LIB)
 		clang -fsanitize=address -g -Iinclude -o buildtmp/fuzz_seeds test/fuzz/seeds.c \
 			-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ && \
 		mkdir -p buildtmp/fuzz-seeds/chunk buildtmp/fuzz-seeds/manifest \
-		    buildtmp/fuzz-seeds/seek_index && \
+		    buildtmp/fuzz-seeds/seek_index buildtmp/fuzz-seeds/reflate && \
+		python3 test/tools/reflate_seeds.py buildtmp/fuzz-seeds/reflate && \
 		ASAN_OPTIONS=detect_leaks=0 buildtmp/fuzz_seeds buildtmp/fuzz-seeds || exit 1; \
 	else \
 		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
@@ -739,6 +760,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_crc -max_total_time=60"
 	@echo "  buildtmp/fuzz_seek_index -max_total_time=60 corpus/ buildtmp/fuzz-seeds/seek_index"
 	@echo "  buildtmp/fuzz_repair -max_total_time=60 corpus/"
+	@echo "  buildtmp/fuzz_reflate -max_total_time=60 corpus/ buildtmp/fuzz-seeds/reflate"
 	@echo "  buildtmp/fuzz_chunk -max_total_time=60 corpus/ buildtmp/fuzz-seeds/chunk"
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
@@ -747,7 +769,7 @@ topclean:
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress buildtmp/fuzz_seek_index
-	$(RM) buildtmp/fuzz_repair
+	$(RM) buildtmp/fuzz_repair buildtmp/fuzz_reflate
 	$(RM) buildtmp/fuzz_chunk buildtmp/fuzz_manifest buildtmp/fuzz_seeds
 	$(RM_RF) buildtmp/fuzz-seeds
 	$(RM) test.log
