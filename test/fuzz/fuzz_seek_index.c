@@ -35,7 +35,7 @@ fuzz_one(const uint8_t *data, size_t size)
 	for (i = 0; i < x.nchunks; i++) {
 		if (x.uoff[i + 1] <= x.uoff[i] ||
 		    sx_chunk_file_off(&x, i) < lim.file_lo ||
-		    sx_chunk_file_off(&x, i) + 8 > lim.file_hi)
+		    sx_chunk_file_off(&x, i) > lim.file_hi - 8)
 			abort();
 		c = sx_chunk_of(&x, x.uoff[i]);
 		if (c != i || sx_chunk_of(&x, x.uoff[i + 1] - 1) != i)

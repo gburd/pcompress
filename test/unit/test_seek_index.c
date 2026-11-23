@@ -119,6 +119,16 @@ MU_TEST(test_sx_parse_hostile)
 		mu_assert_int_eq(-1, sx_parse(b, sizeof (b), &lim, &x));
 	}
 	mu_assert_int_eq(-1, parse_patched(61, 0x03, sizeof (kat)));	/* past the end */
+	{
+		unsigned char b[sizeof (kat)];
+		sx_index_t x;
+
+		/* Chunk 0 at 2^64 - 4: "off + 8" wraps to 4, inside the file. */
+		memcpy(b, kat, sizeof (kat));
+		b[40] = 0xfc;
+		memset(b + 41, 0xff, 7);
+		mu_assert_int_eq(-1, sx_parse(b, sizeof (b), &lim, &x));
+	}
 	mu_assert_int_eq(-1, parse_patched(49, 0x08, sizeof (kat)));	/* > chunksize */
 	{
 		unsigned char b[sizeof (kat)];

@@ -209,8 +209,10 @@ sx_parse_chunks(sx_index_t *idx, const sx_limits_t *lim)
 	for (i = 0; i < idx->nchunks; i++) {
 		off = get64(idx->chunks + i * esz);
 		ulen = get64(idx->chunks + i * esz + 8);
-		if (off < lim->file_lo || off + 8 > lim->file_hi ||
-		    (i > 0 && off < prev + 8) || ulen == 0 || ulen > lim->chunksize)
+		/* Forms that cannot wrap: off is anything a forger chose. */
+		if (off < lim->file_lo || lim->file_hi < 8 || off > lim->file_hi - 8 ||
+		    (i > 0 && (off < prev || off - prev < 8)) ||
+		    ulen == 0 || ulen > lim->chunksize)
 			return (-1);
 		prev = off;
 		idx->uoff[i + 1] = idx->uoff[i] + ulen;

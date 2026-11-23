@@ -692,7 +692,8 @@ fuzz-build: $(LIB)
 		done; \
 		clang -fsanitize=address -g -Iinclude -o buildtmp/fuzz_seeds test/fuzz/seeds.c \
 			-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ && \
-		mkdir -p buildtmp/fuzz-seeds/chunk buildtmp/fuzz-seeds/manifest && \
+		mkdir -p buildtmp/fuzz-seeds/chunk buildtmp/fuzz-seeds/manifest \
+		    buildtmp/fuzz-seeds/seek_index && \
 		ASAN_OPTIONS=detect_leaks=0 buildtmp/fuzz_seeds buildtmp/fuzz-seeds || exit 1; \
 	else \
 		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
@@ -703,7 +704,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_decompress -max_total_time=60"
 	@echo "  buildtmp/fuzz_compress -max_total_time=60"
 	@echo "  buildtmp/fuzz_crc -max_total_time=60"
-	@echo "  buildtmp/fuzz_seek_index -max_total_time=60"
+	@echo "  buildtmp/fuzz_seek_index -max_total_time=60 corpus/ buildtmp/fuzz-seeds/seek_index"
 	@echo "  buildtmp/fuzz_chunk -max_total_time=60 corpus/ buildtmp/fuzz-seeds/chunk"
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
