@@ -35,6 +35,15 @@ Fix: a metadata chunk (archive mode) whose stored length exceeded the
   3 MB metadata buffer overflowed the heap while it was read, before any
   check (found with ASan); its original length was not bounded either.
   Both are refused now as corrupt.
+CLI: -X appends a seek index to a .pz file, and -d -r offset:length
+  (single file) and -d -R member (archive) then decode only the chunks
+  they need. On a c7i.4xlarge, one 20 KB member at the end of a 1.3 GB
+  archive of /usr/lib comes out in 0.08 s instead of 3.0 s. The index
+  costs 0.47% in size and no measurable time; -X turns off the metadata
+  stream and the automatic global dedupe, and refuses -G. Readers before
+  4.5 read -X files unchanged (the index follows the end-of-stream
+  marker). A random read checks the index's tag (checksum, or HMAC when
+  encrypted) and that each chunk it decodes is the one the index names.
 Tests: test_alloc installs an allocator that tags every block and checks
   each free, so a block freed by the wrong allocator fails, and checks
   that no block is left once everything is freed.
