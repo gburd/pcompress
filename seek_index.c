@@ -34,7 +34,7 @@
  * follows: with the body under the index tag, it pins the index to the
  * end of the stream it describes. A chunk's stream offset is the sum of the lengths before it, so it is
  * not stored and cannot disagree. The tag is the chunk's own verification
- * field (its digest, or its HMAC when encrypted) and ties the entry to
+ * field (its digest, or its AEAD tag when encrypted) and ties the entry to
  * the bytes it names. Members are in archive order, which is stream
  * order; offset and length cover the member's header and data in the
  * PAX stream, so extracting a member is reading that range.

@@ -157,8 +157,8 @@ pc_getopt(struct pc_getopt *g, int argc, char *argv[], const char *spec)
 }
 
 static void * writer_thread(void *dat);
-static int sx_tag(pc_ctx_t *pctx, const uchar_t *body, uint64_t len, uchar_t *out);
-static int sx_crypt(pc_ctx_t *pctx, uchar_t *body, uint64_t len);
+static int sx_check(pc_ctx_t *pctx, uchar_t *body, uint64_t len, const uchar_t *end,
+    const uchar_t *tag, int decrypt);
 static int sx_taglen(pc_ctx_t *pctx);
 static int init_algo(pc_ctx_t *pctx, const char *algo, int bail);
 extern uint32_t lzma_crc32(const uint8_t *buf, uint64_t size, uint32_t crc);
@@ -2180,26 +2180,27 @@ sx_pread(int fd, uint64_t off, void *buf, uint64_t len)
 }
 
 /*
- * Check the index tag (t bytes, want) against the body as it lies in
- * the file, mapped read-only: a forged length costs address space, not
- * memory, until the tag matches. 0 if it does.
+ * Check the index tag (want) against the body as it lies in the file,
+ * mapped read-only: a forged length costs address space, not memory,
+ * until the tag matches. end is the version 12 end record (NULL for
+ * version 10). 0 if it does.
  */
 static int
 sx_verify_mapped(pc_ctx_t *pctx, int fd, uint64_t body_off, uint64_t len,
-    const uchar_t *want, int t)
+    const uchar_t *end, const uchar_t *want)
 {
 	uint64_t adj = body_off % (uint64_t)pctx->pagesize;
-	uchar_t tag[CKSUM_MAX_BYTES], *map;
-	int ok;
+	uchar_t *map;
+	int rv;
 
 	map = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, fd, (off_t)(body_off - adj));
 	if (map == MAP_FAILED) {
 		log_msg(LOG_ERR, 1, "Cannot map the seek index: ");
 		return (-1);
 	}
-	ok = sx_tag(pctx, map + adj, len, tag) == t && sx_tag_eq(tag, want, t);
+	rv = sx_check(pctx, map + adj, len, end, want, 0);
 	munmap(map, len + adj);
-	return (ok ? 0 : -1);
+	return (rv);
 }
 
 /*
@@ -2209,18 +2210,25 @@ sx_verify_mapped(pc_ctx_t *pctx, int fd, uint64_t body_off, uint64_t len,
  * still be set up. Every value from the file is checked before use:
  * the trailer's length against the file, the tag before anything in the
  * body is believed, then the body itself (sx_parse()).
+ *
+ * Between the end-of-stream marker and the body, version 12 has its end
+ * record. Its own tag is not checked here: its bytes are associated data
+ * of the index tag, so they are authenticated through it, and a random
+ * read needs nothing else from it (the body holds the chunk count).
  */
 static int
 sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
 {
-	uchar_t tr[CKSUM_MAX_BYTES + 8 + SX_MAGIC_SZ], tag[CKSUM_MAX_BYTES];
+	uchar_t tr[CKSUM_MAX_BYTES + 8 + SX_MAGIC_SZ], pre[8 + PZ_END_LEN];
 	int t = sx_taglen(pctx), trl = t + 8 + SX_MAGIC_SZ;
+	uint64_t gap = 8 + (pctx->pz_v12 ? PZ_END_LEN : 0);
 	uint64_t len, body_off, zero;
+	const uchar_t *end = pctx->pz_v12 ? pre + 8 : NULL;
 	sx_limits_t lim;
 	struct stat sb;
 
 	if (fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode) ||
-	    (uint64_t)sb.st_size < hdr_end + 8 + trl ||
+	    (uint64_t)sb.st_size < hdr_end + gap + trl ||
 	    sx_pread(fd, sb.st_size - trl, tr, trl) != 0 ||
 	    memcmp(tr + t + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ) != 0) {
 		log_error_code(PC_ERR_FORMAT);
@@ -2231,24 +2239,21 @@ sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
 	memcpy(&len, tr + t, 8);
 	len = LE64(len);
 	if (len < SX_BODY_MIN || len > SX_BODY_MAX ||
-	    len > (uint64_t)sb.st_size - trl - 8 - hdr_end) {
+	    len > (uint64_t)sb.st_size - trl - gap - hdr_end) {
 		log_error_code(PC_ERR_CORRUPT);
 		log_msg(LOG_ERR, 0, "Invalid seek index length. File corrupt ?");
 		return (-1);
 	}
 	body_off = sb.st_size - trl - len;
-	if (pctx->encrypt_type) {
-		if (hmac_init(&pctx->sx_mac, pctx->cksum, &(pctx->crypto_ctx)) == -1)
-			return (-1);
-		pctx->sx_mac_ok = 1;
-	}
 	/*
 	 * The tag is checked in the file before the body is read into
 	 * memory, then again on the copy, which is what is parsed: the file
 	 * may change in between.
 	 */
-	if (sx_pread(fd, body_off - 8, &zero, 8) != 0 || zero != 0 ||
-	    sx_verify_mapped(pctx, fd, body_off, len, tr, t) != 0) {
+	zero = 1;
+	if (sx_pread(fd, body_off - gap, pre, gap) == 0)
+		memcpy(&zero, pre, 8);
+	if (zero != 0 || sx_verify_mapped(pctx, fd, body_off, len, end, tr) != 0) {
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
 		return (-1);
@@ -2259,17 +2264,16 @@ sx_load(pc_ctx_t *pctx, int fd, uint64_t hdr_end, int64_t chunksize)
 		return (-1);
 	}
 	if (sx_pread(fd, body_off, pctx->sx_body, len) != 0 ||
-	    sx_tag(pctx, pctx->sx_body, len, tag) != t || !sx_tag_eq(tag, tr, t)) {
+	    sx_check(pctx, pctx->sx_body, len, end, tr, 1) != 0) {
 		log_error_code(PC_ERR_VERIFY);
 		log_msg(LOG_ERR, 0, "Seek index verification failed. File corrupt ?");
 		return (-1);
 	}
 	lim.file_lo = hdr_end;
-	lim.file_hi = body_off - 8;
+	lim.file_hi = body_off - gap;
 	lim.chunksize = chunksize;
 	lim.taglen = t;
-	if (sx_crypt(pctx, pctx->sx_body, len) != 0 ||
-	    sx_parse(pctx->sx_body, len, &lim, &pctx->sx_idx) != 0) {
+	if (sx_parse(pctx->sx_body, len, &lim, &pctx->sx_idx) != 0) {
 		log_error_code(PC_ERR_CORRUPT);
 		log_msg(LOG_ERR, 0, "Invalid seek index. File corrupt ?");
 		return (-1);
@@ -2344,10 +2348,6 @@ sx_done(pc_ctx_t *pctx)
 	sx_index_free(&pctx->sx_idx);
 	pc_mfree(pctx->sx_body);
 	pctx->sx_body = NULL;
-	if (pctx->sx_mac_ok) {
-		hmac_cleanup(&pctx->sx_mac);
-		pctx->sx_mac_ok = 0;
-	}
 }
 
 /*
@@ -2556,7 +2556,9 @@ dec_seek_setup(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 		log_msg(LOG_ERR, 0, "Random reads need a compressed file, not a stream.");
 		return (-1);
 	}
-	if (pctx->enable_rabin_global || pctx->meta_stream) {
+	/* Before version 12 an encrypted file has no index: no 4.4 wrote one. */
+	if (pctx->enable_rabin_global || pctx->meta_stream ||
+	    (pctx->encrypt_type && !pctx->pz_v12)) {
 		log_error_code(PC_ERR_FORMAT);
 		log_msg(LOG_ERR, 0, "No seek index in this file: random reads need "
 		    "a file compressed with -X.");
@@ -2748,7 +2750,9 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 	if (dec_feed(pctx, compfd, dary, &job, &np) != 0) {
 		UNCOMP_BAIL;
 	}
-	if (pctx->pz_v12 && nprocs > 0 && !__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED) &&
+	/* A random read stops inside the chunks: the index tag covers it (sx_load()). */
+	if (pctx->pz_v12 && !pctx->sx_mode && nprocs > 0 &&
+	    !__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED) &&
 	    dec_check_end(pctx, compfd, pctx->chunk_num, pctx->pz_nmeta, pctx->meta_stream) != 0) {
 		__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 		__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -3094,53 +3098,75 @@ plain_index:
 }
 
 /*
- * The seek index tag: what authenticates the index body (as stored, so
- * encrypted when the file is) into out. Encrypted files: HMAC with the
- * file's key over a domain string, the body and its length. A chunk's
- * HMAC input starts with its 8-byte big-endian length, which is far
- * below the domain string's first 8 bytes read as a number, so a chunk
- * and its HMAC can never pass as an index. Unencrypted files: the
- * file's chunk checksum over the body, which begins with its own magic.
- * Returns the tag length, or -1.
- *
- * NB: this is the only place the index tag is defined. A new encryption
- * scheme (an AEAD) replaces this function and the body cipher in
- * sx_crypt(), and nothing else.
+ * The associated data of a version 12 index body: its length and the
+ * trailer magic, as stored after it, and the end record before it. The
+ * end record is under the file's key and holds the chunk counts, so an
+ * index cannot be moved to another file or onto a stream with other
+ * chunks, and its length cannot change. Returns the length.
  */
-static int
-sx_tag(pc_ctx_t *pctx, const uchar_t *body, uint64_t len, uchar_t *out)
+static size_t
+sx_ad(uint64_t len, const uchar_t *end, uchar_t ad[16 + PZ_END_LEN])
 {
-	static const char domain[] = "pcompress seek index";
-	uchar_t tag[CKSUM_MAX_BYTES];
-	unsigned int hlen;
 	uint64_t le = LE64(len);
 
-	if (!pctx->encrypt_type) {
-		if (compute_checksum(tag, pctx->cksum, (uchar_t *)body, len, 0, 0) != 0)
-			return (-1);
-		serialize_checksum(tag, out, pctx->cksum_bytes);
-		return (pctx->cksum_bytes);
-	}
-	if (!pctx->sx_mac_ok || hmac_reinit(&pctx->sx_mac) != 0)
-		return (-1);
-	hmac_update(&pctx->sx_mac, (uchar_t *)domain, sizeof (domain));
-	hmac_update(&pctx->sx_mac, (uchar_t *)body, len);
-	hmac_update(&pctx->sx_mac, (uchar_t *)&le, sizeof (le));
-	hmac_final(&pctx->sx_mac, tag, &hlen);
-	serialize_checksum(tag, out, pctx->mac_bytes);
-	return (pctx->mac_bytes);
+	memcpy(ad, &le, 8);
+	memcpy(ad + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ);
+	memcpy(ad + 16, end, PZ_END_LEN);
+	return (16 + PZ_END_LEN);
 }
 
 /*
- * Encrypt or decrypt the index body in place with the file's cipher, in
- * a stream of its own: chunk ids are 32-bit, SX_NONCE_ID is 2^63.
+ * Make the seek index tag into tag: for an encrypted file (version 12)
+ * seal the body in place with the file's AEAD as piece 0 of stream
+ * PZ_STREAM_INDEX, with sx_ad() as associated data (end is the end
+ * record, written before the index); otherwise the file's chunk
+ * checksum over the body, which begins with its own magic. Returns the
+ * tag length, or -1.
+ *
+ * NB: sx_seal() and sx_check() are the only places the index tag and
+ * the body cipher are defined.
  */
 static int
-sx_crypt(pc_ctx_t *pctx, uchar_t *body, uint64_t len)
+sx_seal(pc_ctx_t *pctx, uchar_t *body, uint64_t len, const uchar_t *end, uchar_t *tag)
 {
-	if (!pctx->encrypt_type)
-		return (0);
-	return (crypto_buf(&(pctx->crypto_ctx), body, body, len, SX_NONCE_ID));
+	uchar_t ck[CKSUM_MAX_BYTES], ad[16 + PZ_END_LEN];
+	size_t adl;
+
+	if (!pctx->pz_v12) {
+		if (compute_checksum(ck, pctx->cksum, body, len, 0, 0) != 0)
+			return (-1);
+		serialize_checksum(ck, tag, pctx->cksum_bytes);
+		return (pctx->cksum_bytes);
+	}
+	adl = sx_ad(len, end, ad);
+	if (pc_pz_seal(&pctx->pz_aead, PZ_STREAM_INDEX, 0, ad, adl, body, len, tag) != 0)
+		return (-1);
+	return (AEAD_TAGLEN);
+}
+
+/*
+ * Check the seek index tag that sx_seal() made over the stored body: 0
+ * if it matches. With decrypt set, an encrypted body is also decrypted
+ * in place (it is left untouched otherwise, so body may be read-only).
+ * end is the version 12 end record as read from the file.
+ */
+static int
+sx_check(pc_ctx_t *pctx, uchar_t *body, uint64_t len, const uchar_t *end,
+    const uchar_t *tag, int decrypt)
+{
+	uchar_t ck[CKSUM_MAX_BYTES], want[CKSUM_MAX_BYTES], ad[16 + PZ_END_LEN];
+	size_t adl;
+
+	if (!pctx->pz_v12) {
+		if (compute_checksum(ck, pctx->cksum, body, len, 0, 0) != 0)
+			return (-1);
+		serialize_checksum(ck, want, pctx->cksum_bytes);
+		return (sx_tag_eq(want, tag, pctx->cksum_bytes) ? 0 : -1);
+	}
+	adl = sx_ad(len, end, ad);
+	if (decrypt)
+		return (pc_pz_open(&pctx->pz_aead, PZ_STREAM_INDEX, 0, ad, adl, body, len, tag));
+	return (pc_pz_verify(&pctx->pz_aead, PZ_STREAM_INDEX, 0, ad, adl, body, len, tag));
 }
 
 /* Bytes of each chunk's verification field the index stores. */
@@ -3151,13 +3177,14 @@ sx_taglen(pc_ctx_t *pctx)
 }
 
 /*
- * Compression with -X: after the end-of-stream marker, append the index
- * body (encrypted with the file), its tag, its length and the trailer
- * magic. The file is complete and valid without these bytes; readers
- * before 4.5 stop at the marker and never see them.
+ * Compression with -X: after the end-of-stream marker (and for version
+ * 12 the end record, given in end), append the index body (encrypted
+ * when the file is), its tag, its length and the trailer magic. The
+ * file is complete and valid without these bytes; readers before 4.5
+ * stop at the marker and never see them.
  */
 static int
-sx_write_index(pc_ctx_t *pctx, int compfd)
+sx_write_index(pc_ctx_t *pctx, int compfd, const uchar_t *end)
 {
 	uchar_t trailer[CKSUM_MAX_BYTES + 8 + SX_MAGIC_SZ], *body;
 	uint64_t len, le;
@@ -3169,7 +3196,7 @@ sx_write_index(pc_ctx_t *pctx, int compfd)
 		log_msg(LOG_ERR, 0, "Out of memory building the seek index.");
 		return (-1);
 	}
-	if (sx_crypt(pctx, body, len) == 0 && (t = sx_tag(pctx, body, len, trailer)) >= 0) {
+	if ((t = sx_seal(pctx, body, len, end, trailer)) >= 0) {
 		le = LE64(len);
 		memcpy(trailer + t, &le, 8);
 		memcpy(trailer + t + 8, SX_TRAILER_MAGIC, SX_MAGIC_SZ);
@@ -3179,6 +3206,7 @@ sx_write_index(pc_ctx_t *pctx, int compfd)
 		else
 			log_msg(LOG_ERR, 1, "Write ");
 	} else {
+		log_error_code(PC_ERR_CRYPTO);
 		log_msg(LOG_ERR, 0, "Cannot compute the seek index tag.");
 	}
 	pc_mfree(body);
@@ -4052,6 +4080,8 @@ comp_done:
 		else
 			log_msg(LOG_ERR, 0, "Error compressing");
 	} else {
+		uchar_t end[PZ_END_LEN];
+
 		/*
 		* Write a trailer of zero chunk length.
 		*/
@@ -4060,13 +4090,12 @@ comp_done:
 		    sizeof (compressed_chunksize)) < 0) {
 			log_msg(LOG_ERR, 1, "Write ");
 			err = 1;
-		} else if (pctx->sx_w != NULL && sx_write_index(pctx, compfd) != 0) {
-			err = 1;
 		}
-		/* Version 12: the authenticated chunk counts, so truncation shows. */
+		/*
+		 * Version 12: the authenticated chunk counts, so truncation
+		 * shows. Right after the marker, before any seek index.
+		 */
 		if (!err && pctx->pz_v12) {
-			uchar_t end[PZ_END_LEN];
-
 			if (pc_pz_end_make(&pctx->pz_aead, pctx->chunk_num, pctx->pz_nmeta,
 			    end) != 0 ||
 			    Write(compfd, end, sizeof (end)) != sizeof (end)) {
@@ -4074,6 +4103,9 @@ comp_done:
 				err = 1;
 			}
 		}
+		if (!err && pctx->sx_w != NULL &&
+		    sx_write_index(pctx, compfd, pctx->pz_v12 ? end : NULL) != 0)
+			err = 1;
 
 		/*
 		 * Rename the temporary file to the actual compressed file

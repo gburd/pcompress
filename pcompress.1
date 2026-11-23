@@ -231,9 +231,10 @@ need a file written with
 .Fl X ,
 read from a file, not standard input.
 A job takes one of them, once.
-They read the index, check its tag (the file's checksum, or its HMAC
-when encrypted) and decode only the chunks that hold the range; each of
-those must match the index's record of it.
+They read the index, check its tag (the file's checksum, or its
+authentication tag when encrypted) and decode only the chunks that hold
+the range; each of those must match the index's record of it, and when
+encrypted is authenticated as it is read.
 A file without an index is refused, not decoded in full.
 .It Fl n
 Do not sort archive members by type before archiving.

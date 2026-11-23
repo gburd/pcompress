@@ -42,7 +42,7 @@ extern "C" {
 #define	PZ_STREAM_DATA		1	/* data chunks, ordinal = chunk number */
 #define	PZ_STREAM_META		2	/* metadata chunks, ordinal = their number */
 #define	PZ_STREAM_END		3	/* the end record, ordinal 0 */
-#define	PZ_STREAM_INDEX		4	/* reserved for the seekable index */
+#define	PZ_STREAM_INDEX		4	/* the seek index body, ordinal 0 */
 
 /* Header fields after the level: salt, KDF id and cost (big-endian). */
 #define	PZ_SALT_LEN	32

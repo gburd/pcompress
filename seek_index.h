@@ -36,8 +36,6 @@
 #define	SX_BODY_MAGIC		"PCSXIDX1"	/* first 8 bytes of the body */
 #define	SX_TRAILER_MAGIC	"PCSEEK01"	/* last 8 bytes of the file */
 #define	SX_MAGIC_SZ		8
-/* The body's cipher stream: no chunk id (32 bits) comes near it. */
-#define	SX_NONCE_ID		(1ULL << 63)
 #define	SX_CHUNK_FIXED		16		/* file offset, length */
 #define	SX_MEMBER_FIXED		18		/* offset, length, name length */
 #define	SX_NAME_MAX		65535

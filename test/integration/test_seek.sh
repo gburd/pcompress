@@ -79,23 +79,34 @@ else
 fi
 
 echo ""
-echo "--- Encrypted ---"
+echo "--- Encrypted (format version 12) ---"
 echo "seek-test-password" > "$T/pw"
-cp "$T/pw" "$T/pw1"
-rm -f "$T/e.pz"
-if $PCOMPRESS -c zstd -X -e AES -w "$T/pw1" -s 256k "$T/in" "$T/e" >/dev/null 2>&1; then
-	cp "$T/pw" "$T/pw2"
-	expect_range "AES: across chunks" "$T/e.pz" 600000 400000 -w "$T/pw2"
-	echo "not-the-password" > "$T/pw3"
-	rm -f "$T/part"
-	if ! $PCOMPRESS -d -w "$T/pw3" -r 0:1 "$T/e.pz" "$T/part" >/dev/null 2>&1; then
-		log_pass "AES: wrong password refused"
-	else
-		log_fail "AES: wrong password accepted"
+# -w wipes the password file it reads: each run gets a fresh copy.
+pw() { cp "$T/pw" "$T/pw.cur"; echo "$T/pw.cur"; }
+for cipher in AES SALSA20; do
+	rm -f "$T/e.pz"
+	if ! $PCOMPRESS -c zstd -X -e $cipher -w "$(pw)" -s 256k "$T/in" "$T/e" >/dev/null 2>&1
+	then
+		log_fail "$cipher: compress with -X"
+		continue
 	fi
-else
-	log_fail "AES: compress with -X"
-fi
+	expect_range "$cipher: across chunks" "$T/e.pz" 600000 400000 -w "$(pw)"
+	expect_range "$cipher: last byte" "$T/e.pz" $((size - 1)) 1 -w "$(pw)"
+	rm -f "$T/full"
+	if $PCOMPRESS -d -w "$(pw)" "$T/e.pz" "$T/full" >/dev/null 2>&1 &&
+	    cmp -s "$T/in" "$T/full"; then
+		log_pass "$cipher: full decode of an indexed file"
+	else
+		log_fail "$cipher: full decode of an indexed file"
+	fi
+	echo "not-the-password" > "$T/pw.bad"
+	rm -f "$T/part"
+	if ! $PCOMPRESS -d -w "$T/pw.bad" -r 0:1 "$T/e.pz" "$T/part" >/dev/null 2>&1; then
+		log_pass "$cipher: wrong password refused"
+	else
+		log_fail "$cipher: wrong password accepted"
+	fi
+done
 
 echo ""
 echo "--- Archive members ---"
@@ -201,28 +212,53 @@ x[u:u + 8] = struct.pack("<Q", struct.unpack("<Q", b[u:u + 8])[0] - 1)
 x[-16 - t:-16] = hashlib.blake2b(bytes(x[body:body + n]), digest_size=32).digest()[::-1]
 put("d_ulen.pz", x)
 PYEOF
-	# Two equal-length encrypted chunks swapped: each still has a valid
-	# HMAC, so only the index's copy of their tags tells them apart.
+	# Version 12: the layout is header (88 bytes), chunks (length, 16-byte
+	# tag, flags, payload), the zero marker, the end record (32 bytes),
+	# then the index body, its 16-byte tag, its length and the magic.
+	# Random data with -c none gives chunks of equal length, which two
+	# files of the same input and options share, so the index of one
+	# fits the other byte for byte.
 	dd if=/dev/urandom of="$T/r.bin" bs=262144 count=6 2>/dev/null
-	cp "$T/pw" "$T/pw4"
-	rm -f "$T/r.pz"
-	$PCOMPRESS -c none -X -e AES -w "$T/pw4" -s 256k "$T/r.bin" "$T/r" >/dev/null 2>&1
-	python3 - "$T/r.pz" "$T/d_swap.pz" <<'PYEOF'
+	rm -f "$T/r.pz" "$T/r2.pz"
+	$PCOMPRESS -c none -X -e AES -w "$(pw)" -s 256k "$T/r.bin" "$T/r" >/dev/null 2>&1
+	$PCOMPRESS -c none -X -e AES -w "$(pw)" -s 256k "$T/r.bin" "$T/r2" >/dev/null 2>&1
+	python3 - "$T/r.pz" "$T/r2.pz" "$T" <<'PYEOF'
 import struct, sys
-b = open(sys.argv[1], "rb").read()
-p = 24 + 4 + struct.unpack(">I", b[24:28])[0] + 8 + 4 + 16 + 32
-ch = []
-while struct.unpack(">Q", b[p:p + 8])[0]:
-    n = 8 + 32 + 1 + struct.unpack(">Q", b[p:p + 8])[0]
-    ch.append((p, n)); p += n
-(a, n), (c, _) = ch[1], ch[3]
-x = bytearray(b); x[a:a + n] = b[c:c + n]; x[c:c + n] = b[a:a + n]
-open(sys.argv[2], "wb").write(x)
+a, b2, d = open(sys.argv[1], "rb").read(), open(sys.argv[2], "rb").read(), sys.argv[3]
+def layout(b):
+    p, ch = 88, []
+    while struct.unpack(">Q", b[p:p + 8])[0]:
+        n = 8 + 16 + 1 + struct.unpack(">Q", b[p:p + 8])[0]
+        ch.append((p, n)); p += n
+    return ch, p
+def put(name, x): open(d + "/" + name, "wb").write(x)
+ch, mark = layout(a)
+n = struct.unpack("<Q", a[-16:-8])[0]
+body = len(a) - 16 - 16 - n
+assert body == mark + 8 + 32
+x = bytearray(a); x[body + 45] ^= 1; put("v_body.pz", x)
+x = bytearray(a); x[body + 40 + 32 + 16] ^= 1; put("v_itag.pz", x)	# chunk 1's tag, in the index
+x = bytearray(a); x[-17] ^= 1; put("v_tag.pz", x)
+x = bytearray(a); x[mark + 8 + 3] ^= 1; put("v_end.pz", x)
+x = bytearray(a); x[ch[1][0] + 8] ^= 1; put("v_ctag.pz", x)	# chunk 1's own tag
+(p1, n1), (p3, _) = ch[1], ch[3]
+x = bytearray(a); x[p1:p1 + n1] = a[p3:p3 + n1]; x[p3:p3 + n1] = a[p1:p1 + n1]
+put("v_swap.pz", x)
+_, mark2 = layout(b2)
+put("v_moved.pz", a[:mark + 8 + 32] + b2[mark2 + 8 + 32:])
 PYEOF
-	cp "$T/pw" "$T/pw5"
 	rm -f "$T/part"
-	expect_fail "swapped encrypted chunks refused" $PCOMPRESS -d -w "$T/pw5" \
-	    -r 300000:10 "$T/d_swap.pz" "$T/part"
+	if $PCOMPRESS -d -w "$(pw)" -r 300000:10 "$T/r.pz" "$T/part" >/dev/null 2>&1 &&
+	    dd if="$T/r.bin" bs=1 skip=300000 count=10 2>/dev/null | cmp -s - "$T/part"; then
+		log_pass "version 12: untouched file reads"
+	else
+		log_fail "version 12: untouched file reads"
+	fi
+	for f in v_body v_itag v_tag v_end v_ctag v_swap v_moved; do
+		rm -f "$T/part"
+		expect_fail "version 12: $f refused" $PCOMPRESS -d -w "$(pw)" \
+		    -r 300000:10 "$T/$f.pz" "$T/part"
+	done
 	# A body length of 900 MB (a hole in a sparse file) under a wrong
 	# tag: refused on its tag, before 900 MB is allocated for it. Linux
 	# only, where ulimit -d bounds malloc() but not a file mapping. Not

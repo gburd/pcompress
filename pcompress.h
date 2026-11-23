@@ -462,8 +462,6 @@ struct pc_ctx {
 	sx_writer_t *sx_w;	/* this job's index; NULL: none */
 	uint64_t sx_wpos;	/* bytes of the .pz written: header and chunks */
 	uint64_t arc_spos;	/* archive mode: bytes of PAX stream produced */
-	mac_ctx_t sx_mac;	/* encrypted: keyed for the index tag */
-	int sx_mac_ok;
 
 	/* Seek index, decompression (-r, -R). */
 	int sx_mode;		/* 0 off, SX_MODE_RANGE, SX_MODE_MEMBER */

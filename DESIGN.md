@@ -136,11 +136,12 @@ only the chunks they need (`seek_index.c` builds and parses the body;
 `pcompress.c` places, authenticates and uses it).
 
 ```
-... chunk*  0[8]  body  tag[t]  len[8]  "PCSEEK01"
+... chunk*  0[8]  [end record]  body  tag[t]  len[8]  "PCSEEK01"
 ```
 
 `len` (little-endian) is the body's size and `t` is the chunk tag size:
-the checksum size, or the HMAC size when encrypted. The body is
+the checksum size, or 16 (the AEAD tag) when encrypted. The end record
+is there only in encrypted files (format version 12). The body is
 little-endian:
 
 | field | size |
@@ -149,36 +150,49 @@ little-endian:
 | t, then 7 zero bytes | 8 |
 | file offset of the end-of-stream marker | 8 |
 | chunk count, member count | 8 + 8 |
-| per chunk: file offset of its length field, uncompressed length, its tag (the `t` bytes after its length field) | 16 + t |
+| per chunk: file offset of its length field, uncompressed length, its tag (the `t` bytes after its length field: its checksum, or its AEAD tag) | 16 + t |
 | per member: PAX stream offset, length, u16 name length, name | 18 + n |
 
 **Old readers.** A reader stops at the end-of-stream marker and never
-reads past it, so 4.4 and earlier read a `-X` file byte for byte as
-any other (checked with the 4.4.0 binary, for plain, encrypted and
-archive files, also with the index damaged). This needs no new
+reads past it, so 4.4 and earlier read an unencrypted `-X` file
+(format version 10) byte for byte as any other (checked with the 4.4.0
+binary by ci/xcompat.sh, for files and archives). This needs no new
 version or flag, and an old reader cannot misread the index because it
-never reads it.
+never reads it. Encrypted files are version 12, which 4.4 refuses
+whether or not they have an index.
 
-**Authentication.** `sx_tag()` is the one place the tag is defined.
-Without encryption it is the file's chunk checksum over the body.
-With encryption the body is encrypted with the file's cipher, under
-chunk id 2^63, a stream no 32-bit chunk id reaches. The tag is HMAC
-with the file's key over "pcompress seek index\0", the body, and its
-length. A chunk's HMAC input begins with its big-endian length, which
-cannot equal those first bytes, so a chunk cannot pass as an index.
-The body records the end marker's offset, so it cannot be moved onto
-another stream. Each chunk entry holds that chunk's own tag, and a
-random read checks every chunk it decodes against it. That check is
-what binds a chunk to its place: a chunk HMAC covers its length and
-bytes, not its ordinal, so two encrypted chunks of equal length could
-be swapped without it (test_seek.sh does this). When `.pz` encryption
-gets its own nonce domains and binds the ordinal (format version 12),
-`sx_tag()` and `sx_crypt()` move to it and the per-chunk check stays.
+**Authentication.** `sx_seal()` and `sx_check()` are the one place the
+tag is defined. Without encryption it is the file's chunk checksum over
+the body, which anyone can recompute: it catches damage, not forgery,
+like the chunk checksums. With encryption (version 12) the body is
+sealed with the file's AEAD as stream 4, ordinal 0 (see "Encryption"),
+and the associated data is the body's length, the trailer magic, and
+the end record that precedes the body. The end record is itself under
+the file's key and holds the chunk counts, so an index cannot be moved
+to another file, cut, or put after other chunks, and nothing else is
+sealed in stream 4, so no other piece of the file passes as an index.
+The body records the end marker's offset, so it cannot be moved along
+the file either. Each chunk entry holds that chunk's own tag (its
+checksum, or its 16-byte AEAD tag), and a random read checks every
+chunk it reads against it before decoding. Without encryption that is
+what binds a chunk to its place; with it, each chunk is also opened as
+its own ordinal of stream 1 (the index gives the ordinal), so a moved
+or swapped chunk fails twice over (test_seek.sh swaps two).
+
+**Random reads of version 12 files.** A random read stops inside the
+chunks, so it does not reach the end record and does not check the end
+record's own tag. It does not need to: the index tag covers the end
+record's bytes and the index holds the chunk count and every chunk's
+offset and tag, so a truncated or extended file, or one whose chunks
+were dropped, fails the index or the chunk check. A full decode of an
+indexed file checks the end record as usual and then accepts the index
+after it unparsed (the trailer magic must be last).
 
 **Untrusted.** The reader checks the trailer magic, then bounds `len`
 by the file and by 1 GB, reads the 8 bytes before the body (they must
-be the zero marker), and verifies the tag in constant time over the
-body mapped from the file, so a forged length costs no memory. Only
+be the zero marker), and verifies the tag over the body mapped from the
+file (constant time for the checksum; the AEAD only checks, decrypting
+into a scratch buffer it wipes), so a forged length costs no memory. Only
 then is the body read into memory; its tag is checked again on that
 copy (the file may have changed), and it is decrypted and parsed. `sx_parse()` checks every count against the body's
 size, the end marker against the file, every chunk inside
@@ -531,7 +545,7 @@ Every authenticated piece of the file belongs to a *stream* and has an
 | data chunks | 1 | chunk number from 0 | payload; AD: `len_cmp`, flags, original size |
 | metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
 | end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
-| seekable index | 4 | reserved (phase A2) | |
+| seek index | 4 | 0 | the index body; AD: its length (u64 LE), `PCSEEK01`, the end record |
 
 The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
 zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
@@ -569,13 +583,13 @@ encrypted, since a plain file put in place of an encrypted one would be
 authenticated by nothing. Chunks keep the version 10 layout with the 16-byte tag in
 the `mac` field and no digest: the AEAD tag is the integrity check.
 
-A seekable index (phase A2) should be sealed as stream 4, ordinal 0,
-with the per-chunk tags it lists as AD, and counted in the end record
-(or given its own record). After the end record the reader accepts the
-end of the file, or a region whose last 8 bytes are the index trailer
-magic `PCSEEK01` (it does not parse the region; the index reader
-authenticates it), and refuses anything else as corrupt, so data
-appended to a file is not silently ignored.
+The seek index (`-X`, see "Seek index") is sealed as stream 4, ordinal
+0, with the end record in its associated data; the per-chunk tags it
+lists are inside the sealed body. After the end record the reader
+accepts the end of the file, or a region whose last 8 bytes are the
+index trailer magic `PCSEEK01` (it does not parse the region; the
+index reader authenticates it), and refuses anything else as corrupt,
+so data appended to a file is not silently ignored.
 
 **Version 11 and earlier** (read only). scrypt derives the key, at
 N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and
