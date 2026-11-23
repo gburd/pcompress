@@ -470,8 +470,10 @@ metadata chunks it skips; the metadata thread checks its own count when
 it reaches the end), so dropping chunks off the end, or the end record
 itself, fails. Decompressed output is written as chunks verify, so a
 file truncated after chunk *k* has written *k* chunks when the error is
-reported, and pcompress exits non-zero; the same holds for any chunk
-that fails. A reader given a password refuses a file that is not
+reported; pcompress then exits non-zero and removes the output file if
+it created it (not a caller's descriptor, standard output, or files an
+archive extraction already wrote). The same holds for any chunk that
+fails. A reader given a password refuses a file that is not
 encrypted, since a plain file put in place of an encrypted one would be
 authenticated by nothing. Chunks keep the version 10 layout with the 16-byte tag in
 the `mac` field and no digest: the AEAD tag is the integrity check.

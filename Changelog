@@ -1,4 +1,8 @@
 == Unreleased ==
+Change: a decompression that fails (a bad tag or checksum, a missing
+  end record, a truncated file) removes the output file it created, as
+  a cancelled one did; output to a caller's descriptor or to standard
+  output, and archive extraction, are left as they are.
 Security: decompressing with a password (-w, pc_set_password()) refuses
   a file that is not encrypted ("the file is not encrypted",
   PC_ERR_CRYPTO), where it decompressed it: anyone can substitute a

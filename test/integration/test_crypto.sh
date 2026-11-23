@@ -208,8 +208,10 @@ if command -v python3 >/dev/null 2>&1; then
 			rm -f "$TTF.out"
 			if $PCOMPRESS -d -w "$PWFILE" "$TTF.bad.pz" "$TTF.out" 2>/dev/null; then
 				log_fail "$alg: $op accepted"
+			elif [ -e "$TTF.out" ]; then
+				log_fail "$alg: $op refused, partial output left"
 			else
-				log_pass "$alg: $op refused"
+				log_pass "$alg: $op refused, no output"
 			fi
 		done
 	done

@@ -103,6 +103,8 @@ appended.
 When the input is
 .Fl
 and no target is given, output goes to standard output.
+If decompression fails (a damaged, truncated or tampered file), the
+output file is removed.
 For an archive,
 .Ar target
 is the directory to extract into, created if necessary; it defaults

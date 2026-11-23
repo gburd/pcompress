@@ -2483,8 +2483,12 @@ uncomp_done:
 		/* stdout or the caller's out_fd (decompress to a stream): not ours. */
 		if (uncompfd != -1 && own_uncompfd) close(uncompfd);
 	}
-	/* A cancelled job leaves no partial file it created itself. */
-	if (pctx->cancelled && own_uncompfd)
+	/*
+	 * A failed or cancelled job leaves no partial file it created
+	 * itself: for an encrypted file, the chunks before a bad tag or a
+	 * missing end record are not a verified prefix of anything.
+	 */
+	if ((err || pctx->cancelled) && own_uncompfd)
 		unlink(to_filename);
 	if (pctx->archive_mode)
 		dec_archive_done(pctx, err);
