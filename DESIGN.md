@@ -265,8 +265,8 @@ the `.pz` format.
 
 | offset | size | field |
 |--------|------|-------|
-| 0  | 4  | magic `PCK1` |
-| 4  | 1  | version (1) |
+| 0  | 4  | magic `PCK1`, or `PCK2` when keyed (4.5) |
+| 4  | 1  | version (1, or 2 with `PCK2`) |
 | 5  | 1  | flags: 1 encrypted, 2 stored raw, 4 dictionary (4.5) |
 | 6  | 1  | algorithm id (stable table in `chunk.c`; 0 when raw) |
 | 7  | 1  | level (low 4 bits), adaptive sub-algorithm (high 4) |
@@ -274,13 +274,25 @@ the `.pz` format.
 | 16 | 24 | nonce (random when encrypted, else 0) |
 | 40 | 32 | dictionary id, only with flag 4 |
 | h  | n  | payload (h is 72 with flag 4, else 40) |
-| h+n | 32 | tag: BLAKE2b-256 over bytes [0, h+n) |
+| h+n | 32 | v1 tag: BLAKE2b-256 over bytes [0, h+n) |
+| h+n | 16 | v2 tag: Poly1305, from XChaCha20-Poly1305 |
 
-With a key, the payload is XSalsa20-encrypted and the tag is keyed
-(encrypt-then-MAC). The encryption and MAC keys are the two halves of
-BLAKE2b-512(caller's key, "pcompress chunk subkeys"). They must not be
-32-byte BLAKE2b outputs: chunk ids are exactly those, keyed with the same
-key over caller data, and they are public as object names. `pc_chunk_open()` checks magic,
+Without a key an object is version 1 with an unkeyed BLAKE2b tag (an
+integrity check). With a key, since 4.5, it is version 2: flag 1 always
+set, the payload sealed with XChaCha20-Poly1305 under the random 24-byte
+nonce and the first half of BLAKE2b-512(caller's key, "pcompress chunk
+aead"), with header bytes [0, h) as associated data, so the whole header
+is authenticated. A random 192-bit nonce per object: a repeat among 2^48
+objects under one key has probability about 2^-96. 4.4 sealed keyed
+objects as version 1: XSalsa20 with the first half of BLAKE2b-512(key,
+"pcompress chunk subkeys") and a BLAKE2b-256 tag keyed with the second
+(encrypt-then-MAC); those still open, and 4.4 refuses version 2 objects
+(unknown magic). Subkeys are halves of 64-byte digests, never 32-byte
+BLAKE2b outputs: chunk ids are exactly those, keyed with the same key
+over caller data, and they are public as object names. Sealing with a
+key ran at 468 MB/s and opening at 681 MB/s with v1 (zstd:3,
+bench_chunk on a Xeon 8488C), 897 and 2226 MB/s with v2: one AEAD pass
+in place of a cipher pass and a BLAKE2b pass. `pc_chunk_open()` checks magic,
 version, flags, algorithm id and the declared length (at most 4 GB, and
 for raw objects exactly the payload length) before anything else, then
 the tag in constant time, and only then decrypts and decompresses into

@@ -1,4 +1,12 @@
 == Unreleased ==
+Library: chunk objects sealed with a key are object version 2 (magic
+  PCK2): XChaCha20-Poly1305 with a random 192-bit nonce and the whole
+  header as associated data, 16-byte tag, in place of XSalsa20 and a
+  keyed BLAKE2b-256 tag. Sealing zstd:3 with a key ran at 468 MB/s and
+  opening at 681 MB/s; now 897 and 2226 MB/s (bench_chunk, Xeon 8488C).
+  Objects are 16 bytes smaller. Keyed version 1 objects still open;
+  4.4 and earlier cannot open version 2 objects. Unkeyed objects are
+  unchanged (PCK1). The dictionary flag works as before in both.
 Security: encrypted .pz files are format version 12, with authenticated
   encryption. 4.4 and earlier encrypted data chunk k and metadata chunk k
   of an archive with the same key and CTR nonce (the XOR of the two

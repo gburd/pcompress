@@ -431,9 +431,15 @@ choose and keep stable.
 Compresses one chunk with the context's algorithm and level, stores it
 raw if it does not shrink (or, from 16 KB, if a sampled byte histogram
 says it cannot: compressed, encrypted or random data skips the codec),
-and with a key encrypts it (XSalsa20, random
-nonce) and authenticates header and payload (keyed BLAKE2b-256).
-Without a key the object has an unkeyed BLAKE2b-256 checksum.
+and with a key encrypts and authenticates it with XChaCha20-Poly1305
+(random 192-bit nonce, the header as associated data; object version 2,
+magic
+.Qq PCK2 ,
+which 4.4 and earlier cannot open).
+Without a key the object has an unkeyed BLAKE2b-256 checksum (version 1).
+.Fn pc_chunk_open
+opens both versions, including keyed version 1 objects sealed by 4.4
+(XSalsa20 and a keyed BLAKE2b-256 tag).
 The output buffer needs
 .Fn pc_chunk_seal_bound len
 bytes.

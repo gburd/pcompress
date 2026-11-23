@@ -62,7 +62,7 @@ Each piece has a libpcompress equivalent:
 |---|---|
 | chunker (`chunkerVersion`) | `pc_chunker_*` (content-defined, deterministic) |
 | blob id (SHA-256 of plaintext) | `pc_chunk_id`, keyed BLAKE2b-256: the store cannot confirm guessed content |
-| blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XSalsa20 + BLAKE2b (encrypt-then-MAC) |
+| blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XChaCha20-Poly1305 |
 | tree / node | `pc_manifest_*`, one per directory, linked by `subtree` ids |
 | encryptedkeyset.dat | `pc_keyfile_*` (Argon2id-wrapped 256-bit key) |
 | local blob cache / "already uploaded?" | `pc_index_*` |

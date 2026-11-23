@@ -455,7 +455,7 @@ MU_TEST(test_bad_args)
 	mu_assert(pc_chunk_open(c, obj, ol, out, &pl) != 0, "small plain buffer");
 	mu_assert(pc_chunk_open_size("not an object at all, really", 28) == (size_t)-1, "size of junk");
 	pl = sizeof (out);
-	mu_assert(pc_chunk_open(c, "PCK2junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk",
+	mu_assert(pc_chunk_open(c, "PCK9junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk",
 	    70, out, &pl) != 0, "bad magic");
 	mu_assert_int_eq(PC_ERR_FORMAT, pc_last_error_code(c));
 	pc_free(c);
@@ -891,7 +891,8 @@ MU_TEST(test_index_utf8_path)
 /*
  * Object names are keyed chunk ids, so they are public: no chunk id may
  * equal a subkey. Before the fix, the id of a chunk holding exactly the
- * MAC-key label was the MAC key; forge with it, and it must not open.
+ * MAC-key label was the MAC key; forge a version 1 keyed object (which
+ * still opens) with it, and it must not open.
  */
 MU_TEST(test_ids_do_not_leak_subkeys)
 {
@@ -904,13 +905,73 @@ MU_TEST(test_ids_do_not_leak_subkeys)
 		key[i] = (unsigned char)(i * 7 + 1);
 	c = ctx_with("none", 0, key);
 	mu_assert_int_eq(0, pc_chunk_seal(c, "attack at dawn", 14, obj, &ol));
-	clen = ol - 40 - 32;
-	mu_assert(clen == 14, "raw payload");
+	clen = ol - 40 - 16;
+	mu_assert(clen == 14 && memcmp(obj, "PCK2", 4) == 0, "raw v2 payload");
+	memcpy(obj, "PCK1", 4);
+	obj[4] = 1;
 	pc_chunk_id("pcompress chunk mac", 19, key, 32, mac);
-	obj[40] ^= 1;
 	pc_chunk_id(obj, 40 + clen, mac, 32, obj + 40 + clen);
+	ol = 40 + clen + 32;
 	mu_assert(pc_chunk_open(c, obj, ol, out, &pl) != 0, "object forged with a chunk id as MAC key");
 	pc_free(c);
+}
+
+/*
+ * Keyed objects: version 2 (PCK2, XChaCha20-Poly1305, 16-byte tag) since
+ * 4.5; a version 1 keyed object sealed by 4.4.0 (XSalsa20 and a keyed
+ * BLAKE2b tag) still opens. Unkeyed objects stay version 1.
+ */
+MU_TEST(test_object_versions)
+{
+	static const char v1hex[] =
+	    "50434b310103000020000000000000004b6d923565b2d801d96c8773992f86cf"
+	    "53b2f22a71812f0acba77e06fb42083a5a4f8744568c54f2491ea95b5fe56bec"
+	    "f9a01540b500530c57bcd5bbf7ed483baed91a725ce824e4e7bb73f8ddfb7b47"
+	    "5f56ef398d64970a";
+	const char *m = "sealed by 4.4.0 with a key, zstd";
+	unsigned char key[32], obj[200], out[100];
+	size_t ol, pl = sizeof (out), i;
+	unsigned int b;
+	pc_ctx_t *c, *d;
+
+	for (i = 0; i < 32; i++)
+		key[i] = (unsigned char)(i * 11 + 3);
+	for (i = 0; i < 104; i++) {
+		sscanf(v1hex + 2 * i, "%2x", &b);
+		obj[i] = (unsigned char)b;
+	}
+	d = ctx_with(NULL, 0, key);
+	mu_assert(pc_chunk_open_size(obj, 104) == strlen(m), "v1 object size");
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, 104, out, &pl));
+	mu_assert(pl == strlen(m) && memcmp(out, m, pl) == 0, "4.4.0 keyed object opens");
+	obj[50] ^= 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, 104, out, &pl) != 0, "changed v1 object opens");
+
+	c = ctx_with("zstd", 3, key);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, m, strlen(m), obj, &ol));
+	mu_assert(memcmp(obj, "PCK2", 4) == 0 && obj[4] == 2 && (obj[5] & 1), "keyed v2 header");
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open_size(obj, ol) == strlen(m), "v2 object size");
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, ol, out, &pl));
+	mu_assert(pl == strlen(m) && memcmp(out, m, pl) == 0, "v2 round trip");
+	/* A v2 object claiming no encryption, or relabelled v1, is refused. */
+	obj[5] &= ~1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "unencrypted v2 opens");
+	obj[5] |= 1;
+	memcpy(obj, "PCK1", 4);
+	obj[4] = 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "v2 relabelled as v1 opens");
+	pc_free(c);
+	c = ctx_with("zstd", 3, NULL);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, m, strlen(m), obj, &ol));
+	mu_assert(memcmp(obj, "PCK1", 4) == 0 && obj[4] == 1, "unkeyed objects stay v1");
+	pc_free(c);
+	pc_free(d);
 }
 
 /* Build an unkeyed object around a hostile payload and open it. */
@@ -1033,6 +1094,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_hostile_payloads);
 	MU_RUN_TEST(test_mutation_fuzz);
 	MU_RUN_TEST(test_ids_do_not_leak_subkeys);
+	MU_RUN_TEST(test_object_versions);
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_index_utf8_path);
 	MU_RUN_TEST(test_keyfile);

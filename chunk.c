@@ -339,12 +339,26 @@ pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32])
  * dictionary the id names. Only zstd objects carry it, never raw ones, so
  * objects sealed without a dictionary are what older versions write, and
  * those versions refuse PCK_DICT objects (an unknown flag) as corrupt.
+ *
+ * Object v2 (since 4.5), for every object sealed with a key: magic
+ * "PCK2", version 2, the same header (PCK_ENCRYPTED always set, the
+ * nonce random), and in place of the BLAKE2b tag a 16-byte
+ * XChaCha20-Poly1305 tag (crypto/aead.c) over the payload, with header
+ * bytes [0, h) as associated data. The AEAD key is the first half of
+ * BLAKE2b-512(key, "pcompress chunk aead"), a 64-byte digest for the
+ * reason subkeys() gives. A 192-bit random nonce per object makes a
+ * repeat negligible (2^-96 after 2^48 objects under one key). Version 1
+ * objects with a key still open; 4.4 and earlier refuse v2 (unknown
+ * magic).
  */
 #define	PCK_MAGIC	"PCK1"
 #define	PCK_VERSION	1
+#define	PCK2_MAGIC	"PCK2"
+#define	PCK2_VERSION	2
 #define	PCK_HDR		40
 #define	PCK_DICTID	32
 #define	PCK_TAG		32
+#define	PCK2_TAG	AEAD_TAGLEN
 #define	PCK_ENCRYPTED	0x01
 #define	PCK_RAW		0x02
 #define	PCK_DICT	0x04
@@ -415,6 +429,20 @@ subkeys(pc_ctx_t *ctx, uchar_t enc[32], uchar_t mac[32])
 	memcpy(enc, k, 32);
 	memcpy(mac, k + 32, 32);
 	memset(k, 0, sizeof (k));
+	return (0);
+}
+
+/* The v2 AEAD key from the context's key (see the object comment). */
+static int
+aead_subkey(pc_ctx_t *ctx, uchar_t k[32])
+{
+	static const uchar_t d[] = "pcompress chunk aead";
+	uchar_t w[64];
+
+	if (blake2b_keyed2(w, 64, ctx->chunk_key, 32, d, sizeof (d) - 1, NULL, 0) != 0)
+		return (-1);
+	memcpy(k, w, 32);
+	memset(w, 0, sizeof (w));
 	return (0);
 }
 
@@ -909,7 +937,7 @@ seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *cl
 static int
 chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen)
 {
-	uchar_t *o = (uchar_t *)outp, enc[32], mac[32];
+	uchar_t *o = (uchar_t *)outp, enc[32];
 	const char *algo = ctx->algo ? ctx->algo : "zstd";
 	int id = strcmp(algo, "none") == 0 ? 0 : algo_id(algo);	/* none: raw */
 	uint64_t clen = 0;
@@ -932,30 +960,33 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 	flags = seal_payload(ctx, in, len, o, &clen, &hdr, &id);
 	payload = o + hdr;
 
-	memcpy(o, PCK_MAGIC, 4);
-	o[4] = PCK_VERSION;
 	o[6] = (uchar_t)id;
 	put_le64(o + 8, len);
 	memset(o + 16, 0, 24);
 	if (ctx->chunk_key_set) {
-		flags |= PCK_ENCRYPTED;
+		/* v2: XChaCha20-Poly1305, the header as associated data. */
+		memcpy(o, PCK2_MAGIC, 4);
+		o[4] = PCK2_VERSION;
+		o[5] = flags | PCK_ENCRYPTED;
 		if (geturandom_bytes(o + 16, 24) != 0) {
 			memset(o, 0, hdr + clen);
 			return (seal_err(ctx, PC_ERR_CRYPTO, "pc_chunk_seal: no random bytes"));
 		}
-		if (subkeys(ctx, enc, mac) != 0 ||
-		    xsalsa20_xor(payload, payload, clen, o + 16, enc) != 0)
+		if (aead_subkey(ctx, enc) != 0 || aead_seal(AEAD_XCHACHA20, enc, o + 16, o, hdr,
+		    payload, payload, clen, payload + clen) != 0)
 			goto out;
+		*outlen = hdr + clen + PCK2_TAG;
+	} else {
+		memcpy(o, PCK_MAGIC, 4);
+		o[4] = PCK_VERSION;
+		o[5] = flags;
+		if (blake2b_keyed2(payload + clen, PCK_TAG, NULL, 0, o, hdr + clen, NULL, 0) != 0)
+			goto out;
+		*outlen = hdr + clen + PCK_TAG;
 	}
-	o[5] = flags;
-	if (blake2b_keyed2(payload + clen, PCK_TAG, ctx->chunk_key_set ? mac : NULL,
-	    ctx->chunk_key_set ? 32 : 0, o, hdr + clen, NULL, 0) != 0)
-		goto out;
-	*outlen = hdr + clen + PCK_TAG;
 	rv = 0;
 out:
 	memset(enc, 0, sizeof (enc));
-	memset(mac, 0, sizeof (mac));
 	if (rv != 0)
 		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_chunk_seal: crypto failure"));
 	return (0);
@@ -968,24 +999,43 @@ header_len(const uchar_t *p)
 	return ((p[5] & PCK_DICT) ? PCK_HDR + PCK_DICTID : PCK_HDR);
 }
 
+/* The tag length of an object: v1 or v2 (check_header() checked the magic). */
+static size_t
+tag_len(const uchar_t *p)
+{
+	return (p[4] == PCK2_VERSION ? PCK2_TAG : PCK_TAG);
+}
+
 /* Header checks shared by open() and open_size(). Returns plaintext size or -1. */
 static int64_t
 check_header(const uchar_t *p, size_t len)
 {
 	uint64_t plain;
+	size_t tl;
 
-	if (len < PCK_HDR + PCK_TAG || memcmp(p, PCK_MAGIC, 4) != 0 || p[4] != PCK_VERSION ||
-	    (p[5] & ~PCK_FLAGS) != 0)
+	if (len >= 5 && memcmp(p, PCK2_MAGIC, 4) == 0 && p[4] == PCK2_VERSION) {
+		tl = PCK2_TAG;
+		/* Only ever sealed with a key. */
+		if (len < PCK_HDR + tl || !(p[5] & PCK_ENCRYPTED))
+			return (-1);
+	} else if (len >= 5 && memcmp(p, PCK_MAGIC, 4) == 0 && p[4] == PCK_VERSION) {
+		tl = PCK_TAG;
+		if (len < PCK_HDR + tl)
+			return (-1);
+	} else {
+		return (-1);
+	}
+	if ((p[5] & ~PCK_FLAGS) != 0)
 		return (-1);
 	if ((p[5] & PCK_RAW) ? p[6] != 0 : (p[6] == 0 || p[6] >= sizeof (algo_ids) / sizeof (algo_ids[0]) - 1))
 		return (-1);
 	/* A dictionary object is zstd, never raw, and has room for the id. */
-	if ((p[5] & PCK_DICT) && (p[6] != PCK_ZSTD || len < PCK_HDR + PCK_DICTID + PCK_TAG))
+	if ((p[5] & PCK_DICT) && (p[6] != PCK_ZSTD || len < PCK_HDR + PCK_DICTID + tl))
 		return (-1);
 	plain = get_le64(p + 8);
 	if (plain > PCK_MAX_PLAIN)
 		return (-1);
-	if ((p[5] & PCK_RAW) && plain != len - PCK_HDR - PCK_TAG)
+	if ((p[5] & PCK_RAW) && plain != len - PCK_HDR - tl)
 		return (-1);
 	return ((int64_t)plain);
 }
@@ -1040,11 +1090,38 @@ open_payload(pc_ctx_t *ctx, const uchar_t *p, const uchar_t *src, uint64_t clen,
 	return (0);
 }
 
+/*
+ * Authenticate and decrypt the payload of a keyed object at p (header of
+ * hdr bytes, clen payload bytes, then the tag) into buf: v2 with the
+ * AEAD, v1 by checking the BLAKE2b tag first and then XSalsa20. 0, or -1
+ * if the tag does not match.
+ */
+static int
+open_keyed(pc_ctx_t *ctx, const uchar_t *p, size_t hdr, uint64_t clen, uchar_t *buf)
+{
+	uchar_t enc[32], mac[32], tag[PCK_TAG];
+	int rv = -1;
+
+	if (p[4] == PCK2_VERSION) {
+		if (aead_subkey(ctx, enc) == 0 && aead_open(AEAD_XCHACHA20, enc, p + 16, p, hdr,
+		    p + hdr, buf, clen, p + hdr + clen) == 0)
+			rv = 0;
+	} else if (subkeys(ctx, enc, mac) == 0 &&
+	    blake2b_keyed2(tag, PCK_TAG, mac, 32, p, hdr + clen, NULL, 0) == 0 &&
+	    ct_equal(tag, p + hdr + clen, PCK_TAG) &&
+	    xsalsa20_xor(buf, p + hdr, clen, p + 16, enc) == 0) {
+		rv = 0;
+	}
+	memset(enc, 0, sizeof (enc));
+	memset(mac, 0, sizeof (mac));
+	return (rv);
+}
+
 static int
 chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen)
 {
 	const uchar_t *p = (const uchar_t *)inp;
-	uchar_t tag[PCK_TAG], enc[32], mac[32], *buf = NULL;
+	uchar_t tag[PCK_TAG], *buf = NULL;
 	uint64_t clen = 0, plain;
 	size_t hdr;
 	int64_t n;
@@ -1055,8 +1132,9 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	if (inp == NULL || out == NULL || outlen == NULL)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_open: NULL argument"));
 	if ((n = check_header(p, len)) < 0)
-		return (seal_err(ctx, len >= 4 && memcmp(p, PCK_MAGIC, 4) == 0 ?
-		    PC_ERR_CORRUPT : PC_ERR_FORMAT, "pc_chunk_open: not a valid chunk object"));
+		return (seal_err(ctx, len >= 4 && (memcmp(p, PCK_MAGIC, 4) == 0 ||
+		    memcmp(p, PCK2_MAGIC, 4) == 0) ? PC_ERR_CORRUPT : PC_ERR_FORMAT,
+		    "pc_chunk_open: not a valid chunk object"));
 	plain = (uint64_t)n;
 	if (*outlen < plain)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_open: output buffer too small"));
@@ -1067,35 +1145,32 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 		return (seal_err(ctx, PC_ERR_VERIFY, "pc_chunk_open: object is not encrypted but a key is set"));
 	log_reset(&ctx->log);
 	hdr = header_len(p);
-	clen = len - hdr - PCK_TAG;
+	clen = len - hdr - tag_len(p);
 
-	/* 1. Verify the tag before touching the payload. */
-	if (encrypted && subkeys(ctx, enc, mac) != 0)
-		goto out;
-	if (blake2b_keyed2(tag, PCK_TAG, encrypted ? mac : NULL, encrypted ? 32 : 0,
-	    p, hdr + clen, NULL, 0) != 0)
-		goto out;
-	if (!ct_equal(tag, p + hdr + clen, PCK_TAG)) {
-		why = PC_ERR_VERIFY;
-		msg = encrypted ? "pc_chunk_open: authentication failed (wrong key or tampered)" :
-		    "pc_chunk_open: checksum mismatch";
-		goto out;
-	}
-
-	/* 2. Decrypt (into a scratch copy: the input is const). */
+	/*
+	 * 1. Authenticate before touching the payload; a keyed object is
+	 * decrypted into a scratch copy (the input is const).
+	 */
 	if (encrypted) {
 		if ((buf = pc_malloc(clen ? clen : 1)) == NULL) {
 			why = PC_ERR_NOMEM;
 			msg = "pc_chunk_open: out of memory";
 			goto out;
 		}
-		if (xsalsa20_xor(buf, p + hdr, clen, p + 16, enc) != 0) {
-			why = PC_ERR_INTERNAL;
+		if (open_keyed(ctx, p, hdr, clen, buf) != 0) {
+			why = PC_ERR_VERIFY;
+			msg = "pc_chunk_open: authentication failed (wrong key or tampered)";
 			goto out;
 		}
+	} else if (blake2b_keyed2(tag, PCK_TAG, NULL, 0, p, hdr + clen, NULL, 0) != 0) {
+		goto out;
+	} else if (!ct_equal(tag, p + hdr + clen, PCK_TAG)) {
+		why = PC_ERR_VERIFY;
+		msg = "pc_chunk_open: checksum mismatch";
+		goto out;
 	}
 
-	/* 3. Decompress to exactly the stated length. */
+	/* 2. Decompress to exactly the stated length. */
 	if (p[5] & PCK_RAW)
 		memcpy(out, encrypted ? buf : p + hdr, clen);
 	else if (open_payload(ctx, p, encrypted ? buf : p + hdr, clen, plain, out, &why, &msg) != 0)
@@ -1103,8 +1178,6 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	*outlen = plain;
 	rv = 0;
 out:
-	memset(enc, 0, sizeof (enc));
-	memset(mac, 0, sizeof (mac));
 	if (buf != NULL) {
 		memset(buf, 0, clen);
 		pc_mfree(buf);

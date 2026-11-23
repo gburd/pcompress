@@ -308,9 +308,10 @@ int pc_chunk_id2(int algorithm, const void *buf, size_t len, const void *key,
 
 /**
  * Raw 256-bit key for pc_chunk_seal()/pc_chunk_open(); NULL, 0 clears it.
- * With a key, objects are encrypted (XSalsa20) and authenticated (keyed
- * BLAKE2b over header and payload); without one they carry a plain
- * BLAKE2b checksum. -1 unless keylen is 32.
+ * With a key, objects are encrypted and authenticated with
+ * XChaCha20-Poly1305 (object version 2; version 1 keyed objects of 4.4
+ * still open); without one they carry a plain BLAKE2b checksum. -1
+ * unless keylen is 32.
  */
 int pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen);
 
