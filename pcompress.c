@@ -1643,6 +1643,42 @@ dec_crypto_v12(pc_ctx_t *pctx, int compfd, const struct dec_hdr *h)
 }
 
 /*
+ * Version 12, after the end record: the file must end there, or with a
+ * seek index (an opaque region whose last 8 bytes are its trailer
+ * magic; the index reader authenticates it). Anything else was
+ * appended to the file, and is refused rather than ignored. Reads to
+ * the end, so it works on a pipe too.
+ */
+static int
+dec_check_tail(int compfd)
+{
+	uchar_t buf[8192], last[8];
+	uint64_t total = 0;
+	int64_t n;
+
+	while ((n = Read(compfd, buf, sizeof (buf))) > 0) {
+		/* Keep the last 8 bytes read, across reads of any size. */
+		if (n >= 8) {
+			memcpy(last, buf + n - 8, 8);
+		} else {
+			memmove(last, last + n, 8 - n);
+			memcpy(last + 8 - n, buf, n);
+		}
+		total += n;
+	}
+	if (n < 0) {
+		log_msg(LOG_ERR, 1, "Read: ");
+		return (-1);
+	}
+	if (total == 0 || (total >= 8 && memcmp(last, PZ_TAIL_MAGIC, 8) == 0))
+		return (0);
+	log_error_code(PC_ERR_CORRUPT);
+	log_msg(LOG_ERR, 0, "%" PRIu64 " unexpected bytes after the end record. "
+	    "File corrupt ?", total);
+	return (-1);
+}
+
+/*
  * Version 12, after the end-of-chunks marker: the end record must be
  * authentic and its counts those read, or chunks were cut off the end
  * (or added). nmeta is checked only when the metadata chunks were
@@ -1668,7 +1704,7 @@ dec_check_end(pc_ctx_t *pctx, int compfd, uint64_t ndata, uint64_t nmeta, int ch
 		    "tampered.", ndata, nmeta, wd, wm);
 		return (-1);
 	}
-	return (0);
+	return (dec_check_tail(compfd));
 }
 
 /*

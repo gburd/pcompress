@@ -480,8 +480,11 @@ the `mac` field and no digest: the AEAD tag is the integrity check.
 
 A seekable index (phase A2) should be sealed as stream 4, ordinal 0,
 with the per-chunk tags it lists as AD, and counted in the end record
-(or given its own record); readers that stop at the end record then
-never see it.
+(or given its own record). After the end record the reader accepts the
+end of the file, or a region whose last 8 bytes are the index trailer
+magic `PCSEEK01` (it does not parse the region; the index reader
+authenticates it), and refuses anything else as corrupt, so data
+appended to a file is not silently ignored.
 
 **Version 11 and earlier** (read only). scrypt derives the key, at
 N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and

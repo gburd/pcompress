@@ -120,4 +120,6 @@ Format version 12 only, the end record:
 8 Bytes - Number of metadata chunks (big-endian)
 16 Bytes - AEAD tag (stream 3, ordinal 0) with the two counts as associated
           data. Readers check it, so chunks cut off the end are detected.
+Then either the end of the file, or a seek index, whose last 8 bytes are
+"PCSEEK01"; readers refuse any other bytes after the end record.
 

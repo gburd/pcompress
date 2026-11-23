@@ -215,6 +215,27 @@ if command -v python3 >/dev/null 2>&1; then
 			fi
 		done
 	done
+	# After the end record: only EOF, or a region ending in the seek
+	# index trailer magic (the index reader checks the rest).
+	for tail in junk seek short; do
+		cp "$TTF.pz" "$TTF.bad.pz"
+		case $tail in
+		junk) printf 'appended' >> "$TTF.bad.pz" ;;
+		seek) printf 'an index body, then PCSEEK01' >> "$TTF.bad.pz" ;;
+		short) printf 'SEEK01' >> "$TTF.bad.pz" ;;
+		esac
+		printf 'tamper-pw\n' > "$PWFILE"
+		rm -f "$TTF.out"
+		$PCOMPRESS -d -w "$PWFILE" "$TTF.bad.pz" "$TTF.out" 2>/dev/null
+		st=$?
+		if [ $tail = seek ] && [ $st -eq 0 ] && cmp -s "$TTF" "$TTF.out"; then
+			log_pass "bytes after the end record: seek index trailer allowed"
+		elif [ $tail != seek ] && [ $st -ne 0 ] && [ ! -e "$TTF.out" ]; then
+			log_pass "bytes after the end record: $tail refused"
+		else
+			log_fail "bytes after the end record: $tail, status $st"
+		fi
+	done
 	# Archive with a metadata stream: a changed metadata chunk, a lost chunk.
 	TD="${TTF}.d"; TX="${TTF}.x"
 	mkdir -p "$TD/sub"

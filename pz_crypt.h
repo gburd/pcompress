@@ -50,6 +50,11 @@ extern "C" {
 #define	PZ_KDF_ARGON2ID	2
 /* After the 8 zero bytes that end the chunks: two counts and a tag. */
 #define	PZ_END_LEN	(16 + AEAD_TAGLEN)
+/*
+ * What may follow the end record: nothing, or a seek index, whose last 8
+ * bytes are this magic (seek_index.h, SX_TRAILER_MAGIC).
+ */
+#define	PZ_TAIL_MAGIC	"PCSEEK01"
 /* Longest associated data a caller passes (a chunk's or the header's). */
 #define	PZ_AD_MAX	96
 
