@@ -15,6 +15,9 @@
 #include <pwd.h>
 #include <grp.h>
 #endif
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
@@ -247,6 +250,66 @@ MU_TEST(test_pub_fds_left_open)
 	mu_assert(same(src, out), "reused context");
 	pc_free(c);
 }
+
+#ifdef __linux__
+/* Pages of the file at path that are in the page cache, or -1. */
+static long
+cached_pages(const char *path)
+{
+	long pg = sysconf(_SC_PAGESIZE), n = 0, i;
+	int fd = open(path, O_RDONLY);
+	struct stat sb;
+	unsigned char *v;
+	void *m;
+
+	if (fd < 0 || fstat(fd, &sb) != 0)
+		return (-1);
+	m = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+	v = malloc(sb.st_size / pg + 1);
+	if (m == MAP_FAILED || v == NULL || mincore(m, sb.st_size, v) != 0)
+		return (-1);
+	for (i = 0; i < (sb.st_size + pg - 1) / pg; i++)
+		n += v[i] & 1;
+	munmap(m, sb.st_size);
+	free(v);
+	close(fd);
+	return (n);
+}
+
+/*
+ * The library leaves the page cache of a caller's descriptors alone: no
+ * POSIX_FADV_DONTNEED behind a 40 MB input it reads (it drops each
+ * 32 MB window of files it opens itself).
+ */
+MU_TEST(test_pub_fd_cache_untouched)
+{
+	char big[320];
+	pc_ctx_t *c = pc_new();
+	long before, after;
+	int in, o;
+	FILE *f;
+	size_t i;
+
+	snprintf(big, sizeof (big), "%s/big", dir);
+	f = fopen(big, "wb");
+	mu_assert(f != NULL, "create");
+	for (i = 0; i < 40u * 1024 * 1024 / 8; i++)
+		fwrite("pcompr\n\n", 1, 8, f);
+	mu_assert(fflush(f) == 0 && fsync(fileno(f)) == 0 && fclose(f) == 0, "write");
+	before = cached_pages(big);
+	in = open(big, O_RDONLY);
+	o = open(cmp_, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	pc_set_algorithm(c, "lz4");
+	mu_assert_int_eq(0, pc_compress_fd(c, in, o));
+	close(in);
+	close(o);
+	pc_free(c);
+	after = cached_pages(big);
+	unlink(big);
+	mu_assert(before > 0, "input not cached to begin with");
+	mu_assert(after >= before, "pages of the caller's input were dropped");
+}
+#endif
 
 static int ncalls;
 
@@ -633,6 +696,9 @@ MU_TEST_SUITE(suite_public)
 	MU_RUN_TEST(test_pub_wrong_password);
 	MU_RUN_TEST(test_pub_bad_settings);
 	MU_RUN_TEST(test_pub_fds_left_open);
+#ifdef __linux__
+	MU_RUN_TEST(test_pub_fd_cache_untouched);
+#endif
 	MU_RUN_TEST(test_pub_garbage_input);
 	MU_RUN_TEST(test_pub_progress_cancel);
 	MU_RUN_TEST(test_pub_progress_cancel_files);

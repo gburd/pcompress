@@ -2143,6 +2143,20 @@ sx_done(pc_ctx_t *pctx)
 }
 
 /*
+ * fd, or -1 if it is one the caller of pc_compress_fd()/pc_decompress_fd()
+ * passed in: page-cache hints change how the caller's file stays cached,
+ * which is the caller's business, so they apply only to files the
+ * library opened itself.
+ */
+static int
+own_fd(const pc_ctx_t *pctx, int fd)
+{
+	if (fd >= 0 && (fd == pctx->in_fd || fd == pctx->out_fd))
+		return (-1);
+	return (fd);
+}
+
+/*
  * Report progress after the calling thread hands out a chunk: in bytes of
  * input so far, and what the writer has written. If the pc_set_progress()
  * callback asks to stop, record PC_ERR_CANCELLED and cancel the job the
@@ -2187,7 +2201,7 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 	*np = 0;
 	if (j->nprocs == 0)
 		return (0);
-	pc_cache_open(&rcache, compfd, 0);
+	pc_cache_open(&rcache, own_fd(pctx, compfd), 0);
 	for (;;) {
 		if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
 			return (0);
@@ -2483,7 +2497,8 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		 * Global dedupe restores references from the output file
 		 * (dedupe_decompress() maps it): its pages stay cached.
 		 */
-		pc_cache_open(&wcache, pctx->enable_rabin_global ? -1 : uncompfd, 1);
+		pc_cache_open(&wcache, pctx->enable_rabin_global ? -1 :
+		    own_fd(pctx, uncompfd), 1);
 		w.wcache = &wcache;
 		if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 			log_msg(LOG_ERR, 1, "Error in thread creation: ");
@@ -3557,7 +3572,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	w.wfd = compfd;
 	w.nprocs = nprocs;
 	w.pctx = pctx;
-	pc_cache_open(&wcache, compfd, 1);
+	pc_cache_open(&wcache, own_fd(pctx, compfd), 1);
 	w.wcache = &wcache;
 	if (pc_thread_create(&writer_thr, "pc-writer", writer_thread, (void *)(&w)) != 0) {
 		log_msg(LOG_ERR, 1, "Error in thread creation: ");
@@ -3693,7 +3708,7 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 	 */
 	file_offset = 0;
 	pctx->interesting = 0;
-	pc_cache_open(&rcache, pctx->archive_mode ? -1 : uncompfd, 0);
+	pc_cache_open(&rcache, pctx->archive_mode ? -1 : own_fd(pctx, uncompfd), 0);
 	if (pctx->enable_rabin_split) {
 		rctx = create_dedupe_context(chunksize, 0, pctx->rab_blk_size, pctx->algo, &props,
 		    pctx->enable_delta_encode, pctx->enable_fixed_scan, VERSION, COMPRESS, 0, NULL,

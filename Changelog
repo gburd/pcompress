@@ -30,7 +30,9 @@ Performance: compressing or decompressing a regular file no longer
   c7i.4xlarge (32 GB) compressing a 20 GB file with lz4 used to add
   28 GB to the page cache and leave 0 to 10 MB of a 1.9 GB file that was
   cached before; now it adds 70 MB and that file stays cached. Time is
-  unchanged (288 s each way, bound by the gp3 volume).
+  unchanged (288 s each way, bound by the gp3 volume). Descriptors
+  passed to pc_compress_fd() and pc_decompress_fd() get no hints: how
+  the caller's files stay cached is the caller's business.
 Fix: a metadata chunk (archive mode) whose stored length exceeded the
   3 MB metadata buffer overflowed the heap while it was read, before any
   check (found with ASan); its original length was not bounded either.

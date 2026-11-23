@@ -469,6 +469,9 @@ illumos) only input is dropped; macOS and Windows have no
 `posix_fadvise()` and get no hints. The output of a global-dedupe
 restore stays cached, since later chunks map it to copy references.
 The hints are always on: they cost no throughput (see the Changelog).
+They apply only to files the library opens: descriptors a caller hands
+to `pc_compress_fd()` or `pc_decompress_fd()` are the caller's to
+manage (`own_fd()`).
 
 ## Portability
 
