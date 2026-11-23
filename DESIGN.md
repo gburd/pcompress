@@ -473,6 +473,19 @@ They apply only to files the library opens: descriptors a caller hands
 to `pc_compress_fd()` or `pc_decompress_fd()` are the caller's to
 manage (`own_fd()`).
 
+Archive extraction with a metadata stream reads the file through two
+descriptors: the main reader, which drops pages behind it, and the
+metadata thread's. Pages the main reader drops are not read again from
+disk. The main reader seeks over metadata chunks without reading them,
+and the metadata thread seeks over data chunks, so the only pages both
+read are those holding chunk length fields, at most one per chunk.
+Measured cold-cache extractions on a c7i.4xlarge (lz4 archives of
+/usr/lib at 1.3 GB, of /usr/share and /usr/include, of 100000 files of
+200 B to 3 KB, and of a mix of those with 60 MB files; chunks from
+64 KB to 64 MB) read 0.5 to 0.7% more from disk than the file's size,
+the same as a build without the hints, while adding half as much to
+the page cache (569 MB against 1049 MB for the 520 MB mixed archive).
+
 ## Portability
 
 - POSIX threads and semaphores, `mmap`, `socketpair` and libarchive are
