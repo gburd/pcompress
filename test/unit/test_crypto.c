@@ -3,7 +3,8 @@
  * its single-thread / parallel / legacy paths, HMAC for every checksum
  * (incremental == one-shot, reinit, cleanup idempotence), checksum
  * property lookup, (de)serialisation, and the cipher contexts (round
- * trip, chunk-id nonce separation, error handling).
+ * trip, chunk-id nonce separation, error handling), and the AEADs and
+ * Argon2id against published known answers.
  */
 
 #include <stdio.h>
@@ -13,6 +14,9 @@
 #include <utils.h>
 #include <allocator.h>
 #include <crypto_utils.h>
+#include <aead.h>
+#include <monocypher/monocypher.h>
+#include <openssl/evp.h>
 #include "minunit.h"
 
 #define	LEN	(300 * 1024 + 17)	/* > several parallel blocks, odd tail */
@@ -225,6 +229,166 @@ MU_TEST(test_kdf_params)
 	    memcmp(k1, k2, 32) == 0, "NULL is the legacy cost");
 }
 
+/* Hex string to bytes; returns the byte count. */
+static size_t
+unhex(const char *h, uchar_t *out)
+{
+	size_t n = 0;
+	unsigned int b;
+
+	while (h[0] != '\0' && h[1] != '\0' && sscanf(h, "%2x", &b) == 1) {
+		out[n++] = (uchar_t)b;
+		h += 2;
+	}
+	return (n);
+}
+
+static const char lady[] = "Ladies and Gentlemen of the class of '99: If I could "
+    "offer you only one tip for the future, sunscreen would be it.";
+
+/*
+ * HChaCha20 (draft-irtf-cfrg-xchacha-03 section 2.2.1) and the
+ * AEAD_XCHACHA20_POLY1305 vector (appendix A.3.1) through aead_seal()
+ * and aead_open(): the extended-nonce construction and its OpenSSL
+ * ChaCha20-Poly1305 core end to end.
+ */
+MU_TEST(test_xchacha_kat)
+{
+	uchar_t key[32], n16[16], sub[32], want[32], nonce[24], ad[12];
+	uchar_t ct[200], pt[200], tag[16], wtag[16], wct[200];
+	size_t len = strlen(lady), adl, i;
+
+	unhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", key);
+	unhex("000000090000004a0000000031415927", n16);
+	unhex("82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc", want);
+	pcmono_chacha20_h(sub, key, n16);
+	mu_assert(memcmp(sub, want, 32) == 0, "HChaCha20 known answer");
+
+	unhex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f", key);
+	unhex("404142434445464748494a4b4c4d4e4f5051525354555657", nonce);
+	adl = unhex("50515253c0c1c2c3c4c5c6c7", ad);
+	unhex("bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb"
+	    "731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b452"
+	    "2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9"
+	    "21f9664c97637da9768812f615c68b13b52e", wct);
+	unhex("c0875924c1c7987947deafd8780acf49", wtag);
+	mu_assert(aead_nonce_len(AEAD_XCHACHA20) == 24, "XChaCha nonce length");
+	mu_assert_int_eq(0, aead_seal(AEAD_XCHACHA20, key, nonce, ad, adl,
+	    (const uchar_t *)lady, ct, len, tag));
+	mu_assert(memcmp(ct, wct, len) == 0, "XChaCha20-Poly1305 ciphertext");
+	mu_assert(memcmp(tag, wtag, 16) == 0, "XChaCha20-Poly1305 tag");
+	mu_assert_int_eq(0, aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag));
+	mu_assert(memcmp(pt, lady, len) == 0, "XChaCha20-Poly1305 open");
+
+	/* Any changed bit of tag, data or associated data fails, output zeroed. */
+	for (i = 0; i < 3; i++) {
+		uchar_t *p = i == 0 ? tag : i == 1 ? ct + 50 : ad + 3;
+
+		*p ^= 0x10;
+		memset(pt, 0xaa, len);
+		mu_assert(aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
+		    "tampered AEAD input accepted");
+		mu_assert(pt[0] == 0 && pt[len - 1] == 0, "unauthenticated plaintext left");
+		*p ^= 0x10;
+	}
+	nonce[23] ^= 1;
+	mu_assert(aead_open(AEAD_XCHACHA20, key, nonce, ad, adl, ct, pt, len, tag) != 0,
+	    "wrong nonce accepted");
+	mu_assert(aead_seal(99, key, nonce, ad, adl, ct, pt, len, tag) != 0, "unknown AEAD");
+}
+
+/*
+ * RFC 8439 section 2.8.2 through the OpenSSL cipher the XChaCha20 code
+ * builds on (the IETF nonce is the 4-byte constant and the 8-byte IV).
+ */
+MU_TEST(test_rfc8439_kat)
+{
+	uchar_t key[32], iv[12], ad[12], ct[200], wct[200], tag[16], wtag[16];
+	size_t len = strlen(lady);
+	EVP_CIPHER_CTX *x = EVP_CIPHER_CTX_new();
+	int n;
+
+	unhex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f", key);
+	unhex("070000004041424344454647", iv);
+	unhex("50515253c0c1c2c3c4c5c6c7", ad);
+	unhex("d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d6"
+	    "3dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b36"
+	    "92ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc"
+	    "3ff4def08e4b7a9de576d26586cec64b6116", wct);
+	unhex("1ae10b594f09e26a7e902ecbd0600691", wtag);
+	mu_assert(x != NULL && EVP_EncryptInit_ex(x, EVP_chacha20_poly1305(), NULL, key, iv) == 1 &&
+	    EVP_EncryptUpdate(x, NULL, &n, ad, 12) == 1 &&
+	    EVP_EncryptUpdate(x, ct, &n, (const uchar_t *)lady, (int)len) == 1 &&
+	    EVP_EncryptFinal_ex(x, ct + n, &n) == 1 &&
+	    EVP_CIPHER_CTX_ctrl(x, EVP_CTRL_AEAD_GET_TAG, 16, tag) == 1, "RFC 8439 seal");
+	EVP_CIPHER_CTX_free(x);
+	mu_assert(memcmp(ct, wct, len) == 0 && memcmp(tag, wtag, 16) == 0, "RFC 8439 vector");
+}
+
+/*
+ * AES-256-GCM, NIST GCM specification test case 16 (as in BoringSSL's
+ * aes_256_gcm_tests.txt): 60 bytes with 20 bytes of associated data.
+ */
+MU_TEST(test_gcm_kat)
+{
+	uchar_t key[32], iv[12], ad[20], in[64], ct[64], wct[64], tag[16], wtag[16], pt[64];
+	size_t len, adl;
+
+	unhex("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", key);
+	unhex("cafebabefacedbaddecaf888", iv);
+	adl = unhex("feedfacedeadbeeffeedfacedeadbeefabaddad2", ad);
+	len = unhex("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72"
+	    "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", in);
+	unhex("522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa"
+	    "8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662", wct);
+	unhex("76fc6ece0f4e1768cddf8853bb2d551b", wtag);
+	mu_assert(aead_nonce_len(AEAD_AES256GCM) == 12, "GCM nonce length");
+	mu_assert_int_eq(0, aead_seal(AEAD_AES256GCM, key, iv, ad, adl, in, ct, len, tag));
+	mu_assert(memcmp(ct, wct, len) == 0 && memcmp(tag, wtag, 16) == 0, "GCM vector");
+	mu_assert_int_eq(0, aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag));
+	mu_assert(memcmp(pt, in, len) == 0, "GCM open");
+	tag[0] ^= 1;
+	mu_assert(aead_open(AEAD_AES256GCM, key, iv, ad, adl, ct, pt, len, tag) != 0,
+	    "GCM bad tag accepted");
+}
+
+/*
+ * Argon2id: RFC 9106 section 5.3 (secret and associated data, so through
+ * Monocypher directly), and argon2id_derive() against the reference
+ * implementation (phc-winner-argon2 20190702, Ubuntu's argon2 CLI:
+ * echo -n password | argon2 somesaltsomesalt -id -m 10 -t 3 -p 4 -l 32).
+ */
+MU_TEST(test_argon2id_kat)
+{
+	uchar_t pw[32], salt[16], secret[8], ad[12], out[32], want[32];
+	static uint64_t work[32 * 128];
+	pcmono_argon2_config cf = { CRYPTO_ARGON2_ID, 32, 3, 4 };
+	pcmono_argon2_inputs in = { pw, salt, 32, 16 };
+	pcmono_argon2_extras ex = { secret, ad, 8, 12 };
+	argon2_params_t kp = { 1024, 3, 4 };
+	argon2_params_t bad[] = { { 1024, 0, 4 }, { 1024, 17, 4 }, { 1024, 3, 0 },
+	    { 1024, 3, 17 }, { 31, 3, 4 }, { 2 * 1024 * 1024, 1, 1 }, { 1024 * 1024, 5, 4 } };
+	size_t i;
+
+	memset(pw, 1, sizeof (pw));
+	memset(salt, 2, sizeof (salt));
+	memset(secret, 3, sizeof (secret));
+	memset(ad, 4, sizeof (ad));
+	pcmono_argon2(out, 32, work, cf, in, ex);
+	unhex("0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659", want);
+	mu_assert(memcmp(out, want, 32) == 0, "Argon2id RFC 9106 vector");
+
+	mu_assert_int_eq(0, argon2id_derive((const uchar_t *)"password", 8,
+	    (const uchar_t *)"somesaltsomesalt", 16, &kp, out, 32));
+	unhex("d488a244d764d18a6db69e08a29c66824d78ddfacf324c13239e35dce7517eea", want);
+	mu_assert(memcmp(out, want, 32) == 0, "Argon2id reference CLI vector");
+
+	mu_assert(argon2_params_ok(&kp), "valid cost refused");
+	for (i = 0; i < sizeof (bad) / sizeof (bad[0]); i++)
+		mu_assert(argon2id_derive((const uchar_t *)"pw", 2, (const uchar_t *)"somesalt", 8,
+		    &bad[i], out, 32) == -1, "out-of-bounds Argon2 cost accepted");
+}
+
 MU_TEST_SUITE(suite_crypto)
 {
 	MU_RUN_TEST(test_checksum_props);
@@ -234,6 +398,10 @@ MU_TEST_SUITE(suite_crypto)
 	MU_RUN_TEST(test_ciphers);
 	MU_RUN_TEST(test_urandom);
 	MU_RUN_TEST(test_kdf_params);
+	MU_RUN_TEST(test_xchacha_kat);
+	MU_RUN_TEST(test_rfc8439_kat);
+	MU_RUN_TEST(test_gcm_kat);
+	MU_RUN_TEST(test_argon2id_kat);
 }
 
 int

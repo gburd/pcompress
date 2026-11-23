@@ -15,6 +15,7 @@ dependencies managed as git submodules and any API changes required.
 | Zstandard      | zstd/                               | HEAD     | Submodule  | github.com/facebook/zstd      |
 | WavPack        | wavpack/                            | HEAD     | Submodule  | github.com/dbry/WavPack       |
 | BLAKE3         | crypto/blake3/                      | 1.8.7    | Vendored   | github.com/BLAKE3-team/BLAKE3 |
+| Monocypher     | crypto/monocypher/                  | 4.0.2    | Vendored   | monocypher.org                |
 
 ---
 
@@ -323,3 +324,22 @@ macOS, the BSDs, illumos and MinGW.
 To update: copy the same files from the new tag's `c/` directory, update
 the version here and in the Makefile.in comment, and run `test_blake3`
 and `test_chunk` (both pin the official `test_vectors.json` values).
+
+## Vendored: Monocypher (crypto/monocypher/)
+
+**Upstream**: https://monocypher.org, release 4.0.2 (tarball sha512
+bf275d4c53ff94af6cdc723a4e002e9f080f4d1436c86c76bb37870b34807f1d7b32331d8ff8a1aeb369e946f3769021e03e63efac25b82efc5abf54dc084714,
+the value monocypher.org publishes).
+**License**: BSD-2-Clause or CC0 1.0, at the user's choice (`LICENCE.md`).
+**Modifications**: only the prefix. `src/monocypher.c` and
+`src/monocypher.h` had `crypto_` replaced by `pcmono_` (upstream's
+`change-prefix.sh pcmono` does the same), so the symbols cannot clash
+with a host program's own Monocypher or libsodium. The `CRYPTO_ARGON2_*`
+constants keep their names. With the prefix put back the files are
+byte-identical to upstream's.
+
+Used for two things only (`crypto/aead.c`): HChaCha20, for the
+XChaCha20-Poly1305 extended nonce (the AEAD itself is OpenSSL's
+ChaCha20-Poly1305, 9 times as fast as Monocypher's portable C on x86-64),
+and Argon2id, which OpenSSL has only from 3.2. `test/unit/test_crypto.c`
+pins both to the published vectors (draft-irtf-cfrg-xchacha-03, RFC 9106).
