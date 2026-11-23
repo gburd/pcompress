@@ -742,24 +742,45 @@ pc_chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *out
 }
 
 /*
+ * The chi-square statistic against uniform of a byte histogram of n
+ * bytes counted in four tables: 256 * sum(count^2) / n - n.
+ */
+static uint64_t
+chi2_of(uint32_t count[4][256], uint64_t n)
+{
+	uint64_t sq = 0;
+	int i;
+
+	for (i = 0; i < 256; i++) {
+		uint64_t c = (uint64_t)count[0][i] + count[1][i] + count[2][i] + count[3][i];
+
+		sq += c * c;
+	}
+	return (sq * 256 / n - n);
+}
+
+/*
  * The chi-square statistic of the byte histogram of runs runs of
- * PCK_SAMPLE_RUN bytes spread evenly over p, against uniform:
- * 256 * sum(count^2) / N - N for N bytes sampled. Random bytes give 255
- * on average (standard deviation 23) whatever N is; text and code give
- * thousands to millions.
+ * PCK_SAMPLE_RUN bytes spread evenly over p, against uniform. Random
+ * bytes give 255 on average (standard deviation 23) whatever the sample
+ * size; text and code give thousands to millions. With delta non-NULL,
+ * *delta is the same statistic for the differences between neighbouring
+ * bytes in each run (all but the first four): random bytes give 255
+ * there too, while ramps, counters, permutation tables and smooth
+ * signals, whose byte values can be spread evenly, give far more.
  */
 #define	PCK_SAMPLE_RUN	128
 
 static uint64_t
-sample_chi2(const uchar_t *p, size_t len, int runs)
+sample_chi2(const uchar_t *p, size_t len, int runs, uint64_t *delta)
 {
-	const uint64_t n = (uint64_t)runs * PCK_SAMPLE_RUN;
-	uint32_t count[4][256];
-	uint64_t sq = 0;
+	uint32_t count[4][256], dcount[4][256];
 	size_t step = (len - PCK_SAMPLE_RUN) / (runs - 1);
 	int r, i;
 
 	memset(count, 0, sizeof (count));
+	if (delta != NULL)
+		memset(dcount, 0, sizeof (dcount));
 	for (r = 0; r < runs; r++) {
 		const uchar_t *q = p + r * step;
 
@@ -770,46 +791,70 @@ sample_chi2(const uchar_t *p, size_t len, int runs)
 			count[2][q[i + 2]]++;
 			count[3][q[i + 3]]++;
 		}
+		for (i = 4; delta != NULL && i < PCK_SAMPLE_RUN; i += 4) {
+			dcount[0][(uchar_t)(q[i] - q[i - 1])]++;
+			dcount[1][(uchar_t)(q[i + 1] - q[i])]++;
+			dcount[2][(uchar_t)(q[i + 2] - q[i + 1])]++;
+			dcount[3][(uchar_t)(q[i + 3] - q[i + 2])]++;
+		}
 	}
-	for (i = 0; i < 256; i++) {
-		uint64_t c = (uint64_t)count[0][i] + count[1][i] + count[2][i] + count[3][i];
-
-		sq += c * c;
-	}
-	return (sq * 256 / n - n);
+	if (delta != NULL)
+		*delta = chi2_of(dcount, (uint64_t)runs * (PCK_SAMPLE_RUN - 4));
+	return (chi2_of(count, (uint64_t)runs * PCK_SAMPLE_RUN));
 }
 
 /*
  * Whether a chunk looks incompressible, so pc_chunk_seal() stores it raw
- * without running the codec. A 2 KB sample (16 runs) that is far from
- * uniform settles it cheaply for most compressible data; otherwise an
- * 8 KB sample (64 runs) must score below 350. Measured on gear chunks
- * (avg 64 KB, EC2 Xeon 8488C) against what zstd -19 would have saved on
+ * without running the codec. A 2 KB sample (16 runs) far from uniform
+ * settles it cheaply for most compressible data. Otherwise each 256 KB
+ * segment of the chunk (the whole chunk if smaller) is sampled with 64
+ * runs, 8 KB, and every segment must score below 350 both on its bytes
+ * and on the differences between neighbouring bytes. The second test
+ * catches data with evenly spread byte values that still compresses:
+ * 0..255 ramps, lookup tables, counters. Testing per segment keeps a
+ * compressible region of a 4 MB chunk from hiding between the samples.
+ * Measured on gear chunks (avg 64 KB) and on 1 MB and 4 MB pieces (EC2
+ * Xeon 8488C), against what zstd -19 (pieces: -9) would have saved on
  * the chunks it skips:
  *
- *	random, H.264 video	99% skipped, nothing lost
- *	.gz/.xz/.zst files	80% skipped, 0.05% of the input lost
- *	PNG files		41% skipped, 0.004% lost
- *	JPEG files		 2% skipped, 0.01% lost
- *	tar of /usr/share/doc	13% skipped (its .gz members), 0.004% lost
- *	enwik8, /usr/lib, /usr/bin	nothing skipped, nothing lost
+ *	random, H.264 video	88-100% skipped, nothing lost
+ *	.gz/.xz/.zst files	77% of gear chunks skipped, 0.03% of the
+ *				input lost; 42% / 9% of 1 / 4 MB, nothing lost
+ *	PNG files		41% of gear chunks, 0.004% lost
+ *	JPEG files		 2% of gear chunks, 0.01% lost
+ *	tar of /usr/share/doc	13% of gear chunks (its .gz members), 0.004%
+ *	enwik8, /usr/lib, /usr/bin, ramps, permutations, counters,
+ *	dithered gradients, raw RGB test images	nothing skipped
+ *	random with one 16 or 64 KB text region per 4 MB	nothing lost
  *
- * The worst chunk skipped would have shrunk 4.8%. Smaller final samples
- * skipped a /usr/bin chunk that shrinks 48%. Byte statistics cannot see
- * a repeated random block (each copy looks random): such a chunk is
+ * The worst chunk skipped would have shrunk 4.6%. Byte statistics cannot
+ * see a repeated random block (each copy looks random): such a chunk is
  * stored raw where an LZ coder would have found the repeat. Chunks under
  * 16 KB are not tested; the sample would be most of them.
  */
 #define	PCK_SAMPLE_MIN	(16 * 1024)
+#define	PCK_SAMPLE_SEG	(256 * 1024)
 #define	PCK_CHI2_QUICK	1000
 #define	PCK_CHI2_RAW	350
 
 static int
 looks_incompressible(const uchar_t *p, size_t len)
 {
-	if (len < PCK_SAMPLE_MIN || sample_chi2(p, len, 16) >= PCK_CHI2_QUICK)
+	size_t nseg, seg, s;
+	uint64_t delta;
+
+	if (len < PCK_SAMPLE_MIN || sample_chi2(p, len, 16, NULL) >= PCK_CHI2_QUICK)
 		return (0);
-	return (sample_chi2(p, len, 64) < PCK_CHI2_RAW);
+	nseg = (len + PCK_SAMPLE_SEG - 1) / PCK_SAMPLE_SEG;
+	seg = len / nseg;
+	for (s = 0; s < nseg; s++) {
+		size_t n = s == nseg - 1 ? len - s * seg : seg;
+
+		if (sample_chi2(p + s * seg, n, 64, &delta) >= PCK_CHI2_RAW ||
+		    delta >= PCK_CHI2_RAW)
+			return (0);
+	}
+	return (1);
 }
 
 /*

@@ -30,12 +30,13 @@ Library: zstd dictionaries for sealed chunk objects. pc_dict_train()
   dictionary are unchanged; versions before this one refuse dictionary
   objects.
 Library: pc_chunk_seal() stores incompressible chunks raw without
-  running the codec: a sampled byte histogram (2 KB, then 8 KB, of
-  chunks from 16 KB) that is close to uniform skips it. Sealing random
-  data or video runs at 700-750 MB/s with any algorithm (zstd:9 was
-  41 MB/s, lzma:6 13 MB/s); compressed .gz/.xz/.zst files lose 0.05% in
-  size; text and binaries keep their size and lose about 1% in seal
-  speed. No format change.
+  running the codec: sampled histograms of the bytes and of the
+  differences between neighbouring bytes (2 KB, then 8 KB per 256 KB, of
+  chunks from 16 KB) that are both close to uniform skip it. Sealing
+  random data or video runs at 700-750 MB/s with any algorithm (zstd:9
+  was 41 MB/s, lzma:6 13 MB/s); compressed .gz/.xz/.zst files lose 0.03%
+  in size; text, binaries, byte ramps and tables keep their size and
+  lose about 1% in seal speed. No format change.
 Library: pc_chunk_id2(algorithm, ...) names chunks with BLAKE2b
   (PC_ID_BLAKE2B, as pc_chunk_id) or BLAKE3 (PC_ID_BLAKE3, keyed with a
   32-byte key): keyed BLAKE3 ids of 64 KB chunks ran at 4420 MB/s

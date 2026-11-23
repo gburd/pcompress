@@ -502,8 +502,9 @@ size_t pc_chunk_seal_bound(size_t len);
  * encrypt one chunk into a self-describing object at out. *outlen is the
  * buffer size on entry (at least pc_chunk_seal_bound(len)) and the object
  * size on return. Incompressible data is stored raw: a chunk of 16 KB or
- * more whose sampled byte histogram is close to uniform (compressed,
- * encrypted or random data) skips the codec entirely. 0 or -1.
+ * more whose sampled histograms of bytes and of byte-to-byte differences
+ * are close to uniform (compressed, encrypted or random data) skips the
+ * codec entirely. 0 or -1.
  */
 int pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
 

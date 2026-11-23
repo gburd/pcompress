@@ -173,6 +173,29 @@ MU_TEST(test_incompressible_skip)
 	ol = pc_chunk_seal_bound(n);
 	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
 	mu_assert(obj[5] == 0 && ol < n * 15 / 16, "7-bit noise stored raw");
+	/* 0..255 repeated: every byte value equally often, yet compressible. */
+	for (i = 0; i < n; i++)
+		b[i] = (unsigned char)i;
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n / 16, "byte ramp stored raw");
+	pc_free(c);
+	free(b);
+	free(obj);
+
+	/*
+	 * A 4 MB chunk of noise with 64 KB of text where 64 samples spread
+	 * over the whole chunk would miss it: compressed.
+	 */
+	n = 4 << 20;
+	b = malloc(n);
+	obj = malloc(pc_chunk_seal_bound(n));
+	c = ctx_with("zstd", 3, NULL);
+	fill(b, n, 1);
+	fill(b + 30 * ((n - 128) / 63) + 256, 65536, 0);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n - 32768, "text region in a large chunk stored raw");
 	pc_free(c);
 	free(b);
 	free(obj);

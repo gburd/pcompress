@@ -284,13 +284,19 @@ add new ones at the end.
 **Incompressible chunks.** Before running the codec, seal takes 16 runs
 of 128 bytes spread over a chunk of 16 KB or more and computes the
 chi-square statistic of their byte histogram against uniform. If it is
-under 1000 (random bytes score 255), a second sample of 64 runs must
-score under 350, and then the chunk is stored raw without compressing.
+under 1000 (random bytes score 255), each 256 KB segment of the chunk
+(or the whole chunk, if smaller) is sampled again with 64 runs, and
+both its byte histogram and the histogram of differences between
+neighbouring bytes must score under 350; then the chunk is stored raw
+without compressing. The difference test keeps data whose byte values
+are spread evenly but follow each other predictably (0..255 ramps,
+lookup tables, counters) out of the raw path; the per-segment samples
+keep a compressible region of a 4 MB chunk from falling between them.
 On gear chunks of random data and H.264 video this skips 99% of chunks
 and sealing at zstd -9 runs at 730 MB/s instead of 41; on `.gz`, `.xz`
-and `.zst` files it skips 80% and loses 0.05% of the input in size; on
-text, code and a tar of `/usr/lib` it skips nothing and costs about 1%
-of seal speed. The `.pz` pipeline does not use it. Tried there (4 MB
+and `.zst` files it skips 77% and loses 0.03% of the input in size; on
+text, code, a tar of `/usr/lib`, ramps and raw RGB test images it skips
+nothing and costs about 1% of seal speed. The `.pz` pipeline does not use it. Tried there (4 MB
 chunks, one thread), it made zstd:3 output of `.gz`/`.xz`/`.zst` files
 0.7% larger, since those chunks still hold headers and padding worth
 compressing, and changed neither size nor time at lzma:6 or adapt2:6
