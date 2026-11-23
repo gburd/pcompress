@@ -62,7 +62,8 @@ struct _meta_ctx {
 	uint64_t frompos, topos, tosize;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	void *bzip2_dat;
-	int comp_level, id;
+	int comp_level;
+	int64_t id;	/* metadata chunk number, -1 before the first: the v12 ordinal */
 	int comp_fd;
 	int running;
 	int delta2_nstrides;
@@ -324,7 +325,8 @@ decompress_data(meta_ctx_t *mctx)
 		for (i = 25 + AEAD_TAGLEN; i < METADATA_HDR_SZ; i++) {
 			if (cbuf[i] != 0) {
 				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "Metadata chunk %d, bad header", mctx->id);
+				log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", bad header",
+				    mctx->id);
 				return (0);
 			}
 		}
@@ -332,7 +334,8 @@ decompress_data(meta_ctx_t *mctx)
 		if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, cbuf, 25, cseg,
 		    len_cmp, checksum) != 0) {
 			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, authentication failed", mctx->id);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", authentication failed",
+			    mctx->id);
 			return (0);
 		}
 	} else if (pctx->encrypt_type) {
@@ -349,7 +352,7 @@ decompress_data(meta_ctx_t *mctx)
 		hmac_update(&mctx->chunk_hmac, cbuf, len_cmp + METADATA_HDR_SZ);
 		hmac_final(&mctx->chunk_hmac, mctx->checksum, &len);
 		if (memcmp(checksum, mctx->checksum, len) != 0) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, HMAC verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", HMAC verification failed",
 			    mctx->id);
 			return (0);
 		}
@@ -358,7 +361,7 @@ decompress_data(meta_ctx_t *mctx)
 			/*
 			 * Decryption failure is fatal.
 			 */
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Decryption failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", Decryption failed",
 			    mctx->id);
 			return (0);
 		}
@@ -377,7 +380,8 @@ decompress_data(meta_ctx_t *mctx)
 			/*
 			 * Header CRC32 verification failure is fatal.
 			 */
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Header CRC verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64
+			    ", Header CRC verification failed",
 			    mctx->id);
 			return (0);
 		}
@@ -387,7 +391,8 @@ decompress_data(meta_ctx_t *mctx)
 		rv = bzip2_decompress(cseg, len_cmp, ubuf, &dstlen, mctx->comp_level,
 		    0, TYPE_BINARY, mctx->bzip2_dat);
 		if (rv == -1) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, decompression failed.", mctx->id);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", decompression failed.",
+			    mctx->id);
 			return (0);
 		}
 	} else {
@@ -398,7 +403,8 @@ decompress_data(meta_ctx_t *mctx)
 		uint64_t _dstlen = origlen;
 		rv = delta2_decode(ubuf, dstlen, cseg, &_dstlen);
 		if (rv == -1) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Delta2 decoding failed.", mctx->id);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", Delta2 decoding failed.",
+			    mctx->id);
 			return (0);
 		}
 		memcpy(ubuf, cseg, _dstlen);
@@ -411,7 +417,8 @@ decompress_data(meta_ctx_t *mctx)
 	if (!pctx->encrypt_type) {
 		compute_checksum(mctx->checksum, pctx->cksum, ubuf, dstlen, 0, 1);
 		if (memcmp(checksum, mctx->checksum, pctx->cksum_bytes) != 0) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Checksum verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64
+			    ", Checksum verification failed",
 				mctx->id);
 			return (0);
 		}
@@ -464,7 +471,15 @@ metadata_decompress(void *dat)
 		if (mctx->topos == mctx->tosize) {
 			uchar_t *frombuf = mctx->frombuf;
 
-			mctx->id++;
+			/* Version 11 and earlier: a 32-bit int keyed CTR (see dec_feed()). */
+			if (++mctx->id > INT32_MAX && pctx->encrypt_type && !pctx->pz_v12) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "More than 2^31 metadata chunks in an "
+				    "encrypted file before version 12: its nonces repeat.");
+				ack = 0;
+				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+				return (NULL);
+			}
 			while ((rb = Read(mctx->comp_fd, &len_cmp, sizeof (len_cmp))
 			    == sizeof(len_cmp))) {
 				len_cmp = ntohll(len_cmp);

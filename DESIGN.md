@@ -449,7 +449,12 @@ key belongs to one file, since the salt is 256 random bits from the
 system generator (no fallback: no random bytes, no file), and within a
 file each (stream, ordinal) pair is sealed once, because data and
 metadata chunks are numbered by the single thread that hands them out,
-and the header and end record are written once. So no nonce repeats
+and the header and end record are written once. Ordinals and the
+counters behind them are 64 bits end to end, so they do not wrap: 4.4
+held the chunk number in 32 bits, and chunk 2^32 would have reused
+chunk 0's nonce. Encrypted version 11 and earlier files are read only up
+to chunk 2^32 - 1 (metadata chunk 2^31 - 1): past that their writer had
+wrapped, and the reader refuses the file. So no nonce repeats
 under a key, with either AEAD, and a deterministic nonce avoids GCM's
 96-bit random-nonce limit. In 4.4 (version 11) data chunk *k* and
 metadata chunk *k* used the same key and CTR nonce, a two-time pad; here

@@ -16,6 +16,7 @@
 #include <crypto_utils.h>
 #include <aead.h>
 #include <pz_crypt.h>
+#include <pcompress.h>
 #include <monocypher/monocypher.h>
 #include <openssl/evp.h>
 #include "minunit.h"
@@ -457,6 +458,52 @@ MU_TEST(test_pz_v12)
 	pc_pz_key_wipe(&b);
 }
 
+/*
+ * The version 12 ordinal is 64 bits end to end: the nonce of piece
+ * (stream, ord) is stream (u32 BE), ord (u64 BE), zeros, and the AD
+ * starts with the same 12 bytes. Built here by hand and sealed with the
+ * bare AEAD, ordinals 2^32 and 2^32 + 1 must match pc_pz_seal() and
+ * differ from 0 and 1 (a 32-bit ordinal wraps onto them). The chunk
+ * counters that feed the ordinal must be 64 bits too.
+ */
+MU_TEST(test_pz_ordinal64)
+{
+	static const uint64_t ord[] = { 0, 1, 1ULL << 32, (1ULL << 32) + 1 };
+	uchar_t nonce[AEAD_NONCE_MAX], tag[4][AEAD_TAGLEN], t[AEAD_TAGLEN], p[64], q[64];
+	pz_aead_t a;
+	int f, i, j;
+
+	mu_assert(sizeof (((pc_ctx_t *)0)->chunk_num) == 8, "chunk_num is not 64 bits");
+	mu_assert(sizeof (((struct cmp_data *)0)->id) == 8, "chunk id is not 64 bits");
+	memset(&a, 0, sizeof (a));
+	for (f = 0; f < 2; f++) {
+		int alg = f ? CRYPTO_ALG_SALSA20 : CRYPTO_ALG_AES;
+
+		mu_assert_int_eq(0, pc_pz_key_new(&a, alg, (const uchar_t *)"pw", 2,
+		    (uchar_t[PZ_HDR_CRYPTO]){ 0 }));
+		for (i = 0; i < 4; i++) {
+			memset(nonce, 0, sizeof (nonce));
+			nonce[3] = PZ_STREAM_DATA;
+			for (j = 0; j < 8; j++)
+				nonce[4 + j] = (uchar_t)(ord[i] >> (56 - 8 * j));
+			memcpy(p, buf, sizeof (p));
+			mu_assert_int_eq(0, pc_aead_seal(a.alg, a.key, nonce, nonce, 12, p, p,
+			    sizeof (p), tag[i]));
+			memcpy(q, buf, sizeof (q));
+			mu_assert_int_eq(0, pc_pz_seal(&a, PZ_STREAM_DATA, ord[i], NULL, 0, q,
+			    sizeof (q), t));
+			mu_assert(memcmp(p, q, sizeof (p)) == 0 && memcmp(t, tag[i], 16) == 0,
+			    "ordinal nonce mapping");
+		}
+		mu_assert(memcmp(tag[2], tag[0], 16) != 0 && memcmp(tag[3], tag[1], 16) != 0,
+		    "ordinal 2^32 wraps");
+		/* The last one, sealed at 2^32 + 1, does not open as chunk 0. */
+		mu_assert(pc_pz_open(&a, PZ_STREAM_DATA, 0, NULL, 0, q, sizeof (q), t) != 0,
+		    "chunk 2^32 + 1 opened as chunk 0");
+		pc_pz_key_wipe(&a);
+	}
+}
+
 MU_TEST_SUITE(suite_crypto)
 {
 	MU_RUN_TEST(test_checksum_props);
@@ -471,6 +518,7 @@ MU_TEST_SUITE(suite_crypto)
 	MU_RUN_TEST(test_gcm_kat);
 	MU_RUN_TEST(test_argon2id_kat);
 	MU_RUN_TEST(test_pz_v12);
+	MU_RUN_TEST(test_pz_ordinal64);
 }
 
 int

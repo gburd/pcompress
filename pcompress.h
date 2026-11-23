@@ -421,7 +421,7 @@ struct pc_ctx {
 	FILE *err_paths_fd;
 	uint32_t errored_count;
 
-	unsigned int chunk_num;
+	uint64_t chunk_num;	/* data chunks handed out: the v12 ordinal */
 	uint64_t largest_chunk, smallest_chunk, avg_chunk;
 	uint64_t chunksize;
 	const char *algo, *filename;
@@ -475,7 +475,7 @@ struct cmp_data {
 	uint64_t len_cmp, len_cmp_be;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	int level, cksum_mt, out_fd;
-	unsigned int id;
+	uint64_t id;		/* chunk number: the v12 data ordinal */
 	compress_func_ptr compress;
 	compress_func_ptr decompress;
 	int cancel;

@@ -252,7 +252,7 @@ show_compression_stats(pc_ctx_t *pctx)
 {
 	log_msg(LOG_INFO, 0, "\nCompression Statistics");
 	log_msg(LOG_INFO, 0, "======================");
-	log_msg(LOG_INFO, 0, "Total chunks           : %u", pctx->chunk_num);
+	log_msg(LOG_INFO, 0, "Total chunks           : %" PRIu64, pctx->chunk_num);
 	if (pctx->chunk_num == 0) {
 		log_msg(LOG_INFO, 0, "No statistics to display.");
 	} else {
@@ -633,7 +633,7 @@ pz_chunk_ad(const uchar_t *len_field, uchar_t flags, const uchar_t *orig, uchar_
  * original size. The payload is encrypted and the tag written.
  */
 static int
-pz_seal_chunk(pc_ctx_t *pctx, uchar_t *seg, uint64_t plen, uchar_t flags, unsigned int id)
+pz_seal_chunk(pc_ctx_t *pctx, uchar_t *seg, uint64_t plen, uchar_t flags, uint64_t id)
 {
 	uchar_t ad[17], *tag = seg + COMPRESSED_CHUNKSZ, *pay = tag + AEAD_TAGLEN + CHUNK_FLAG_SZ;
 	size_t adl = pz_chunk_ad(seg, flags, pay + plen, ad);
@@ -697,7 +697,7 @@ redo:
 		if (tdat->len_cmp < ORIGINAL_CHUNKSZ ||
 		    tdat->rbytes < (int64_t)ORIGINAL_CHUNKSZ) {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Chunk %d, invalid length. File corrupt ?",
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", invalid length. File corrupt ?",
 			    tdat->id);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -710,7 +710,7 @@ redo:
 		_chunksize = ntohll(I64_P(rseg));
 		if (_chunksize > tdat->chunksize) {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Chunk %d, original size too large. "
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", original size too large. "
 			    "File corrupt ?", tdat->id);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -732,7 +732,7 @@ redo:
 		if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_DATA, tdat->id, ad, adl, cseg,
 		    tdat->len_cmp, tdat->compressed_chunk) != 0) {
 			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Chunk %d, authentication failed", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", authentication failed", tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -766,7 +766,8 @@ redo:
 			 * HMAC verification failure is fatal.
 			 */
 			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Chunk %d, HMAC verification failed", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", HMAC verification failed",
+			    tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -788,7 +789,7 @@ redo:
 			 * Decryption failure is fatal.
 			 */
 			log_error_code(PC_ERR_CRYPTO);
-			log_msg(LOG_ERR, 0, "Chunk %d, Decryption failed", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", Decryption failed", tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -820,7 +821,8 @@ redo:
 			 * Header CRC32 verification failure is fatal.
 			 */
 			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "Chunk %d, Header CRC verification failed", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", Header CRC verification failed",
+			    tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -852,7 +854,8 @@ redo:
 		    dedupe_index_sz > tdat->chunksize || dedupe_data_sz > tdat->chunksize ||
 		    _chunksize > tdat->chunksize) {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe header. File corrupt ?",
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64
+			    ", invalid dedupe header. File corrupt ?",
 			    tdat->id);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -883,13 +886,15 @@ redo:
 				rv = tdat->decompress(cmpbuf, dedupe_data_sz_cmp, ubuf, &_chunksize,
 				    tdat->level, HDR, pctx->btype, tdat->data);
 				DEBUG_STAT_EN(en = get_wtime_millis());
-				DEBUG_STAT_EN(fprintf(stderr, "Chunk %d decompression speed %.3f MB/s\n",
+				DEBUG_STAT_EN(fprintf(stderr, "Chunk %" PRIu64
+				    " decompression speed %.3f MB/s\n",
 						      tdat->id, get_mb_s(_chunksize, strt, en)));
 			}
 			if (rv == -1) {
 				tdat->len_cmp = 0;
 				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "ERROR: Chunk %d, decompression failed.", tdat->id);
+				log_msg(LOG_ERR, 0, "ERROR: Chunk %" PRIu64
+				    ", decompression failed.", tdat->id);
 				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 				goto cont;
 			}
@@ -897,7 +902,8 @@ redo:
 			if (_chunksize > dedupe_data_sz_cmp) {	/* stored: sizes must agree */
 				tdat->len_cmp = 0;
 				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "ERROR: Chunk %d, stored data size %" PRIu64
+				log_msg(LOG_ERR, 0, "ERROR: Chunk %" PRIu64
+				    ", stored data size %" PRIu64
 				    " exceeds its length %" PRIu64 ".", tdat->id, (uint64_t)_chunksize,
 				    (uint64_t)dedupe_data_sz_cmp);
 				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -913,7 +919,7 @@ redo:
 		if (dedupe_index_sz < 90 && dedupe_index_sz > dedupe_index_sz_cmp) {
 			/* Stored (uncompressed) index larger than its bytes in the file. */
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Chunk %d, invalid dedupe index.", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", invalid dedupe index.", tdat->id);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			goto cont;
@@ -958,7 +964,7 @@ redo:
 	if (rv == -1) {
 		tdat->len_cmp = 0;
 		log_error_code(PC_ERR_CORRUPT);
-		log_msg(LOG_ERR, 0, "ERROR: Chunk %d, decompression failed.", tdat->id);
+		log_msg(LOG_ERR, 0, "ERROR: Chunk %" PRIu64 ", decompression failed.", tdat->id);
 		__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 		goto cont;
 	}
@@ -973,7 +979,8 @@ redo:
 		dedupe_decompress(rctx, tdat->uncompressed_chunk, &(tdat->len_cmp));
 		if (!rctx->valid) {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "ERROR: Chunk %d, dedup recovery failed.", tdat->id);
+			log_msg(LOG_ERR, 0, "ERROR: Chunk %" PRIu64 ", dedup recovery failed.",
+			    tdat->id);
 			rv = -1;
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -1006,7 +1013,8 @@ redo:
 		if (memcmp(checksum, tdat->checksum, pctx->cksum_bytes) != 0) {
 			tdat->len_cmp = 0;
 			log_error_code(PC_ERR_VERIFY);
-			log_msg(LOG_ERR, 0, "ERROR: Chunk %d, checksums do not match.", tdat->id);
+			log_msg(LOG_ERR, 0, "ERROR: Chunk %" PRIu64 ", checksums do not match.",
+			    tdat->id);
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 		}
@@ -1973,7 +1981,7 @@ dec_read_len(pc_ctx_t *pctx, int compfd, uint64_t *v)
 			log_msg(LOG_ERR, 1, "Read: ");
 		} else {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Incomplete chunk %d header,"
+			log_msg(LOG_ERR, 0, "Incomplete chunk %" PRIu64 " header,"
 			    "file corrupt", pctx->chunk_num);
 		}
 		return (-1);
@@ -2010,7 +2018,7 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 		 */
 		if (tdat->len_cmp > chunksize + 256) {
 			log_error_code(PC_ERR_CORRUPT);
-			log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %d",
+			log_msg(LOG_ERR, 0, "Compressed length too big for chunk: %" PRIu64,
 			    pctx->chunk_num);
 			return (-1);
 		}
@@ -2076,7 +2084,7 @@ dec_read_chunk(pc_ctx_t *pctx, int compfd, struct cmp_data *tdat, int64_t chunks
 				log_msg(LOG_ERR, 1, "Read: ");
 			} else {
 				log_error_code(PC_ERR_CORRUPT);
-				log_msg(LOG_ERR, 0, "Incomplete chunk %d, file corrupt.",
+				log_msg(LOG_ERR, 0, "Incomplete chunk %" PRIu64 ", file corrupt.",
 				    pctx->chunk_num);
 			}
 			return (-1);
@@ -2137,6 +2145,16 @@ dec_feed(pc_ctx_t *pctx, int compfd, struct cmp_data **dary, const struct dec_jo
 			Sem_Wait(&tdat->write_done_sem);
 			if (__atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
 				break;
+			/*
+			 * Version 11 and earlier keyed CTR with a 32-bit chunk
+			 * number, so a writer wrapped there and reused nonces.
+			 */
+			if (pctx->encrypt_type && !pctx->pz_v12 && pctx->chunk_num > UINT32_MAX) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "More than 2^32 chunks in an encrypted "
+				    "version %d file: its nonces repeat.", j->h->version);
+				return (-1);
+			}
 			tdat->id = pctx->chunk_num;
 			if (tdat->rctx) tdat->rctx->id = tdat->id;
 			rv = dec_read_chunk(pctx, compfd, tdat, j->h->chunksize,
@@ -2691,7 +2709,7 @@ plain_index:
 	if (pctx->encrypt_type) {
 		if (pz_seal_chunk(pctx, tdat->cmp_seg, plen, type, tdat->id) != 0) {
 			log_error_code(PC_ERR_CRYPTO);
-			log_msg(LOG_ERR, 0, "Chunk %d, encryption failed", tdat->id);
+			log_msg(LOG_ERR, 0, "Chunk %" PRIu64 ", encryption failed", tdat->id);
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			tdat->len_cmp = 0;
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
