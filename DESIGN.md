@@ -66,7 +66,8 @@ output. A file that uses no such feature keeps version 10 or 12, so
 older releases still read it. Encrypted version 13 files follow every
 version 12 rule (Argon2id, the AEAD streams, the end record); an
 unencrypted one is a version 10 file in all but the number. Taken
-bits: none yet. Free: 0x8, 0x40, 0x80, 0x2000, 0x4000, 0x8000.
+bits: 0x2000 `FLAG_BCJ_ARM` (archive members may be BCJ-filtered, see
+"Archive mode"). Free: 0x8, 0x40, 0x80, 0x4000, 0x8000.
 
 ## Pipeline
 
@@ -538,6 +539,24 @@ pcompress carries a small patch to libarchive
 On extraction, filters are reversed per entry; if a filter cannot decode
 an entry the stored bytes are written unchanged and the path is listed in
 `filter_failures.txt`.
+
+**BCJ filters.** With the executable filter on (`-x`, or level 9 and
+above), members that are little-endian ARM64 or RISC-V code (ELF by
+`e_machine` 183 or 243, ARM64 PE by machine 0xaa64, ARM64 Mach-O) go
+through the branch filters of XZ Utils 5.8.1 (`filters/bcj/bcj.c`, 0BSD):
+call targets and address computations become absolute, so repeated calls
+to a function become repeated bytes. A member of 4 KB to 256 MB is
+converted in place as one stream starting at offset 0, and tagged
+`BCJ-ARM64` or `BCJ-RISCV` like the other filters; extraction runs the
+inverse, which accepts any bytes. The coders are xz's, unchanged, and must
+stay byte-identical forever: a changed coder would extract old archives
+wrongly. The x86 E8E9 pass skips chunks of these types. Filtered members
+are bytes 4.4 would extract unconverted, so the archive takes header flag
+`FLAG_BCJ_ARM` and version 13. The header is written before any member
+is read, so the scan that lists the members also reads the first 512
+bytes of each candidate until one matches; with none, the flag is not
+set and the filter is switched off for the run, and the archive stays
+version 10 (12 encrypted).
 
 ## Encryption
 

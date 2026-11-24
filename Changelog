@@ -1,4 +1,10 @@
 == Unreleased ==
+New: ARM64 and RISC-V branch (BCJ) filters for archive members, from
+  XZ Utils 5.8.1 (0BSD), applied with -x (and from level 9) to ELF,
+  PE and Mach-O members of those architectures. An archive that holds
+  such members takes header flag 0x2000 and format version 13, so 4.4
+  refuses it; other archives are unchanged. Archives of riscv64
+  libraries are 8 to 11% smaller, of aarch64 /usr/lib 5%.
 Fix: archive extraction filters bound each data block of a member by
   the member's buffer, rather than writing where the archive's block
   offset said.

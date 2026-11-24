@@ -40,6 +40,7 @@
 #include <ctype.h>
 #include "pc_arc_filter.h"
 #include "pc_archive.h"
+#include "filters/bcj/bcj.h"
 
 struct scratch_buffer {
 	uchar_t *in_buff;
@@ -61,6 +62,8 @@ extern size_t wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_b
     ssize_t out_len);
 ssize_t wavpack_filter(struct filter_info *fi, void *filter_private);
 #endif
+
+ssize_t bcj_filter(struct filter_info *fi, void *filter_private);
 
 size_t dispack_filter_encode(uchar_t *inData, size_t len, uchar_t **out_buf);
 size_t dispack_filter_decode(uchar_t *inData, size_t len, uchar_t **out_buf);
@@ -103,6 +106,18 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 		typetab[slot].filter_func = dispack_filter;
 		typetab[slot].filter_name = "Dispack";
 		typetab[slot].result_type = 0;
+
+		slot = TYPE_EXE_ARM64 >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_ARM64_NAME;
+		typetab[slot].result_type = -1;
+
+		slot = TYPE_EXE_RISCV >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_RISCV_NAME;
+		typetab[slot].result_type = -1;
 	}
 
 #ifdef _ENABLE_WAVPACK_
@@ -686,3 +701,60 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 	return (ARCHIVE_OK);
 }
 
+/*
+ * The ARM64 and RISC-V branch filter (filters/bcj/): the member is
+ * converted in place, so its size does not change and no header is
+ * needed. Only members of at most BCJ_FILE_SIZE_LIMIT bytes are
+ * filtered, one copy in memory each way. Every byte string decodes, so
+ * extraction cannot fail here beyond reading the member or allocating.
+ */
+ssize_t
+bcj_filter(struct filter_info *fi, void *filter_private)
+{
+	uint64_t len = archive_entry_size(fi->entry);
+	int arm64 = (*fi->type_ptr & PC_SUBTYPE_MASK) == TYPE_EXE_ARM64;
+	uchar_t *out, *mapbuf;
+
+	(void) filter_private;
+	if (fi->compressing && (len < BCJ_FILE_SIZE_MIN || len > BCJ_FILE_SIZE_LIMIT))
+		return (FILTER_RETURN_SKIP);
+	/* Extracting: no filtered member is larger; the size is untrusted. */
+	if (len > BCJ_FILE_SIZE_LIMIT) {
+		log_msg(LOG_ERR, 0, "BCJ member size %" PRIu64 " too large.", len);
+		return (FILTER_RETURN_ERROR);
+	}
+	if ((out = pc_malloc(len > 0 ? len : 1)) == NULL) {
+		log_msg(LOG_ERR, 0, "Out of memory.");
+		return (FILTER_RETURN_ERROR);
+	}
+
+	if (fi->compressing) {
+		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
+		if (mapbuf == MAP_FAILED) {
+			log_msg(LOG_ERR, 1, "Mmap failed in BCJ filter.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		memcpy(out, mapbuf, len);
+		munmap(mapbuf, len);
+		if (arm64)
+			bcj_arm64_encode(out, len);
+		else
+			bcj_riscv_encode(out, len);
+		fi->fout->hdr_valid = 0;
+	} else {
+		if (copy_archive_data(fi->source_arc, out, len) != (ssize_t)len) {
+			log_msg(LOG_ERR, 0, "Failed to read archive data.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		if (arm64)
+			bcj_arm64_decode(out, len);
+		else
+			bcj_riscv_decode(out, len);
+	}
+	fi->fout->output_type = FILTER_OUTPUT_MEM;
+	fi->fout->out = out;
+	fi->fout->out_size = len;
+	return (ARCHIVE_OK);
+}

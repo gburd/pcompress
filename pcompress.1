@@ -179,8 +179,14 @@ LZP pre-compression.
 .It Fl P
 Adaptive delta encoding of numeric tables.
 .It Fl x
-Dispack filter for 32-bit x86 Windows executables
-.Pq archive mode only .
+Executable filters
+.Pq archive mode only ;
+on by default from level 9 :
+Dispack for 32-bit x86 Windows executables, and the XZ Utils branch
+filters for ARM64 and RISC-V code
+.Pq ELF, PE and Mach-O .
+An archive with members that went through the ARM64 or RISC-V filter is
+written as format version 13, which pcompress 4.4 and older cannot read.
 .It Fl j
 PackJPG and PackPNM filters for JPEG and PNM images, and WavPack for
 WAV audio if built in

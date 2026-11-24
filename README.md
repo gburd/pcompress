@@ -564,7 +564,9 @@ Advanced usage
                 relative offsets to absolute values which compress better. The given
                 chunk is split into 32KB blocks and some heuristics are used per block
                 to identify whether it represents x86 instruction stream or not. This
-                works only when archiving.
+                works only when archiving. ARM64 and RISC-V executables and
+                libraries go through the XZ Utils branch filters instead; an
+                archive with such members needs pcompress 4.5 or later to extract.
 
        -j       Enable PackJPG processing for Jpeg files. This works only when archiving.
 

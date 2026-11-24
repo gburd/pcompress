@@ -189,11 +189,15 @@ DELTA2SRCS = filters/delta2/delta2.c
 DELTA2HDRS = filters/delta2/delta2.h
 DELTA2OBJS = $(DELTA2SRCS:.c=.o)
 
+BCJSRCS = filters/bcj/bcj.c
+BCJHDRS = filters/bcj/bcj.h
+BCJOBJS = $(BCJSRCS:.c=.o)
+
 ARCHIVESRCS = archive/pc_archive.c archive/pc_arc_filter.c utils/phash/phash.c \
 	utils/phash/lookupa.c utils/phash/recycle.c
 ARCHIVEHDRS = pcompress.h  utils/utils.h archive/pc_archive.h utils/phash/standard.h \
 	utils/phash/lookupa.h utils/phash/recycle.h utils/phash/phash.h archive/pc_arc_filter.h \
-	utils/phash/extensions.h
+	utils/phash/extensions.h filters/bcj/bcj.h
 ARCHIVEOBJS = $(ARCHIVESRCS:.c=.o)
 
 PJPGSRCS = filters/packjpg/aricoder.cpp filters/packjpg/bitops.cpp filters/packjpg/packjpg.cpp \
@@ -279,7 +283,7 @@ CRYPTO_ASM_COMPILE = @CRYPTO_ASM_COMPILE@
 BAKFILES = *~ lzma/*~ lzfx/*~ lz4/lib/*~ rabin/*~ bsdiff/*~ filters/lzp/*~ utils/*~ crypto/sha2/*~ \
 	crypto/sha2/intel/*~ crypto/aes/*~ crypto/scrypt/*~ crypto/*~ rabin/global/*~ \
 	delta2/*~ crypto/keccak/*~ transpose/*~ crypto/skein/*~ crypto/keccak/*.o \
-	archive/*~ filters/delta2/*~ filters/packjpg/*~ filters/transpose/*~
+	archive/*~ filters/delta2/*~ filters/bcj/*~ filters/packjpg/*~ filters/transpose/*~
 
 RM = rm -f
 RM_RF = rm -rf
@@ -319,7 +323,7 @@ LDLIBS = @LDL@ -L./buildtmp -lbz2 -lz -lm @LIBBSCLFLAGS@ \
 	-lcrypto @LRT@ -L@LIBARCHIVE_DIR@/.libs -larchive $(EXTRA_LDFLAGS) \
 	-lpthread @OMP_LIBS@ @WAVPACK_LIBSPEC@ $(LDRPATHS)
 OBJS = $(MAINOBJS) $(LZMAOBJS) $(PPMDOBJS) $(LZFXOBJS) $(LZ4OBJS) @ZSTD_OBJS@ $(ZSTD_ASM_OBJS) @ZSTD_WRAPOBJ@ $(CRCOBJS) \
-$(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
+$(RABINOBJS) $(BSDIFFOBJS) $(LZPOBJS) $(DELTA2OBJS) $(BCJOBJS) @LIBBSCWRAPOBJ@ $(SKEINOBJS) \
 $(SKEIN_BLOCK_OBJ) @SHA2ASM_OBJS@ @SHA2_OBJS@ $(KECCAK_OBJS) $(KECCAK_OBJS_ASM) \
 $(TRANSP_OBJS) $(CRYPTO_OBJS) $(ZLIB_OBJS) $(BZLIB_OBJS) $(XXHASH_OBJS) $(BLAKE2_OBJS) $(BLAKE3_OBJS) \
 @CRYPTO_COMPAT_OBJS@ $(CRYPTO_ASM_OBJS) $(ARCHIVEOBJS) $(PJPGOBJS) $(DISPACKOBJS) $(PPNMOBJS) \
@@ -407,6 +411,9 @@ $(LZPOBJS): $(LZPSRCS) $(LZPHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(DELTA2OBJS): $(DELTA2SRCS) $(DELTA2HDRS)
+	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
+
+$(BCJOBJS): $(BCJSRCS) $(BCJHDRS)
 	$(COMPILE) $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) $(@:.o=.c) -o $@
 
 $(ARCHIVEOBJS): $(ARCHIVESRCS) $(ARCHIVEHDRS)

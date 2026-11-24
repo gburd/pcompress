@@ -156,6 +156,68 @@ else
 	log_skip "-j filter (no test JPEG)"
 fi
 
+echo ""
+echo "--- -x: ARM64 and RISC-V branch filters ---"
+# A member whose ELF header says ARM64 (e_machine 183) or RISC-V (243)
+# goes through the BCJ filter, and the archive becomes version 13; one
+# with no such member stays version 10. Header bytes 8-9 hold the version.
+BDIR="datafiles/bcjtest"
+hdr_version() { od -An -tu1 -j8 -N2 "$1" | awk '{ print $1 * 256 + $2 }'; }
+mk_elf() { # file e_machine: an ELF header, then calls to a few functions
+	python3 - "$1" "$2" <<'PYEOF'
+import random, struct, sys
+# Calls from all over the file to 16 targets: relative offsets differ at
+# every site, absolute ones repeat, which is what the filter is for.
+r = random.Random(1)
+hdr = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HH", 3, int(sys.argv[2]))
+body = bytearray(hdr + bytes(512))
+fns = [r.randrange(0, 1 << 17) * 4 for i in range(16)]
+while len(body) < 200000:
+	pc, t = len(body), r.choice(fns)
+	if sys.argv[2] == "183":	# ARM64 BL
+		body += struct.pack("<I", 0x94000000 | ((t - pc) >> 2) & 0x3ffffff)
+	else:				# RISC-V JAL ra
+		d = (t - pc) & 0x1fffff
+		body += struct.pack("<I", 0xef | 1 << 7 | (d >> 12 & 0xff) << 12 |
+		    (d >> 11 & 1) << 20 | (d >> 1 & 0x3ff) << 21 | (d >> 20 & 1) << 31)
+	body += struct.pack("<I", r.randrange(1 << 32) & 0x0000ffff)
+open(sys.argv[1], "wb").write(body)
+PYEOF
+}
+wipe "$BDIR"; wipe datafiles/bout; rm -f "$BDIR.pz"
+mkdir -p "$BDIR" datafiles/bout
+if ! command -v python3 >/dev/null 2>&1; then
+	log_skip "-x BCJ (no python3)"
+else
+mk_elf "$BDIR/arm.so" 183
+mk_elf "$BDIR/rv.so" 243
+if $PCOMPRESS -a -c zstd -l 6 -x "$BDIR" 2>/dev/null &&
+    [ "$(hdr_version "$BDIR.pz")" = 13 ] &&
+    $PCOMPRESS -d "$BDIR.pz" datafiles/bout 2>/dev/null &&
+    cmp -s "$BDIR/arm.so" "datafiles/bout/$BDIR/arm.so" &&
+    cmp -s "$BDIR/rv.so" "datafiles/bout/$BDIR/rv.so"; then
+	log_pass "-x on ARM64/RISC-V members: version 13, restored exactly"
+else
+	log_fail "-x on ARM64/RISC-V members"
+fi
+filt=$(wc -c < "$BDIR.pz"); rm -f "$BDIR.pz"
+$PCOMPRESS -a -c zstd -l 6 "$BDIR" 2>/dev/null
+if [ "$filt" -lt "$(wc -c < "$BDIR.pz")" ]; then
+	log_pass "-x BCJ: archive smaller ($filt bytes)"
+else
+	log_fail "-x BCJ: archive not smaller ($filt vs $(wc -c < "$BDIR.pz"))"
+fi
+rm -f "$BDIR.pz" "$BDIR/arm.so" "$BDIR/rv.so"
+mk_elf "$BDIR/x86.so" 62
+if $PCOMPRESS -a -c zstd -l 6 -x "$BDIR" 2>/dev/null &&
+    [ "$(hdr_version "$BDIR.pz")" = 10 ]; then
+	log_pass "-x with no ARM64/RISC-V member: still version 10"
+else
+	log_fail "-x with no ARM64/RISC-V member: version $(hdr_version "$BDIR.pz")"
+fi
+fi
+wipe "$BDIR"; wipe datafiles/bout; rm -f "$BDIR.pz"
+
 # The tar stream's zero padding after the end-of-archive blocks can land in
 # a chunk of its own; extraction stops at the end blocks and must accept it.
 PDIR="datafiles/padtest"

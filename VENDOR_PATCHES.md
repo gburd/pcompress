@@ -16,6 +16,7 @@ dependencies managed as git submodules and any API changes required.
 | WavPack        | wavpack/                            | HEAD     | Submodule  | github.com/dbry/WavPack       |
 | BLAKE3         | crypto/blake3/                      | 1.8.7    | Vendored   | github.com/BLAKE3-team/BLAKE3 |
 | Monocypher     | crypto/monocypher/                  | 4.0.2    | Vendored   | monocypher.org                |
+| XZ Utils BCJ   | filters/bcj/                        | 5.8.1    | Vendored   | tukaani.org/xz (ARM64, RISC-V)|
 
 ---
 
@@ -358,3 +359,24 @@ XChaCha20-Poly1305 extended nonce (the AEAD itself is OpenSSL's
 ChaCha20-Poly1305, 9 times as fast as Monocypher's portable C on x86-64),
 and Argon2id, which OpenSSL has only from 3.2. `test/unit/test_crypto.c`
 pins both to the published vectors (draft-irtf-cfrg-xchacha-03, RFC 9106).
+
+## Vendored: XZ Utils BCJ filters (filters/bcj/)
+
+**Upstream**: https://github.com/tukaani-project/xz, release 5.8.1
+(xz-5.8.1.tar.gz sha256
+507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543), files
+`src/liblzma/simple/arm64.c` (sha256 e4efa467...a01154) and `riscv.c`
+(sha256 5962ff33...2fe97).
+**License**: 0BSD (the SPDX line at the top of `bcj.c`).
+**Modifications**: `bcj.c` holds the three coders `arm64_code()`,
+`riscv_encode()` and `riscv_decode()` with their comments, unchanged, and
+drops the liblzma glue around them: the `HAVE_ENCODER_*` guards, the
+`lzma_simple_*_init()` and `lzma_bcj_*()` wrappers and
+`simple_private.h`, whose `read32le()` and friends are written out at the
+top. `bcj_arm64_encode()` and the other three entry points at the end call
+the coders on a whole buffer from offset 0.
+
+Archives hold the coders' output, so it must never change. To update,
+replace the coder bodies from the new release only if they still produce
+the same bytes: `test_filters` pins both against xz 5.8.1's own output.
+
