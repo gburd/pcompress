@@ -19,6 +19,9 @@ log_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 T="${TMPDIR:-/tmp}/pc_repair_$$"
 mkdir -p "$T" || exit 1
 trap 'find "$T" -depth -delete 2>/dev/null' EXIT
+# $T as an archive member: pcompress drops a drive letter and leading "/".
+TM=${T#?:}
+TM=${TM#/}
 
 echo "========================================="
 echo " Integration: Repair data"
@@ -143,7 +146,7 @@ if $PCOMPRESS -a -c zstd -l6 -Y 20 -s 256k "$T/tree" "$T/a" >/dev/null 2>&1; the
 	zap "$T/a.pz" 50 8
 	if $PCOMPRESS -y "$T/a.pz" >/dev/null 2>&1 &&
 	    $PCOMPRESS -d "$T/a.pz" "$T/xt" >/dev/null 2>&1 &&
-	    diff -r "$T/tree" "$T/xt/${T#/}/tree" >/dev/null 2>&1; then
+	    diff -r "$T/tree" "$T/xt/$TM/tree" >/dev/null 2>&1; then
 		log_pass "archive repaired and extracted"
 	else
 		log_fail "archive repaired and extracted"

@@ -18,6 +18,15 @@ log_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 T="${TMPDIR:-/tmp}/pc_reflate_$$"
 mkdir -p "$T" || exit 1
 trap 'find "$T" -depth -delete 2>/dev/null' EXIT
+# $T as an archive member: pcompress drops a drive letter and leading "/".
+TM=${T#?:}
+TM=${TM#/}
+# A native Windows python cannot run the ./pcompress shell wrapper: give
+# it the program itself.
+PCBIN=$PCOMPRESS
+case "$(uname -s)" in
+MINGW*) PCBIN="$(dirname "$PCOMPRESS")/buildtmp/pcompress.exe" ;;
+esac
 
 echo "========================================="
 echo " Integration: Reflate (-Z)"
@@ -78,7 +87,7 @@ for opts in "-l6" "-l9" "-l6 -c lzma -e AES" "-l6 -X" "-l6 -T"; do
 	case "$opts" in *-e*) echo "reflate test password" > "$T/pw" ;; esac
 	# shellcheck disable=SC2086
 	if $PCOMPRESS -d $extra "$T/a.pz" "$T/x" >/dev/null 2>&1 &&
-	    diff -r "$T/in" "$T/x/${T#/}/in" >/dev/null 2>&1; then
+	    diff -r "$T/in" "$T/x/$TM/in" >/dev/null 2>&1; then
 		log_pass "$opts: extracts bit for bit"
 	else
 		log_fail "$opts: extraction differs"
@@ -128,7 +137,7 @@ fi
 rm -f "$T/n.pz"
 find "$T/x" -depth -delete 2>/dev/null
 mkdir -p "$T/x"
-if python3 - "$PCOMPRESS" "$T/n" <<'PYEOF'
+if python3 - "$PCBIN" "$T/n" <<'PYEOF'
 import base64, io, os, struct, subprocess, sys, tarfile, zlib
 pc, out = sys.argv[1], sys.argv[2]
 data = struct.pack("<Q", 40) + b"PCRF\x01\x00" + b"\x07" * 90
