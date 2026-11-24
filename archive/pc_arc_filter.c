@@ -182,10 +182,12 @@ ensure_buffer(struct scratch_buffer *unused, uint64_t len)
 }
 
 /*
- * Copy current entry data from the archive being extracted into the given buffer.
+ * Copy current entry data from the archive being extracted into out_buf,
+ * which holds cap bytes. The block offsets come from the archive, so a
+ * block that would land past cap fails the copy (returns 0).
  */
 static ssize_t
-copy_archive_data(struct archive *ar, uchar_t *out_buf)
+copy_archive_data(struct archive *ar, uchar_t *out_buf, uint64_t cap)
 {
 	int64_t offset;
 	const void *buff;
@@ -198,6 +200,8 @@ copy_archive_data(struct archive *ar, uchar_t *out_buf)
 		if (r == ARCHIVE_EOF)
 			break;
 		if (r != ARCHIVE_OK)
+			return (0);
+		if (offset < 0 || (uint64_t)offset > cap || size > cap - offset)
 			return (0);
 		memcpy(out_buf + offset, buff, size);
 		tot += size;
@@ -254,7 +258,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -374,7 +378,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -497,7 +501,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -615,7 +619,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
