@@ -4,6 +4,12 @@ Format: version 13, for features that change how data is decoded: the
   any header flag bit it does not know, where 10 to 12 ignored them.
   Only files that use such a feature are written as 13 (4.4 refuses
   them as newer); all others are still 10 or 12.
+Fix: -E and -EE saved almost nothing. When a bsdiff patch had no extra
+  data, bsdiff() recorded the extra block as the whole space left in the
+  block, so most patches were exactly as long as the block they stood
+  for, and carried stale buffer bytes. Patches are now 2 to 3% of the
+  block (EC2 c7i, tars of Go toolchains and /usr/lib, an edited 32 MB
+  copy). 4.4 and earlier read the new patches.
 Change: -D and -G find block boundaries with the gear hash of the
   library chunker instead of a Rabin hash: 18 to 30% less CPU at -D,
   4 to 7% at -G (one thread, c7i), output within 0.5% at -D and 1.2%

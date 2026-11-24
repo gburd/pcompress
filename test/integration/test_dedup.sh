@@ -177,6 +177,47 @@ for mode in "-D" "-G" "-D -E" "-D -EE"; do
 	done
 done
 
+# Delta encoding must pay: 40 copies of a 64 KB random block, each with 16
+# scattered 2-byte edits, so no block repeats exactly but every block has
+# a similar one. Without a compressor -D -EE must come out smaller than -D.
+nf="datafiles/dedup_near.dat"
+if [ ! -f "$nf" ]; then
+	dd if=/dev/urandom of=datafiles/dedup_near.tmp bs=4096 count=16 2>/dev/null
+	: > "$nf"
+	c=0
+	while [ $c -lt 40 ]; do
+		cp datafiles/dedup_near.tmp datafiles/dedup_near.cp
+		k=0
+		while [ $k -lt 16 ]; do
+			printf '%02x' $c | dd of=datafiles/dedup_near.cp bs=1 conv=notrunc \
+			    seek=$((k * 4096 + (c * 997 + k * 131) % 4000)) 2>/dev/null
+			k=$((k + 1))
+		done
+		cat datafiles/dedup_near.cp >> "$nf"
+		c=$((c + 1))
+	done
+	rm -f datafiles/dedup_near.tmp datafiles/dedup_near.cp
+fi
+rm -f ${nf}.pz ${nf}.out
+if $PCOMPRESS -c none -l 1 -s 1m -D ${nf} 2>/dev/null; then
+	dsz=$(wc -c < ${nf}.pz)
+	rm -f ${nf}.pz
+	if $PCOMPRESS -c none -l 1 -s 1m -D -EE ${nf} 2>/dev/null &&
+	    $PCOMPRESS -d ${nf}.pz ${nf}.out 2>/dev/null && cmp -s ${nf} ${nf}.out; then
+		esz=$(wc -c < ${nf}.pz)
+		if [ "$esz" -lt "$dsz" ]; then
+			log_pass "-D -EE: ${esz} bytes, -D ${dsz}"
+		else
+			log_fail "-D -EE: ${esz} bytes, not below -D's ${dsz}"
+		fi
+	else
+		log_fail "-D -EE: round-trip"
+	fi
+else
+	log_fail "-D: compression of ${nf} failed"
+fi
+rm -f ${nf}.pz ${nf}.out
+
 # Archive mode with dedupe: two copies of the file in one directory.
 ADIR=datafiles/dedup_arc
 rm -rf "$ADIR" "$ADIR.pz" datafiles/dedup_arc_out
