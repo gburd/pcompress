@@ -29,6 +29,25 @@ Security: a corrupt or hostile deduplicated chunk (-D, -F, -G, -E)
   with ASan by the new fuzz_dedupe target, which ran 10 minutes clean on
   the fix). Every one is now checked before use, and the chunk is
   refused as corrupt. Old files decode as before.
+Change: on Linux, blocks of 4 MB or more (chunk buffers, codec match
+  tables) get madvise(MADV_HUGEPAGE) when the C library's allocator is
+  in use (not with pc_set_allocator()). With 64 MB chunks compression
+  is 4 to 16% faster (lz4 22 to 30%) on x86-64 and arm64, and dTLB
+  misses drop from hundreds of millions to under one million; lz4
+  decompression is 2 to 7% slower, the other codecs 1 to 18% faster.
+New: ARM64 and RISC-V branch (BCJ) filters for archive members, from
+  XZ Utils 5.8.1 (0BSD), applied with -x (and from level 9) to ELF,
+  PE and Mach-O members of those architectures. An archive that holds
+  such members takes header flag 0x2000 and format version 13, so 4.4
+  refuses it; other archives are unchanged. Archives of riscv64
+  libraries are 8 to 11% smaller, of aarch64 /usr/lib 5%.
+Fix: archive extraction filters bound each data block of a member by
+  the member's buffer, rather than writing where the archive's block
+  offset said.
+Change: zstd at levels 1 to 3 with chunks of 128 MB or more (-s 128m)
+  turns on zstd's long-distance matching: 1.5 to 10% smaller on tars
+  of /usr/lib and /usr/share, half the size on enwik8 repeated, and as
+  fast or faster. The output is ordinary zstd frames that 4.4 reads.
 Format: version 13, for features that change how data is decoded: the
   version 10 layout (version 12 when encrypted), and a reader refuses
   any header flag bit it does not know, where 10 to 12 ignored them.

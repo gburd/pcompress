@@ -360,7 +360,8 @@ preproc_compress(pc_ctx_t *pctx, compress_func_ptr cmp_func, void *src, uint64_t
 			}
 		}
 
-		if (!processed) {
+		/* E8E9 is x86; members already converted by the BCJ filter skip it. */
+		if (!processed && stype != TYPE_EXE_ARM64 && stype != TYPE_EXE_RISCV) {
 			_dstlen = fromlen;
 			memcpy(to, from, fromlen);
 			if (Forward_E89(to, fromlen) == 0) {
@@ -3958,6 +3959,8 @@ start_compress_impl(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, in
 			flags |= FLAG_META_STREAM;
 		if (pctx->enable_reflate)
 			flags |= FLAG_REFLATE;
+		if (pctx->bcj_used)
+			flags |= FLAG_BCJ_ARM;
 	}
 
 	flags |= pctx->cksum;

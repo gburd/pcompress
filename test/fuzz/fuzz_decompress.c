@@ -2,8 +2,9 @@
  * Fuzzing harness for decompression routines.
  *
  * Compatible with both libFuzzer (LLVMFuzzerTestOneInput) and AFL++
- * (stdin-based). Tests that decompression of arbitrary data does not
- * crash, trigger undefined behavior, or produce memory errors.
+ * (stdin-based). Tests that decompression of arbitrary data (each codec,
+ * and the ARM64 and RISC-V branch filters' decoders) does not crash,
+ * trigger undefined behavior, or produce memory errors.
  *
  * Build with libFuzzer:
  *   clang -fsanitize=fuzzer,address -o fuzz_decompress fuzz_decompress.c -lpcompress ...
@@ -20,6 +21,7 @@
 #include <utils.h>
 #include <allocator.h>
 #include <pcompress.h>
+#include "filters/bcj/bcj.h"
 
 #define MAX_DECOMPRESS_SZ	(4 * 1024 * 1024)	/* 4 MiB output cap */
 
@@ -95,6 +97,12 @@ fuzz_one(const uint8_t *data, size_t size)
 
 		a->deinit(&algo_data);
 	}
+
+	/* The BCJ decoders take a member's stored bytes as they are. */
+	memcpy(out, data, size);
+	bcj_arm64_decode(out, size);
+	memcpy(out, data, size);
+	bcj_riscv_decode(out, size);
 
 	free(out);
 	return 0;

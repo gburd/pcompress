@@ -43,6 +43,8 @@
  * algorithms.
  */
 #define	ZSTD_MAX_CHUNK	2147450621ULL
+#define	LDM_MAX_LEVEL	3
+#define	LDM_MIN_CHUNK	(128ULL * 1024 * 1024)
 
 /*
  * Map pcompress levels 1-14 to Zstandard compression levels 1-22.
@@ -186,6 +188,20 @@ zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
 			    nthreads);
 		ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_windowLog,
 		    zdat->window_log);
+
+		/*
+		 * Long-distance matching finds repeats a chunk-sized window
+		 * holds but the fast levels' match finders miss. It pays at
+		 * levels 1 to 3 (no dedupe by default) with chunks of 128 MB
+		 * and up: 1.5 to 10% smaller on tars, far more on repeated
+		 * data, at the same speed or better. With smaller chunks it
+		 * slows level 1 for little gain; from level 4 dedupe has
+		 * removed the repeats; from level 10 zstd enables it itself.
+		 * The frame format is unchanged.
+		 */
+		if (*level <= LDM_MAX_LEVEL && chunksize >= LDM_MIN_CHUNK)
+			ZSTD_CCtx_setParameter(zdat->cctx,
+			    ZSTD_c_enableLongDistanceMatching, ZSTD_ps_enable);
 	} else {
 		zdat->dctx = ZSTD_createDCtx_advanced(zstd_mem);
 		if (!zdat->dctx) {

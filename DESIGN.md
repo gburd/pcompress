@@ -67,7 +67,8 @@ older releases still read it. Encrypted version 13 files follow every
 version 12 rule (Argon2id, the AEAD streams, the end record); an
 unencrypted one is a version 10 file in all but the number. Taken
 bits: 0x40 `FLAG_REFLATE` (archive members may be reflate records, see
-"Reflate"). Free: 0x8, 0x80, 0x2000, 0x4000, 0x8000.
+"Reflate") and 0x2000 `FLAG_BCJ_ARM` (archive members may be
+BCJ-filtered, see "Archive mode"). Free: 0x8, 0x80, 0x4000, 0x8000.
 
 ## Pipeline
 
@@ -464,7 +465,21 @@ Two heap overflows (lz4, libbsc) came from compressors that sized their
 output from the input length instead of `*dstlen`.
 
 Buffers come from the system allocator, or the host's (see Embedding
-below). Pcompress used to ship a
+below). On Linux, a block of 4 MB or more from the C library's
+allocator is given `madvise(MADV_HUGEPAGE)` over its 2 MB-aligned part
+(`advise_huge()` in `allocator.c`): the chunk buffers and the codecs'
+match tables and suffix arrays are read at random, and with 4 KB pages
+nearly every access missed the TLB. On a c7i.4xlarge with 64 MB chunks
+it cut dTLB load misses from 490 million to 0.3 million (lzma -l 14,
+enwik8 four times) and 530 million to 0.1 million (libbsc, a /usr/lib
+tar), and compress time by 4 to 16% (lz4 -l 1 by 22 to 30%), on
+Graviton3 (c7g.4xlarge) as well. Peak RSS grew by about 1% (a partly
+used huge page at each end of a block). lz4 decompression got 2 to 7%
+slower (its output buffer is written once, and faulting 2 MB pages
+costs more than the TLB saves); the other codecs decompress 1 to 18%
+faster. The host's memory
+from `pc_set_allocator()` is never advised: it is the host's to manage.
+Pcompress used to ship a
 process-wide slab allocator; it was removed in 4.1 because it was not
 safe with several contexts in one process and measured no faster than
 `malloc` (within 2.5% on a 192-core Graviton4, within noise on a
@@ -744,6 +759,24 @@ with zlib did; release tarballs did not match either. The time goes to
 the search: on streams no set reproduces, `longest_match` of each
 failed attempt (87% of the profile), so it is slowest where it helps
 least.
+
+**BCJ filters.** With the executable filter on (`-x`, or level 9 and
+above), members that are little-endian ARM64 or RISC-V code (ELF by
+`e_machine` 183 or 243, ARM64 PE by machine 0xaa64, ARM64 Mach-O) go
+through the branch filters of XZ Utils 5.8.1 (`filters/bcj/bcj.c`, 0BSD):
+call targets and address computations become absolute, so repeated calls
+to a function become repeated bytes. A member of 4 KB to 256 MB is
+converted in place as one stream starting at offset 0, and tagged
+`BCJ-ARM64` or `BCJ-RISCV` like the other filters; extraction runs the
+inverse, which accepts any bytes. The coders are xz's, unchanged, and must
+stay byte-identical forever: a changed coder would extract old archives
+wrongly. The x86 E8E9 pass skips chunks of these types. Filtered members
+are bytes 4.4 would extract unconverted, so the archive takes header flag
+`FLAG_BCJ_ARM` and version 13. The header is written before any member
+is read, so the scan that lists the members also reads the first 512
+bytes of each candidate until one matches; with none, the flag is not
+set and the filter is switched off for the run, and the archive stays
+version 10 (12 encrypted).
 
 ## Encryption
 

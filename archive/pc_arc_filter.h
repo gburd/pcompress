@@ -65,6 +65,16 @@ extern "C" {
 #define WVPK_FILE_SIZE_LIMIT    (18 * 1024 * 1024)
 
 /*
+ * The ARM64 and RISC-V branch filter: the names tag filtered members in
+ * the archive (format version 13, FLAG_BCJ_ARM), and members outside
+ * these sizes are stored unfiltered.
+ */
+#define	BCJ_ARM64_NAME		"BCJ-ARM64"
+#define	BCJ_RISCV_NAME		"BCJ-RISCV"
+#define	BCJ_FILE_SIZE_MIN	4096
+#define	BCJ_FILE_SIZE_LIMIT	(256 * 1024 * 1024)
+
+/*
  * The biggest scratch buffer reqd by filter routines.
  * Currently this is the WavPack filter buffer.
  */

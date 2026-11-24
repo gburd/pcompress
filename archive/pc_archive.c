@@ -115,6 +115,7 @@ static struct arc_list_state {
 	int fd;
 	struct sort_buf *srt, *head;
 	int srt_pos;
+	int bcj_probe, bcj_found;	/* look for ARM64/RISC-V members */
 } a_state;
 
 pthread_mutex_t nftw_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -661,6 +662,40 @@ do_mmap:
 /*
  * Build list of pathnames in a temp file.
  */
+/*
+ * During the scan, until one is found: would the archiver hand this file
+ * to the ARM64/RISC-V branch filter? The same tests it makes (size,
+ * extension, then the magic bytes), so the header can say in advance
+ * whether the archive needs format version 13 (FLAG_BCJ_ARM).
+ */
+static void
+bcj_probe(const char *fpath, const struct stat *sb, int tflag)
+{
+	uchar_t buf[512];
+	ssize_t n;
+	int fd, typ;
+
+	if (!a_state.bcj_probe || a_state.bcj_found || tflag != FTW_F ||
+	    !S_ISREG(sb->st_mode) || sb->st_size < BCJ_FILE_SIZE_MIN ||
+	    sb->st_size > BCJ_FILE_SIZE_LIMIT ||
+	    detect_type_by_ext(fpath, strlen(fpath)) != TYPE_UNKNOWN)
+		return;
+	/* O_NONBLOCK: a file swapped for a FIFO since the walk must not block. */
+#ifdef O_NONBLOCK
+	if ((fd = open(fpath, O_RDONLY | O_NONBLOCK)) == -1)
+#else
+	if ((fd = open(fpath, O_RDONLY)) == -1)
+#endif
+		return;
+	n = read(fd, buf, sizeof (buf));
+	close(fd);
+	if (n < (ssize_t)sizeof (buf))
+		return;
+	typ = PC_SUBTYPE(detect_type_by_data(buf, sizeof (buf)));
+	if (typ == TYPE_EXE_ARM64 || typ == TYPE_EXE_RISCV)
+		a_state.bcj_found = 1;
+}
+
 static int
 add_pathname(const char *fpath, const struct stat *sb,
                     int tflag, struct FTW *ftwbuf)
@@ -679,6 +714,7 @@ add_pathname(const char *fpath, const struct stat *sb,
 	 * buffer is then flushed to disk. This is for decent performance.
 	 */
 	a_state.arc_size += (sb->st_size + ARC_ENTRY_OVRHEAD);
+	bcj_probe(fpath, sb, tflag);
 	len = strlen(fpath);
 	if (a_state.bufpos + len + 14 > a_state.bufsiz) {
 		ssize_t wrtn = Write(a_state.fd, a_state.pbuf, a_state.bufpos);
@@ -938,6 +974,9 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	a_state.srt_pos = 0;
 	a_state.head = a_state.srt;
 	a_state.pathlist_size = 0;
+	a_state.bcj_probe = pctx->exe_preprocess &&
+	    FILTERS(pctx)[TYPE_EXE_ARM64 >> 3].filter_func != NULL;
+	a_state.bcj_found = 0;
 
 	while (fn) {
 		struct stat sb;
@@ -1001,6 +1040,18 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 		pctx->archive_temp_size = a_state.pathlist_size;
 	}
 	pthread_mutex_unlock(&nftw_mutex);
+
+	/*
+	 * The header is written before any member is read: it claims
+	 * FLAG_BCJ_ARM only when the scan found a member for the filter.
+	 * Otherwise the filter is switched off, so a file that changed since
+	 * the scan cannot be filtered in an archive 4.4 would misread.
+	 */
+	pctx->bcj_used = a_state.bcj_found;
+	if (!pctx->bcj_used && pctx->filter_table != NULL) {
+		FILTERS(pctx)[TYPE_EXE_ARM64 >> 3].filter_func = NULL;
+		FILTERS(pctx)[TYPE_EXE_RISCV >> 3].filter_func = NULL;
+	}
 
 	sbuf->st_size = pctx->archive_size;
 	lseek(fd, 0, SEEK_SET);
@@ -2203,6 +2254,10 @@ out:
 #	define COM_MAGIC	(0x21cd)
 #endif
 
+/* ELF e_machine values (the ELF gABI). */
+#define	EM_AARCH64	183
+#define	EM_RISCV	243
+
 /*
  * Detect a few file types from looking at magic signatures.
  */
@@ -2276,6 +2331,11 @@ detect_type_by_data(uchar_t *buf, size_t len)
 
 	if (U32_P(buf) == ELFINT) {  // Regular ELF, check for 32/64-bit, core dump
 		if (*(buf + 16) != 4) {
+			/* Little-endian ARM64 and RISC-V code: the BCJ filter. */
+			if (buf[5] == 1 && LE16(U16_P(buf + 18)) == EM_AARCH64)
+				return (TYPE_BINARY|TYPE_EXE_ARM64);
+			if (buf[5] == 1 && LE16(U16_P(buf + 18)) == EM_RISCV)
+				return (TYPE_BINARY|TYPE_EXE_RISCV);
 			if (*(buf + 4) == 2) {
 				return (TYPE_BINARY|TYPE_EXE64);
 			} else {
@@ -2312,6 +2372,8 @@ detect_type_by_data(uchar_t *buf, size_t len)
 							id = LE16(U16_P(buf + off));
 							if (id == 0x8664) {
 								return (TYPE_BINARY|TYPE_EXE64);
+							} else if (id == 0xaa64) {
+								return (TYPE_BINARY|TYPE_EXE_ARM64);
 							} else {
 								return (TYPE_BINARY|TYPE_EXE32_PE);
 							}
@@ -2325,6 +2387,10 @@ detect_type_by_data(uchar_t *buf, size_t len)
 			}
 		}
 	}
+
+	// 64-bit Mach-O for ARM64 (MH_MAGIC_64, CPU_TYPE_ARM64)
+	if (LE32(U32_P(buf)) == 0xfeedfacfU && LE32(U32_P(buf + 4)) == 0x0100000cU)
+		return (TYPE_BINARY|TYPE_EXE_ARM64);
 
 	// BMP Files
 	if (buf[0] == 'B' && buf[1] == 'M') {

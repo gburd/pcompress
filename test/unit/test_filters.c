@@ -1,5 +1,5 @@
 /*
- * Unit tests for the LZP, DICT and E8E9 pre-filters: round trips, and that
+ * Unit tests for the LZP, DICT, E8E9 and BCJ pre-filters: round trips, and that
  * corrupt or truncated encoded data is rejected without writing past
  * the output buffer (run under ASan to catch overruns).
  */
@@ -13,6 +13,7 @@
 #include "lzp.h"
 #include "DictFilter.h"
 #include "filters/dispack/dis.hpp"
+#include "filters/bcj/bcj.h"
 #include "minunit.h"
 
 #define N	(256 * 1024)
@@ -135,6 +136,135 @@ MU_TEST(test_e8e9_roundtrip)
 	mu_assert(Inverse_E89(b, 4) == -1, "Inverse_E89 on 4 bytes");
 }
 
+/* A small LCG, so the BCJ inputs below are the same on every platform. */
+static uint32_t bcj_st;
+
+static uint32_t
+bcj_rnd(void)
+{
+	bcj_st = bcj_st * 1103515245u + 12345u;
+	return ((bcj_st >> 8) | (bcj_st << 24));
+}
+
+static void
+put32(unsigned char *b, size_t *n, uint32_t w)
+{
+	b[(*n)++] = w & 0xff;
+	b[(*n)++] = (w >> 8) & 0xff;
+	b[(*n)++] = (w >> 16) & 0xff;
+	b[(*n)++] = w >> 24;
+}
+
+/* 1024 words, a quarter BL and a quarter ADRP. */
+static size_t
+gen_arm64(unsigned char *b)
+{
+	size_t n = 0;
+	int i;
+
+	bcj_st = 5;
+	for (i = 0; i < 1024; i++) {
+		uint32_t w = bcj_rnd(), k = bcj_rnd() % 4;
+
+		if (k == 0)
+			w = 0x94000000u | (w & 0x03ffffffu);
+		else if (k == 1)
+			w = 0x90000000u | (w & 0x60ffffffu);
+		put32(b, &n, w);
+	}
+	return (n);
+}
+
+/* JAL ra, AUIPC+JALR pairs, 16-bit and random words, mixed. */
+static size_t
+gen_riscv(unsigned char *b)
+{
+	static const uint32_t regs[4] = { 1, 5, 6, 10 };
+	size_t n = 0;
+	int i;
+
+	bcj_st = 7;
+	for (i = 0; i < 1024; i++) {
+		uint32_t w = bcj_rnd(), k = bcj_rnd() % 5, rd = regs[bcj_rnd() % 4];
+
+		if (k == 0) {
+			w = 0xefu | (1u << 7) | (w & 0xfffff000u);
+		} else if (k == 1) {
+			put32(b, &n, 0x17u | (rd << 7) | (w & 0xfffff000u));
+			w = 0x67u | (rd << 15) | (1u << 7) | (bcj_rnd() & 0xfff00000u);
+		} else if (k == 2) {
+			b[n++] = w & 0xff;
+			b[n++] = (w >> 8) & 0xff;
+			continue;
+		}
+		put32(b, &n, w);
+	}
+	return (n);
+}
+
+static uint64_t
+fnv1a(const unsigned char *b, size_t n)
+{
+	uint64_t h = 0xcbf29ce484222325ULL;
+
+	while (n--)
+		h = (h ^ *b++) * 0x100000001b3ULL;
+	return (h);
+}
+
+/*
+ * The BCJ coders must match XZ Utils byte for byte, forever: archives
+ * hold their output. The expected hashes are of xz 5.8.1's own output
+ * for these inputs (xz --format=raw --arm64 or --riscv, then the raw
+ * LZMA2 layer decoded alone); the ARM64 one also matches xz 5.4.5.
+ */
+MU_TEST(test_bcj_known_answer)
+{
+	static unsigned char b[8192], orig[8192];
+	size_t n;
+
+	n = gen_arm64(b);
+	mu_assert(n == 4096 && fnv1a(b, n) == 0xed01bcedea48bfb5ULL, "ARM64 input");
+	memcpy(orig, b, n);
+	bcj_arm64_encode(b, n);
+	mu_assert(fnv1a(b, n) == 0xe9e6fa6cb0f20f18ULL, "ARM64 matches xz 5.8.1");
+	bcj_arm64_decode(b, n);
+	mu_assert_mem_eq(orig, b, n);
+
+	n = gen_riscv(b);
+	mu_assert(n == 4562 && fnv1a(b, n) == 0x4b6c8fe3201454beULL, "RISC-V input");
+	memcpy(orig, b, n);
+	bcj_riscv_encode(b, n);
+	mu_assert(fnv1a(b, n) == 0x2777b85d5404d727ULL, "RISC-V matches xz 5.8.1");
+	bcj_riscv_decode(b, n);
+	mu_assert_mem_eq(orig, b, n);
+}
+
+/*
+ * Any bytes decode without touching memory outside the buffer: odd
+ * lengths, tails shorter than an instruction, and empty input (run
+ * under ASan; the buffers are exact-size heap copies).
+ */
+MU_TEST(test_bcj_any_length)
+{
+	static unsigned char src[64];
+	size_t len, i;
+
+	for (i = 0; i < sizeof (src); i++)
+		src[i] = (i % 3 == 0) ? 0x17 : (unsigned char)(0x94 ^ i);
+	for (len = 0; len <= sizeof (src); len++) {
+		unsigned char *b = malloc(len > 0 ? len : 1);
+
+		mu_assert(b != NULL, "malloc");
+		memcpy(b, src, len);
+		bcj_arm64_decode(b, len);
+		bcj_riscv_decode(b, len);
+		bcj_arm64_encode(b, len);
+		bcj_riscv_encode(b, len);
+		free(b);
+	}
+}
+
 MU_TEST_SUITE(suite_filters)
 {
 	MU_RUN_TEST(test_lzp_roundtrip);
@@ -142,6 +272,8 @@ MU_TEST_SUITE(suite_filters)
 	MU_RUN_TEST(test_lzp_corrupt_never_overruns);
 	MU_RUN_TEST(test_dict_roundtrip_and_corrupt);
 	MU_RUN_TEST(test_e8e9_roundtrip);
+	MU_RUN_TEST(test_bcj_known_answer);
+	MU_RUN_TEST(test_bcj_any_length);
 }
 
 int

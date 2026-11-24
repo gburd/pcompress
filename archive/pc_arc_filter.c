@@ -41,6 +41,7 @@
 #include "pc_arc_filter.h"
 #include "pc_archive.h"
 #include "filters/reflate/reflate.h"
+#include "filters/bcj/bcj.h"
 
 struct scratch_buffer {
 	uchar_t *in_buff;
@@ -64,6 +65,7 @@ ssize_t wavpack_filter(struct filter_info *fi, void *filter_private);
 #endif
 
 ssize_t reflate_filter(struct filter_info *fi, void *filter_private);
+ssize_t bcj_filter(struct filter_info *fi, void *filter_private);
 
 size_t dispack_filter_encode(uchar_t *inData, size_t len, uchar_t **out_buf);
 size_t dispack_filter_decode(uchar_t *inData, size_t len, uchar_t **out_buf);
@@ -106,6 +108,18 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 		typetab[slot].filter_func = dispack_filter;
 		typetab[slot].filter_name = "Dispack";
 		typetab[slot].result_type = 0;
+
+		slot = TYPE_EXE_ARM64 >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_ARM64_NAME;
+		typetab[slot].result_type = -1;
+
+		slot = TYPE_EXE_RISCV >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_RISCV_NAME;
+		typetab[slot].result_type = -1;
 	}
 
 	/*
@@ -200,10 +214,12 @@ ensure_buffer(struct scratch_buffer *unused, uint64_t len)
 }
 
 /*
- * Copy current entry data from the archive being extracted into the given buffer.
+ * Copy current entry data from the archive being extracted into out_buf,
+ * which holds cap bytes. The block offsets come from the archive, so a
+ * block that would land past cap fails the copy (returns 0).
  */
 static ssize_t
-copy_archive_data(struct archive *ar, uchar_t *out_buf)
+copy_archive_data(struct archive *ar, uchar_t *out_buf, uint64_t cap)
 {
 	int64_t offset;
 	const void *buff;
@@ -216,6 +232,13 @@ copy_archive_data(struct archive *ar, uchar_t *out_buf)
 		if (r == ARCHIVE_EOF)
 			break;
 		if (r != ARCHIVE_OK)
+			return (0);
+		/*
+		 * Filtered members are written contiguously. A block anywhere
+		 * else (a hostile sparse map with overlapping blocks) would
+		 * leave part of the buffer unwritten while tot still adds up.
+		 */
+		if (offset < 0 || (uint64_t)offset != tot || size > cap - tot)
 			return (0);
 		memcpy(out_buf + offset, buff, size);
 		tot += size;
@@ -272,7 +295,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -392,7 +415,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -515,7 +538,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -633,7 +656,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -749,7 +772,7 @@ reflate_filter(struct filter_info *fi, void *filter_private)
 		log_msg(LOG_ERR, 1, "Out of memory.");
 		return (FILTER_RETURN_ERROR);
 	}
-	if (copy_archive_data(fi->source_arc, sdat->in_buff) != len) {
+	if (copy_archive_data(fi->source_arc, sdat->in_buff, len) != (ssize_t)len) {
 		log_msg(LOG_ERR, 0, "Failed to read archive data.");
 		return (FILTER_RETURN_ERROR);
 	}
@@ -764,6 +787,64 @@ reflate_filter(struct filter_info *fi, void *filter_private)
 		fi->fout->out = out;
 		fi->fout->out_size = len;
 		return (FILTER_RETURN_SOFT_ERROR);
+	}
+	fi->fout->output_type = FILTER_OUTPUT_MEM;
+	fi->fout->out = out;
+	fi->fout->out_size = len;
+	return (ARCHIVE_OK);
+}
+
+/*
+ * The ARM64 and RISC-V branch filter (filters/bcj/): the member is
+ * converted in place, so its size does not change and no header is
+ * needed. Only members of at most BCJ_FILE_SIZE_LIMIT bytes are
+ * filtered, one copy in memory each way. Every byte string decodes, so
+ * extraction cannot fail here beyond reading the member or allocating.
+ */
+ssize_t
+bcj_filter(struct filter_info *fi, void *filter_private)
+{
+	uint64_t len = archive_entry_size(fi->entry);
+	int arm64 = (*fi->type_ptr & PC_SUBTYPE_MASK) == TYPE_EXE_ARM64;
+	uchar_t *out, *mapbuf;
+
+	(void) filter_private;
+	if (fi->compressing && (len < BCJ_FILE_SIZE_MIN || len > BCJ_FILE_SIZE_LIMIT))
+		return (FILTER_RETURN_SKIP);
+	/* Extracting: no filtered member is larger; the size is untrusted. */
+	if (len > BCJ_FILE_SIZE_LIMIT) {
+		log_msg(LOG_ERR, 0, "BCJ member size %" PRIu64 " too large.", len);
+		return (FILTER_RETURN_ERROR);
+	}
+	if ((out = pc_malloc(len > 0 ? len : 1)) == NULL) {
+		log_msg(LOG_ERR, 0, "Out of memory.");
+		return (FILTER_RETURN_ERROR);
+	}
+
+	if (fi->compressing) {
+		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
+		if (mapbuf == MAP_FAILED) {
+			log_msg(LOG_ERR, 1, "Mmap failed in BCJ filter.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		memcpy(out, mapbuf, len);
+		munmap(mapbuf, len);
+		if (arm64)
+			bcj_arm64_encode(out, len);
+		else
+			bcj_riscv_encode(out, len);
+		fi->fout->hdr_valid = 0;
+	} else {
+		if (copy_archive_data(fi->source_arc, out, len) != (ssize_t)len) {
+			log_msg(LOG_ERR, 0, "Failed to read archive data.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		if (arm64)
+			bcj_arm64_decode(out, len);
+		else
+			bcj_riscv_decode(out, len);
 	}
 	fi->fout->output_type = FILTER_OUTPUT_MEM;
 	fi->fout->out = out;

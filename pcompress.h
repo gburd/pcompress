@@ -99,7 +99,7 @@ extern "C" {
 /**
  * The header flag bits of versions 10 to 12 (0x700 is the checksum id,
  * CKSUM_MASK). A file whose flags have any other bit is written as
- * version 13. Free bits: 0x8, 0x80, 0x2000, 0x4000, 0x8000.
+ * version 13. Free bits: 0x8, 0x80, 0x4000, 0x8000.
  */
 #define	FLAG_V12	(FLAG_DEDUP | FLAG_DEDUP_FIXED | FLAG_SINGLE_CHUNK | \
 	MASK_CRYPTO_ALG | 0x700 | FLAG_ARCHIVE | FLAG_META_STREAM)
@@ -108,8 +108,14 @@ extern "C" {
  * filter (-Z), whose records a reader without it would extract as is.
  */
 #define	FLAG_REFLATE	0x40
+/**
+ * Version 13 file flag: archive members may be stored through the ARM64
+ * or RISC-V branch filter (filters/bcj/, member tag "BCJ-ARM64" or
+ * "BCJ-RISCV"), which older readers would extract unconverted.
+ */
+#define	FLAG_BCJ_ARM	0x2000
 /** Every header flag bit this build understands. */
-#define	FLAG_KNOWN	(FLAG_V12 | FLAG_REFLATE)
+#define	FLAG_KNOWN	(FLAG_V12 | FLAG_REFLATE | FLAG_BCJ_ARM)
 #define	MAX_LEVEL	14      /**< Maximum compression level. */
 /**@}*/
 
@@ -405,6 +411,7 @@ struct pc_ctx {
 	int preprocess_mode;
 	int lzp_preprocess;
 	int exe_preprocess;
+	int bcj_used;		/* archive has BCJ members: FLAG_BCJ_ARM */
 	int encrypt_type;
 	int archive_mode;
 	int enable_archive_sort;

@@ -650,6 +650,10 @@ A NULL return means out of memory.
 A NULL
 .Fa a
 restores the C library's functions.
+On Linux the library asks for transparent huge pages
+.Pq Fn madvise "MADV_HUGEPAGE"
+on blocks of 4 MB or more from the C library's allocator, never on
+memory from the host's functions.
 Once the library has allocated anything (the first
 .Fn pc_new ,
 .Fn create_pc_context ,
