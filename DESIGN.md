@@ -659,6 +659,10 @@ written always extracts; on extraction a record that does not rebuild
 (or fails its checksum) is written as stored and listed in
 `filter_failures.txt`, as for the other filters.
 
+Each stream is inflated into a budget of `RF_MAX_OUT` (256 MB) per
+member, spent whether the stream is kept or not, so a zip of many
+deflate bombs costs one bomb's worth of work.
+
 **Finding streams.** By structure only: gzip members from the start of
 the file; zip local file entries walked from the start (method 8, sizes
 from the header or, with a data descriptor, from where inflate ends;

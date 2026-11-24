@@ -64,6 +64,7 @@ typedef struct {
 	rf_seg_t *seg;
 	size_t n, cap;
 	uint64_t rawtotal;
+	uint64_t budget;	/* bytes the member's streams may still inflate to */
 	rf_params_t last;	/* the set that matched last: tried first */
 } rf_list_t;
 
@@ -109,18 +110,21 @@ rf_sum(const unsigned char *p, size_t len)
 /*
  * Inflate the raw deflate stream at in (at most avail bytes) with the
  * system zlib. On success *raw is the output (pc_malloc()), *rlen its
- * length and *clen the bytes the stream took. Output is capped so a
- * deflate bomb costs at most RF_MAX_OUT.
+ * length and *clen the bytes the stream took. The output is capped at
+ * *budget, which is reduced by what was inflated, kept or not: so a
+ * member of many deflate bombs costs at most RF_MAX_OUT in all.
  */
 static int
 rf_inflate(const unsigned char *in, size_t avail, int wbits, unsigned char **raw,
-    uint64_t *rlen, uint64_t *clen)
+    uint64_t *rlen, uint64_t *clen, uint64_t *budget)
 {
-	size_t cap = avail * 4 + 4096, n;
+	size_t cap = avail * 4 + 4096, n, max = *budget;
 	unsigned char *buf = NULL, *nb;
 	z_stream zs;
 	int rv;
 
+	if (max == 0)
+		return (-1);
 	memset(&zs, 0, sizeof (zs));
 	if (inflateInit2(&zs, -wbits) != Z_OK)
 		return (-1);
@@ -128,8 +132,8 @@ rf_inflate(const unsigned char *in, size_t avail, int wbits, unsigned char **raw
 	zs.avail_in = avail > UINT32_MAX ? UINT32_MAX : (uInt)avail;
 	n = 0;
 	do {
-		if (cap > RF_MAX_OUT)
-			cap = RF_MAX_OUT;
+		if (cap > max)
+			cap = max;
 		if ((nb = pc_realloc(buf, cap)) == NULL)
 			break;
 		buf = nb;
@@ -139,14 +143,16 @@ rf_inflate(const unsigned char *in, size_t avail, int wbits, unsigned char **raw
 		n = cap - zs.avail_out;
 		if (rv == Z_STREAM_END) {
 			inflateEnd(&zs);
+			*budget -= n;
 			*raw = buf;
 			*rlen = n;
 			*clen = avail - zs.avail_in;
 			return (0);
 		}
 		cap *= 2;
-	} while (rv == Z_OK && n < RF_MAX_OUT);
+	} while (rv == Z_OK && n < max);
 	inflateEnd(&zs);
+	*budget -= n;
 	pc_mfree(buf);
 	return (-1);
 }
@@ -176,8 +182,10 @@ rf_find_params(const unsigned char *raw, uint64_t rlen, const unsigned char *com
 
 	p = l->last;
 	p.wbits = wbits;
-	if (p.level != 0 && rf_deflate_match(raw, rlen, comp, clen, &p))
+	if (p.level != 0 && rf_deflate_match(raw, rlen, comp, clen, &p)) {
+		l->last = p;	/* this stream's window, which rf_try() records */
 		return (0);
+	}
 	for (i = 0; i < sizeof (rf_sets) / sizeof (rf_sets[0]); i++) {
 		p.level = rf_sets[i][0];
 		p.memlevel = rf_sets[i][1];
@@ -208,13 +216,14 @@ rf_try(const unsigned char *in, size_t len, uint64_t off, uint64_t clen, int wbi
 
 	if (off >= len || (clen != 0 && clen > len - off))
 		return (0);
-	if (rf_inflate(in + off, clen ? clen : len - off, wbits, &raw, &rlen, &used) != 0)
+	if (rf_inflate(in + off, clen ? clen : len - off, wbits, &raw, &rlen, &used,
+	    &l->budget) != 0)
 		return (0);
 	if (clen != 0 && used != clen) {
 		pc_mfree(raw);
 		return (0);
 	}
-	if (used < RF_MIN_STREAM || l->n >= RF_MAX_SEG || l->rawtotal + rlen > RF_MAX_OUT ||
+	if (used < RF_MIN_STREAM || l->n >= RF_MAX_SEG ||
 	    rf_find_params(raw, rlen, in + off, used, wbits, l) != 0) {
 		pc_mfree(raw);
 		return (used);
@@ -406,6 +415,7 @@ rf_encode(const unsigned char *in, size_t len, unsigned char **out)
 	if (len < 64 || len > RF_MAX_IN)
 		return (0);
 	memset(&l, 0, sizeof (l));
+	l.budget = RF_MAX_OUT;
 	if (in[0] == 0x1f && in[1] == 0x8b)
 		rf_scan_gzip(in, len, &l);
 	else if (memcmp(in, "PK\003\004", 4) == 0)

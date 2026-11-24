@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <zlib.h>
 #include <utils.h>
 #include <pc_alloc.h>
@@ -260,6 +261,45 @@ MU_TEST(test_rf_zip)
 	pc_mfree(z);
 }
 
+/*
+ * A zip bomb: 800 entries of one deflate stream of 64 MB of zeros (65 KB
+ * each, 52 MB in all), at a setting the filter does not search. Every
+ * stream is inflated and none is kept; the member's inflate budget
+ * (RF_MAX_OUT) stops the work after four, where each entry used to cost
+ * a 64 MB inflate and the parameter search.
+ */
+MU_TEST(test_rf_zip_bomb)
+{
+	const size_t n = 64 << 20, ne = 800;
+	unsigned char *zero = pc_calloc(n, 1), *c = pc_malloc(1 << 20), *z, *p, *rec = NULL;
+	struct timespec t0, t1;
+	size_t cl, e;
+	double secs;
+
+	cl = pdeflate(zero, n, c, 1 << 20, 7, 5, 0);
+	mu_assert(cl > 0 && cl < 70000, "deflate");
+	p = z = pc_malloc(ne * (35 + cl));
+	for (e = 0; e < ne; e++) {
+		memset(p, 0, 30);
+		memcpy(p, "PK\003\004", 4);
+		le(p + 8, 8, 2);
+		le(p + 18, cl, 4);
+		le(p + 22, n, 4);
+		le(p + 26, 5, 2);
+		memcpy(p + 30, "z.bin", 5);
+		memcpy(p + 35, c, cl);
+		p += 35 + cl;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	mu_assert_uint64_eq(0, rf_encode(z, p - z, &rec));
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+	mu_assert(secs < 20, "zip bomb not bounded");
+	pc_mfree(zero);
+	pc_mfree(c);
+	pc_mfree(z);
+}
+
 static void
 png_chunk(unsigned char **p, const char *type, const unsigned char *d, size_t n)
 {
@@ -355,6 +395,7 @@ MU_TEST_SUITE(suite_reflate)
 	MU_RUN_TEST(test_rf_unmatched);
 	MU_RUN_TEST(test_rf_zip);
 	MU_RUN_TEST(test_rf_png);
+	MU_RUN_TEST(test_rf_zip_bomb);
 	MU_RUN_TEST(test_rf_hostile);
 	MU_RUN_TEST(test_rf_not_ours);
 }
