@@ -20,11 +20,13 @@ Security: decompressing with a password (-w, pc_set_password()) refuses
   a file that is not encrypted ("the file is not encrypted",
   PC_ERR_CRYPTO), where it decompressed it: anyone can substitute a
   plain file for an encrypted one, and nothing would authenticate it.
-Fix: a file with a 64-byte chunk checksum (-S SHA512, KECCAK512,
-  BLAKE512) and a chunk smaller than the checksum, such as a 1-byte
-  file, did not decompress ("Compressed length too big for chunk"):
-  the reader sized its buffers before it knew the checksum size. The
-  bound below made that slack matter; no release was affected.
+Fix: files with a 64-byte chunk checksum (-S SHA512, KECCAK512,
+  BLAKE512) whose chunks are small did not decompress: the reader
+  sized its buffers for a 32-byte checksum, before it read the file's.
+  In 4.4.0 and earlier this broke small -L (LZP) chunks ("Chunk length
+  exceeds buffer"), and with the read bound below any chunk under 32
+  bytes ("Compressed length too big for chunk"). Such files written
+  by 4.4.0 now read back.
 Fix: a data chunk whose stored length was at most 256 bytes over the
   chunk size, which the reader accepted, was read into a buffer with
   less slack than that (about 50 bytes for zstd at 64 KB chunks): a
