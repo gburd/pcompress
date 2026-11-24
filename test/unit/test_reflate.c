@@ -4,8 +4,11 @@
  * their records, in gzip, zip (with and without data descriptors) and
  * PNG containers; streams it cannot reproduce are left alone; and the
  * record decoder refuses every malformed record rather than misbuild.
- * Inputs are built with the system zlib, an independent deflate, so the
- * pinned copy is checked against it.
+ * Containers are built with the pinned deflate (rf_deflate()), whose
+ * output test_rf_deflate_kat pins against Python's zlib 1.3: the system
+ * zlib may be zlib-ng (Fedora), whose streams the filter rightly does
+ * not keep. test_rf_unmatched uses the system zlib for a stream the
+ * filter never keeps, whichever deflate made it.
  */
 
 #include <sys/types.h>
@@ -34,6 +37,23 @@ text(size_t n)
 		b[i] = (i % 61 == 60) ? '\n' : "etaoin shrdlu"[(x >> 16) % 13];
 	}
 	return (b);
+}
+
+/* Raw deflate of raw with the pinned deflate, window 15; returns the length. */
+static size_t
+pdeflate(const unsigned char *raw, size_t n, unsigned char *out, size_t cap, int level,
+    int memlevel, int strategy)
+{
+	rf_params_t p;
+	size_t olen;
+
+	p.level = level;
+	p.memlevel = memlevel;
+	p.wbits = 15;
+	p.strategy = strategy;
+	if (rf_deflate(raw, n, out, cap, &p, &olen) != 0)
+		return (0);
+	return (olen);
 }
 
 /* Raw deflate of raw with the system zlib; returns the length. */
@@ -75,7 +95,7 @@ make_gzip(const unsigned char *raw, size_t n, int level, int memlevel, size_t *l
 	size_t c;
 
 	memcpy(g, "\037\213\010\000\000\000\000\000\000\003", 10);
-	c = zdeflate(raw, n, g + 10, n + 1000, level, memlevel, 0);
+	c = pdeflate(raw, n, g + 10, n + 1000, level, memlevel, 0);
 	le(g + 10 + c, crc32(0, raw, (uInt)n), 4);
 	le(g + 14 + c, n, 4);
 	*len = 18 + c;
@@ -159,7 +179,7 @@ MU_TEST(test_rf_deflate_kat)
 	pc_mfree(out);
 }
 
-/* Each zlib setting the filter searches is kept; one it does not is not. */
+/* Each setting the filter searches is kept; one it does not is not. */
 MU_TEST(test_rf_gzip_levels)
 {
 	static const int sets[][2] = { { 6, 8 }, { 9, 8 }, { 1, 8 }, { 6, 9 }, { 9, 9 },
@@ -179,7 +199,10 @@ MU_TEST(test_rf_gzip_levels)
 	pc_mfree(raw);
 }
 
-/* A stream made with a parameter set not searched: left alone. */
+/*
+ * A stream from another deflater (the system zlib's Huffman-only
+ * strategy, which the filter does not search): left alone.
+ */
 MU_TEST(test_rf_unmatched)
 {
 	const size_t n = 200000;
@@ -218,7 +241,7 @@ MU_TEST(test_rf_zip)
 			c = 1000;
 			memcpy(p + 35, raw, c);
 		} else {
-			c = zdeflate(raw + e, n - e, p + 35, 2 * n, e == 0 ? 6 : 9, 8, 0);
+			c = pdeflate(raw + e, n - e, p + 35, 2 * n, e == 0 ? 6 : 9, 8, 0);
 		}
 		if (e != 2)
 			le(p + 18, c, 4);
@@ -258,9 +281,20 @@ MU_TEST(test_rf_png)
 	const size_t n = 120000;
 	unsigned char *raw = text(n), *z = pc_malloc(n + 1024), *png = pc_malloc(n + 2048);
 	unsigned char *p = png;
-	uLongf zl = n + 1024;
+	uLong ad;
+	size_t zl;
 
-	mu_assert(compress2(z, &zl, raw, n, 9) == Z_OK, "compress2");
+	/* A zlib stream at level 9 (RFC 1950): header, deflate, Adler-32. */
+	z[0] = 0x78;
+	z[1] = 0xda;
+	zl = pdeflate(raw, n, z + 2, n + 1000, 9, 8, 0);
+	mu_assert(zl > 0, "deflate");
+	ad = adler32(1, raw, (uInt)n);
+	z[2 + zl] = (unsigned char)(ad >> 24);
+	z[3 + zl] = (unsigned char)(ad >> 16);
+	z[4 + zl] = (unsigned char)(ad >> 8);
+	z[5 + zl] = (unsigned char)ad;
+	zl += 6;
 	memcpy(p, "\211PNG\r\n\032\n", 8);
 	p += 8;
 	png_chunk(&p, "IHDR", (const unsigned char *)"0123456789abc", 13);
