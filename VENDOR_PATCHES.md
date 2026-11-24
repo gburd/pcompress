@@ -16,6 +16,7 @@ dependencies managed as git submodules and any API changes required.
 | WavPack        | wavpack/                            | HEAD     | Submodule  | github.com/dbry/WavPack       |
 | BLAKE3         | crypto/blake3/                      | 1.8.7    | Vendored   | github.com/BLAKE3-team/BLAKE3 |
 | Monocypher     | crypto/monocypher/                  | 4.0.2    | Vendored   | monocypher.org                |
+| zlib (deflate) | filters/reflate/zlib/               | 1.3.1    | Vendored   | zlib.net; pinned, never update|
 
 ---
 
@@ -358,3 +359,23 @@ XChaCha20-Poly1305 extended nonce (the AEAD itself is OpenSSL's
 ChaCha20-Poly1305, 9 times as fast as Monocypher's portable C on x86-64),
 and Argon2id, which OpenSSL has only from 3.2. `test/unit/test_crypto.c`
 pins both to the published vectors (draft-irtf-cfrg-xchacha-03, RFC 9106).
+
+---
+
+## Vendored: zlib 1.3.1 deflate (filters/reflate/zlib/)
+
+**Source**: https://zlib.net/fossils/zlib-1.3.1.tar.gz (sha256
+9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23), files
+deflate.c, deflate.h, trees.c, trees.h, adler32.c, zutil.c, zutil.h,
+zlib.h, zconf.h and LICENSE, unchanged except zconf.h.
+
+**Why**: the reflate filter (-Z) must re-create deflate streams bit for
+bit at extraction, forever; zlib does not promise the same output across
+versions. Do not update this copy: archives depend on its exact output.
+
+**Patch**: zconf.h's Z_PREFIX block is always on, with the prefix pcz_
+instead of z_ (plus z_errmsg), so these symbols never collide with the
+system zlib that the rest of pcompress (and the filter's inflate) uses;
+the renames of the deflateInit/inflateInit macros are dropped, since
+rf_deflate.c calls deflateInit2_() directly. Built with -DZ_SOLO
+-DNO_GZIP.

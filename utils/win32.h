@@ -77,7 +77,10 @@ int pc_win32_mkstemp(char *tmpl);
 int pc_win32_mkdir(const char *path);
 #define	mkdir(p, m)	pc_win32_mkdir(p)
 
-/* The other calls pcompress makes on paths, on UTF-8 paths. */
+/*
+ * The other calls pcompress makes on paths, on UTF-8 paths. rename()
+ * replaces an existing target, as on POSIX.
+ */
 int pc_win32_unlink(const char *path);
 int pc_win32_rename(const char *from, const char *to);
 FILE *pc_win32_fopen(const char *path, const char *mode);

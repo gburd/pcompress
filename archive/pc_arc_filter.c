@@ -40,6 +40,7 @@
 #include <ctype.h>
 #include "pc_arc_filter.h"
 #include "pc_archive.h"
+#include "filters/reflate/reflate.h"
 
 struct scratch_buffer {
 	uchar_t *in_buff;
@@ -61,6 +62,8 @@ extern size_t wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_b
     ssize_t out_len);
 ssize_t wavpack_filter(struct filter_info *fi, void *filter_private);
 #endif
+
+ssize_t reflate_filter(struct filter_info *fi, void *filter_private);
 
 size_t dispack_filter_encode(uchar_t *inData, size_t len, uchar_t **out_buf);
 size_t dispack_filter_decode(uchar_t *inData, size_t len, uchar_t **out_buf);
@@ -103,6 +106,21 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 		typetab[slot].filter_func = dispack_filter;
 		typetab[slot].filter_name = "Dispack";
 		typetab[slot].result_type = 0;
+	}
+
+	/*
+	 * Gzip and zip containers (jar, odt, docx ...) and PNG, by extension
+	 * or magic bytes. The output is the containers' inflated data, of
+	 * any kind: left to the analyzer (TYPE_UNKNOWN), like a plain file.
+	 */
+	if (ff->enable_reflate) {
+		slot = TYPE_COMPRESSED_GZ >> 3;
+		typetab[slot].filter_private = sdat;
+		typetab[slot].filter_func = reflate_filter;
+		typetab[slot].filter_name = "Reflate";
+		typetab[slot].result_type = TYPE_UNKNOWN;
+		slot = TYPE_COMPRESSED_ZIP >> 3;
+		typetab[slot] = typetab[TYPE_COMPRESSED_GZ >> 3];
 	}
 
 #ifdef _ENABLE_WAVPACK_
@@ -682,3 +700,73 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 	return (ARCHIVE_OK);
 }
 
+
+/*
+ * Reflate (-Z, filters/reflate/). Compressing: the member's record, or
+ * SKIP when it has no deflate stream the pinned deflate reproduces (the
+ * member is then stored as it is). Extracting: the original bytes from
+ * the record; a record that does not rebuild is a soft error, and the
+ * stored bytes are written as they are, as the other filters do.
+ *
+ * The member's stored data is the 8-byte record length, then the
+ * record, zero-padded to the member's size in the archive (as packJPG).
+ * Zip members are matched by name, so the one zip slot also catches
+ * odt and the like; and the type table has a slot per type, so a member
+ * reaching this filter may be anything: rf_encode() checks the magic.
+ */
+ssize_t
+reflate_filter(struct filter_info *fi, void *filter_private)
+{
+	struct scratch_buffer *sdat = (struct scratch_buffer *)filter_private;
+	uchar_t *mapbuf, *out = NULL;
+	uint64_t len = archive_entry_size(fi->entry), in_size;
+
+	if (fi->compressing) {
+		size_t olen;
+
+		if (len < 64 || len > RF_MAX_IN)
+			return (FILTER_RETURN_SKIP);
+		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
+		if (mapbuf == MAP_FAILED) {
+			log_msg(LOG_ERR, 1, "Mmap failed in Reflate filter.");
+			return (FILTER_RETURN_ERROR);
+		}
+		olen = rf_encode(mapbuf, len, &out);
+		munmap(mapbuf, len);
+		if (olen == 0)
+			return (FILTER_RETURN_SKIP);
+		fi->fout->output_type = FILTER_OUTPUT_MEM;
+		fi->fout->out = out;
+		fi->fout->out_size = olen;
+		fi->fout->hdr.in_size = LE64(olen);
+		fi->fout->grown = 1;
+		return (ARCHIVE_OK);
+	}
+
+	/* The member's stored size is the record plus its length field. */
+	sdat = ensure_buffer(sdat, len);
+	if (sdat == NULL || sdat->in_buff == NULL) {
+		log_msg(LOG_ERR, 1, "Out of memory.");
+		return (FILTER_RETURN_ERROR);
+	}
+	if (copy_archive_data(fi->source_arc, sdat->in_buff) != len) {
+		log_msg(LOG_ERR, 0, "Failed to read archive data.");
+		return (FILTER_RETURN_ERROR);
+	}
+	in_size = len >= 8 ? LE64(U64_P(sdat->in_buff)) : 0;
+	if (in_size == 0 || in_size > len - 8 ||
+	    (len = rf_decode(sdat->in_buff + 8, in_size, &out)) == 0) {
+		len = archive_entry_size(fi->entry);
+		if ((out = pc_malloc(len)) == NULL)
+			return (FILTER_RETURN_ERROR);
+		memcpy(out, sdat->in_buff, len);
+		fi->fout->output_type = FILTER_OUTPUT_MEM;
+		fi->fout->out = out;
+		fi->fout->out_size = len;
+		return (FILTER_RETURN_SOFT_ERROR);
+	}
+	fi->fout->output_type = FILTER_OUTPUT_MEM;
+	fi->fout->out = out;
+	fi->fout->out_size = len;
+	return (ARCHIVE_OK);
+}

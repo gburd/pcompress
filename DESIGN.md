@@ -54,6 +54,21 @@ read them, and 4.4 refuses version 12 as newer than it knows. The reader accepts
 `VERSION_MAX`; older-version quirks are handled inline (look for
 `version <`). Bump it only when the format changes, never for a release.
 
+Version 13 (`VERSION_FLAGS`, since 4.5) is version 10, or version 12
+when encrypted, with one rule added: the reader refuses a header flag
+bit it does not know (`FLAG_KNOWN`). Readers of 10 to 12 ignore unknown
+bits, so a new bit alone could not stop them from misreading data that
+needs it. A feature that changes how data must be decoded therefore
+takes a free flag bit, and `write_file_header()` writes version 13 for
+any flags outside the version 12 set (`FLAG_V12`): 4.4 and older refuse the file as newer, and a later build
+without the feature refuses the bit, rather than either producing wrong
+output. A file that uses no such feature keeps version 10 or 12, so
+older releases still read it. Encrypted version 13 files follow every
+version 12 rule (Argon2id, the AEAD streams, the end record); an
+unencrypted one is a version 10 file in all but the number. Taken
+bits: 0x40 `FLAG_REFLATE` (archive members may be reflate records, see
+"Reflate"). Free: 0x8, 0x80, 0x2000, 0x4000, 0x8000.
+
 ## Pipeline
 
 ```
@@ -232,6 +247,100 @@ noise (25.2 to 26.3 s). Extracting one 20 KB member near the end takes
 0.08 s with the index and 3.0 s without. The index is opt-in because
 `-X` gives up global dedupe and the metadata stream (those make the
 default archive 419.5 MB), not because of its own size.
+
+## Repair data
+
+`-Y <percent>` appends Reed-Solomon parity to a finished `.pz` file, and
+`pcompress -y file.pz [out.pz]` rebuilds damaged blocks from it
+(`repair.c`). Decompression does not repair: a damaged file fails as
+before, and the error names `-y`. Repair needs no password and no parse
+of the chunks: it treats the file as bytes.
+
+```
+... chunk*  0[8]  [end record]  [seek index]  header  crc[n]  parity  crc[n]  header  "PCREPR01"
+```
+
+The region comes last and covers every byte before it (`plen` bytes:
+the header, the chunks, the end record and the seek index), cut into
+blocks of `B` bytes, the last one padded with zeros. Blocks are grouped
+into stripes of `k` data and `m` parity blocks, a systematic code over
+GF(2^8) (polynomial 0x11d) with the Cauchy generator 1 / (i XOR (m + r))
+for parity row i and data row r, so that any `k` of a stripe's `k + m`
+blocks rebuild it. Stripes are interleaved `G` to a group: data block
+`b` of group `g` is row `(b mod kG) / G` of stripe `b mod G`, so a run of
+`G * m` damaged blocks costs each stripe at most `m`. The writer uses
+4 KB blocks (doubled until there are at most 2^20 of them), `m` = 4 and
+`k` = 400 / percent where that fits the 255 points of the field, and
+`G` = 64, so at 10% a run of 1 MB of bad sectors is repaired anywhere in
+the file; scattered damage is repaired while no stripe has more than `m`
+bad blocks.
+
+`crc[n]` is the CRC-32 of each of the `n` data and parity blocks, in
+that order, little-endian; it is how repair finds damage. Both tables
+and both header copies are written; repair uses any good copy and
+rewrites all of them. A copy is good if it parses: its hash covers all
+80 bytes, the tag included, so repair (which has no key) never takes a
+copy with a damaged tag for the good one. Two copies that both parse
+and differ are refused, and nothing is changed. A block whose CRC
+matches neither table entry but which the parity rebuilds to its own
+bytes was good: its entries are what is damaged, and are rewritten.
+The header (80 bytes, little-endian):
+
+| offset | size | field |
+|--------|------|-------|
+| 0 | 8 | magic `PCRPAIR1` |
+| 8 | 4 | block size `B` (512 to 64 KB, a power of 2) |
+| 12 | 2 + 2 + 2 | `k`, `m`, `G` (m at most k, k + m at most 255, G at most 256) |
+| 18 | 2 | flags: 1 sealed (version 12) |
+| 20 | 4 | zero |
+| 24 | 8 | `plen` |
+| 32 | 8 | bytes between the file's trailer (the end marker, or the end record) and the region: the seek index, or 0 |
+| 40 | 8 | region length, header to magic |
+| 48 | 16 | BLAKE2b-128 of bytes 0 to 47, then bytes 64 to 79 |
+| 64 | 16 | flag 1: AEAD tag, else zero |
+
+The parser checks the hash, every limit, the region length against the
+geometry, and that the region ends at the end of the file, before
+anything else is read. The geometry bounds what a crafted header can
+make repair allocate: one stripe of blocks and the per-block tables.
+
+**Old readers.** Like the seek index, the region lies after the end
+marker, which 4.4 and earlier never read past, so they read an
+unencrypted `-Y` file (version 10) as any other (ci/xcompat.sh). A seek
+index reader (`-r`, `-R`) finds the index where the region starts.
+
+**Version 12.** After the end record a reader accepts the end of the
+file, a seek index, or a repair region (in that order, the region
+last), and refuses anything else. A region is accepted only if its
+header is sealed with the file's AEAD as stream 5, ordinal 0, with the
+header's first 48 bytes and the end record as associated data, and if
+the file after the end record is exactly the seek index length the
+header records plus the region. So a region cannot be moved from
+another file, bytes cannot be appended after one, and garbage that
+happens to end in `PCREPR01` is not skipped. The parity and tables are
+not authenticated, and need not be: what repair rebuilds is checked,
+block by block, against its CRC, and then by the chunks' own AEAD tags
+when the file is decompressed. A forged region can at worst make repair
+write bytes that then fail decompression, as the damage would have.
+
+**Cost**, on a c7i.4xlarge (Xeon 8488C), a 1.3 GB tar of `/usr/lib` at
+zstd -l6, 8 MB chunks, 16 threads, warm cache, three runs each:
+
+| -Y | size | time |
+|----|------|------|
+| none | 424.2 MB | 10.50 to 10.70 s |
+| 1 | 430.6 MB (+1.5%) | 10.97 to 11.06 s |
+| 5 | 447.1 MB (+5.4%) | 10.96 to 11.12 s |
+| 10 | 468.1 MB (+10.3%) | 10.97 to 11.03 s |
+| 25 | 532.2 MB (+25.5%) | 11.03 to 11.11 s |
+
+The size is the percent asked for plus the CRC tables (0.2%). The parity
+pass reads the finished file back once (from the page cache here) and
+costs 0.4 to 0.5 s whatever the percent: the multiply runs at memory
+speed with AVX2 (SSSE3 or NEON elsewhere), so the time goes to reading
+and CRC. `-y` on an intact file takes 0.24 to 0.29 s; repairing a run of
+256 KB took 2.9 to 3.8 s, most of it copying the file to a temporary
+name before it is fixed and renamed over the original.
 
 ## Library and contexts
 
@@ -522,8 +631,104 @@ pcompress carries a small patch to libarchive
 - two xattr helpers used to tag filtered entries.
 
 On extraction, filters are reversed per entry; if a filter cannot decode
-an entry the stored bytes are written unchanged and the path is listed in
-`filter_failures.txt`.
+an entry the stored bytes are written unchanged, the path is listed in
+`filter_failures.txt`, and the extraction fails (exit status 1,
+`PC_ERR_CORRUPT`) once every entry is written.
+
+## Reflate
+
+`-Z` (archive mode only, off by default) stores the deflate streams of
+zip containers (zip, jar, odt and the other OpenDocument types, docx,
+xlsx, apk), gzip files and PNG images inflated, so the compressor and
+dedupe see the data inside them, and re-deflates them on extraction
+(`filters/reflate/`). It is the precomp approach: a stream is kept only
+if deflating its inflated bytes again reproduces it bit for bit with
+one of a few zlib parameter sets. preflate (Apache-2.0), which records
+a deflater's decisions so any stream can be rebuilt, was the other
+option; it is C++, unmaintained since 2018, and much larger.
+
+**Reproducing deflate forever.** zlib's output for given parameters is
+not promised across versions, and zlib-ng's differs from zlib's, so
+re-deflating with the system library could fail years later. The filter
+deflates with its own copy of zlib 1.3.1 (`filters/reflate/zlib`: the
+deflate half only, portable C, every symbol prefixed `pcz_` so it never
+meets the system's), and inflates with the system zlib. That copy must
+never change; a newer deflate would go beside it, chosen by a new value
+in the record. Each record is decoded again at compress time and the
+member is stored as is unless the result is identical, so what is
+written always extracts; on extraction a record that does not rebuild
+(or fails its checksum) is written as stored, listed in
+`filter_failures.txt`, and fails the extraction, as for the other
+filters.
+
+Each stream is inflated into a budget of `RF_MAX_OUT` (256 MB) per
+member, spent whether the stream is kept or not, so a zip of many
+deflate bombs costs one bomb's worth of work.
+
+**Finding streams.** By structure only: gzip members from the start of
+the file; zip local file entries walked from the start (method 8, sizes
+from the header or, with a data descriptor, from where inflate ends;
+encrypted and zip64 entries are skipped or end the walk); a PNG's IDAT
+data when it is one chunk holding one zlib stream. A container is
+recognised by extension or, under `-Z`, by its magic bytes. Streams
+under 256 bytes are left alone. The parameter sets tried are
+(level, memLevel) = (6, 8), (9, 8), (1, 8), (6, 9), (9, 9), (1, 9),
+(4, 8), and (6, 8) with the filtered strategy, window from the
+container: every set that matched a stream of the measured corpus, the
+one that matched the member's previous stream first. A wrong set is
+rejected within its first output block (`rf_deflate_match()` compares
+as it deflates).
+
+**The record** (little-endian) replaces the member's data, behind the
+8-byte length the filters share:
+
+| field | size |
+|-------|------|
+| magic `PCRF`, version 1, zero | 4 + 1 + 1 |
+| stream count | 2 |
+| original length | 8 |
+| check of the original (FNV-1a over 8-byte words, xor length) | 8 |
+| per stream: offset in the original, deflated length, inflated length, level, memLevel, window bits, strategy | 28 |
+| the original with each stream replaced by its inflated bytes | rest |
+
+Members are at most 64 MB and records at most 256 MB. The record is
+usually larger than the member, so the entry is stored with the
+record's size and the member's size goes in a second private xattr
+(`_._pc_filter_size`), which extraction and listing use. The decoder
+treats the record as hostile: it checks the magic, version, counts,
+every offset against the original length and the ones before it,
+every parameter's range, and that the body is exactly the gaps plus
+the inflated lengths, before allocating; a failed re-deflate or
+checksum yields no output (`test_reflate`, `fuzz_reflate`).
+
+**Old readers.** An archive with `-Z` sets `FLAG_REFLATE` and is format
+version 13, so 4.4 refuses it as newer and a version 13 reader without
+the filter would refuse the flag. Without the flag, readers before
+this one would extract a record as the member's bytes.
+
+**What it buys.** Measured on a c7i.4xlarge (adapt2, 16 threads, best
+of three; every archive extracted and compared):
+
+| corpus | size | -l6 | -l6 -Z | -l9 | -l9 -Z | -l6 time, -Z time |
+|--------|------|-----|--------|-----|--------|-------|
+| 10 jars (Maven Central, Ubuntu) | 8.1 MB | 7.21 | 4.46 (-38%) | 7.21 | 4.37 (-39%) | 0.10 s, 1.08 s |
+| 10 versions of 3 jars (guava, commons-lang3, pgjdbc) | 17.2 MB | 10.29 | 6.08 (-41%) | 10.98 | 5.51 (-50%) | 0.10 s, 2.04 s |
+| 80 LibreOffice templates (ott, ots, otp) | 8.1 MB | 7.91 | 7.53 (-4.8%) | 7.91 | 7.52 (-5.0%) | 0.08 s, 0.65 s |
+| 123 docx/xlsx (Apache POI test data) | 24.2 MB | 18.42 | 17.16 (-6.9%) | 17.83 | 17.20 (-3.6%) | 0.25 s, 4.55 s |
+| 203 gzip files (`/usr/share/doc`, 3 tarballs) | 13.3 MB | 12.47 | 12.45 (-0.2%) | 12.44 | 12.35 (-0.8%) | 0.07 s, 2.77 s |
+| 23 PNG (`/usr/share`) | 0.5 MB | 0.480 | 0.465 (-3.2%) | 0.478 | 0.461 (-3.6%) | 0.02 s, 1.28 s |
+| `/usr/share/doc` | 39.2 MB | 14.93 | 14.06 (-5.9%) | 14.89 | 13.90 (-6.7%) | 0.80 s, 6.70 s |
+
+Sizes in MB. Extraction took 0.2 to 1.5 s in place of 0.01 to 0.8 s.
+Java tools and LibreOffice use zlib at its default, so nearly all their
+streams are kept (98 to 99% of their deflated bytes). Most Office files
+are written by other deflaters, and only 17 of the 123 had a stream
+kept. Debian's `.gz` files come from GNU gzip, whose deflate is not
+zlib's: none of the 124 made with `gzip -9` matched, while the 78 made
+with zlib did; release tarballs did not match either. The time goes to
+the search: on streams no set reproduces, `longest_match` of each
+failed attempt (87% of the profile), so it is slowest where it helps
+least.
 
 ## Encryption
 
@@ -546,6 +751,7 @@ Every authenticated piece of the file belongs to a *stream* and has an
 | metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
 | end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
 | seek index | 4 | 0 | the index body; AD: its length (u64 LE), `PCSEEK01`, the end record |
+| repair header | 5 | 0 | nothing; AD: the header's first 48 bytes, the end record (see "Repair data") |
 
 The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
 zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
@@ -588,8 +794,9 @@ The seek index (`-X`, see "Seek index") is sealed as stream 4, ordinal
 lists are inside the sealed body. After the end record the reader
 accepts the end of the file, or a region whose last 8 bytes are the
 index trailer magic `PCSEEK01` (it does not parse the region; the
-index reader authenticates it), and refuses anything else as corrupt,
-so data appended to a file is not silently ignored.
+index reader authenticates it), or a repair region sealed for this file
+(see "Repair data"), and refuses anything else as corrupt, so data
+appended to a file is not silently ignored.
 
 **Version 11 and earlier** (read only). scrypt derives the key, at
 N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and

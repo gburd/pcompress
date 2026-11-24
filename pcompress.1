@@ -27,7 +27,7 @@
 .Fl a
 .Op Fl c Ar algorithm
 .Op Fl l Ar level
-.Op Fl jnTvx
+.Op Fl jnTvxZ
 .Op Ar options
 .Ar path ...
 .Ar archive | Fl
@@ -40,6 +40,10 @@
 .Nm
 .Fl i
 .Ar archive
+.Nm
+.Fl y
+.Ar file
+.Op Ar target
 .Nm
 .Fl h | Fl V
 .Sh DESCRIPTION
@@ -111,6 +115,24 @@ is the directory to extract into, created if necessary; it defaults
 to the current directory.
 .It Fl i
 List the members of an archive without extracting them.
+.It Fl y
+Check a
+.Ar file
+written with
+.Fl Y
+against its repair data and rebuild the blocks that are damaged, in
+place
+.Pq through a temporary file renamed over it
+or into
+.Ar target ,
+which must not exist.
+It needs no password.
+It fails, changing nothing, if a file has no repair data or more
+damage than its parity can rebuild.
+A repaired file replacing
+.Ar file
+keeps its mode and, where the user may set it, its owner; ACLs and
+extended attributes are not kept.
 .It Fl h
 Print usage and exit.
 .It Fl V
@@ -185,6 +207,20 @@ Dispack filter for 32-bit x86 Windows executables
 PackJPG and PackPNM filters for JPEG and PNM images, and WavPack for
 WAV audio if built in
 .Pq archive mode only .
+.It Fl Z
+Store the deflate streams in zip containers (zip, jar, odt, docx, xlsx,
+apk and the like), gzip files and PNG images inflated, so they compress
+and deduplicate with the rest, and deflate them again bit for bit on
+extraction
+.Pq archive mode only .
+A stream is kept only if pcompress's own copy of zlib reproduces it
+exactly, which is the case for most Java and LibreOffice files and
+rarely for those made by Microsoft Office, 7-Zip or GNU gzip; others
+are stored as they are.
+Archives of jar files shrink by 40 to 50%, of office documents by 4 to
+7%; compressing takes several times longer, most where few streams
+match.
+Readers before 4.5 refuse the archive.
 .It Fl T
 Do not store archive metadata in a separate stream.
 .It Fl X
@@ -202,6 +238,21 @@ and cannot be combined with
 .Fl G :
 a globally deduplicated chunk can refer to any chunk before it.
 Readers before 4.5 read such a file as any other and ignore the index.
+.It Fl Y Ar percent
+Append repair data: Reed-Solomon parity of
+.Ar percent
+.Pq 1 to 50
+of the compressed file, from which
+.Fl y
+can rebuild damaged blocks.
+Blocks are 4 KB and interleaved, so at 10 a run of 1 MB of damage is
+repaired wherever it falls; scattered damage is repaired while no
+stripe of 4 KB blocks loses more than its share.
+The file grows by the percent given; compressing takes about 0.4 s
+longer per GB of output.
+The output must be a file, not standard output.
+Readers before 4.5 read such a file as any other and ignore the repair
+data.
 .It Fl r Ar offset : Ns Op Ar length
 With
 .Fl d ,
@@ -368,6 +419,12 @@ A corrupt or truncated input, a failed checksum or HMAC, and any write
 or extraction error are reported and make
 .Nm
 exit with status 1.
+So does an archive member that a filter
+.Pq Fl Z , No packJPG and the others
+cannot decode: it is written as stored, the extraction goes on, and
+its path is listed in
+.Pa filter_failures.txt
+in the target directory.
 .Sh EXAMPLES
 Compress a file with zstd at level 9 and restore it:
 .Bd -literal -offset indent
