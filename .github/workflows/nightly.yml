@@ -108,10 +108,13 @@ jobs:
   fuzz:
     # libFuzzer with ASan over the decoders that take untrusted bytes:
     # chunk objects and key files (fuzz_chunk), manifests (fuzz_manifest),
-    # raw codec input (fuzz_decompress), plus fuzz_compress and fuzz_crc.
+    # seek indexes, repair regions, reflate records, dedupe chunks, raw
+    # codec input (fuzz_decompress), plus fuzz_compress and fuzz_crc.
+    # Five minutes for each of the nine targets, about 45 minutes; ten
+    # minutes each outgrew the job's time limit.
     name: "Fuzz (libFuzzer + ASan)"
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -133,8 +136,8 @@ jobs:
         run: |
           ./config --disable-wavpack && make -j"$(nproc)"
           make fuzz-build
-      - name: Fuzz each target for 10 minutes
-        env: { FUZZ_SECONDS: "600", ASAN_OPTIONS: "detect_leaks=0" }
+      - name: Fuzz each target for 5 minutes
+        env: { FUZZ_SECONDS: "300", ASAN_OPTIONS: "detect_leaks=0" }
         run: cd test && sh run_all_tests.sh fuzz
       - name: Keep crashing inputs
         if: failure()
