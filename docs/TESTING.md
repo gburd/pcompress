@@ -258,6 +258,7 @@ fuzzer coverage.
 | `fuzz_crc`          | `test/fuzz/fuzz_crc.c`       | CRC functions with random input |
 | `fuzz_chunk`        | `test/fuzz/fuzz_chunk.c`     | `pc_chunk_open()` on objects with a valid forged tag and on raw input; `pc_keyfile_open()` |
 | `fuzz_manifest`     | `test/fuzz/fuzz_manifest.c`  | `pc_manifest_decode()`; anything accepted must re-encode to the same bytes |
+| `fuzz_dedupe`       | `test/fuzz/fuzz_dedupe.c`    | `dedupe_decompress()` on deduplicated chunks (`-D`, `-F`, `-G`) |
 
 `fuzz_chunk` and `fuzz_manifest` use only the public API and link the
 shared library. `make fuzz-build` also writes seed inputs for them to

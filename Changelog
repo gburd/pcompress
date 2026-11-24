@@ -17,6 +17,18 @@ New: -Z (archive mode) stores the deflate streams of zip containers
   of 0.8 s, and gzip files, which rarely match, 2.8 s for 13 MB. Off by
   default. Such archives are format version 13 with flag 0x40 (4.4
   refuses them).
+Fix: -E and -EE with -c none found similar blocks on some platforms
+  and not others: the minimum distance between a block and its delta
+  base was never set for "none" and read from uninitialized stack
+  memory. It is now 0 for "none" (and by default for any algorithm).
+Security: a corrupt or hostile deduplicated chunk (-D, -F, -G, -E)
+  could make the reader write past its block array and read or write
+  past its chunk buffers: the block count, a block's index entry, a
+  literal's length, a bsdiff patch's sizes and a global index's entry
+  count were used without being checked against the chunk (all found
+  with ASan by the new fuzz_dedupe target, which ran 10 minutes clean on
+  the fix). Every one is now checked before use, and the chunk is
+  refused as corrupt. Old files decode as before.
 Format: version 13, for features that change how data is decoded: the
   version 10 layout (version 12 when encrypted), and a reader refuses
   any header flag bit it does not know, where 10 to 12 ignored them.
@@ -33,6 +45,17 @@ New: repair data. -Y <percent> appends Reed-Solomon parity (GF(2^8),
   region; in version 12 files the region header is sealed as AEAD
   stream 5 with the end record, and the reader accepts it after the
   end record and any seek index, and nothing else.
+Fix: -E and -EE saved almost nothing. When a bsdiff patch had no extra
+  data, bsdiff() recorded the extra block as the whole space left in the
+  block, so most patches were exactly as long as the block they stood
+  for, and carried stale buffer bytes. Patches are now 2 to 3% of the
+  block (EC2 c7i, tars of Go toolchains and /usr/lib, an edited 32 MB
+  copy). 4.4 and earlier read the new patches.
+Change: -D and -G find block boundaries with the gear hash of the
+  library chunker instead of a Rabin hash: 18 to 30% less CPU at -D,
+  4 to 7% at -G (one thread, c7i), output within 0.5% at -D and 1.2%
+  at -G. No format change: 4.4 reads the new files, and the new
+  reader reads old ones.
 Change: a version 12 file with bytes after its end record is refused
   as corrupt, unless they end in the seek index trailer "PCSEEK01".
 Security: the version 12 file key is wiped when each job returns, not

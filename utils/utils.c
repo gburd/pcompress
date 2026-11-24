@@ -271,6 +271,7 @@ init_algo_props(algo_props_t *props)
 	props->c_max_threads = 1;
 	props->d_max_threads = 1;
 	props->delta2_span = 0;
+	props->deltac_min_distance = 0;
 }
 
 /*

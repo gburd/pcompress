@@ -408,9 +408,19 @@ the library, and does not change them while jobs run.
 
 ## Deduplication
 
-`rabin/rabin_dedup.c` cuts a chunk into content-defined blocks with a
-Rabin rolling hash (`-D`) or fixed blocks (`-F`), hashes each block with
-XXH32 and replaces repeats with references. With `-E`, blocks whose
+`rabin/rabin_dedup.c` cuts a chunk into content-defined blocks (`-D`) or
+fixed blocks (`-F`), hashes each block with XXH32 and replaces repeats
+with references. A content-defined block ends after the first byte past
+`min` (about 1 KB below the `-B` average) where the top 10 bits of the
+gear hash of `chunk.c` are zero, or at 128 KB (64 KB for `-G` below
+`-B3`). Before 4.5 this was a Rabin rolling hash; the decoder reads
+block lengths, so the boundaries are not part of the format and files
+from either version read in both. On a 16-vCPU c7i host the gear scan
+cut single-thread CPU time for `-D` by 18 to 30% (tar of five PostgreSQL
+trees, a tar of `/usr/lib`, two ext4 images) with output within 0.5%
+of Rabin's; `-G` output moved by under 1.2% either way, which is the
+noise of where boundaries fall. FastCDC's normalized chunking deduped
+11% worse at `-G` and is not used. With `-E`, blocks whose
 MinHash sketch matches an earlier block at least `deltac_min_distance`
 bytes away are delta-encoded with bsdiff.
 
@@ -422,7 +432,12 @@ temp file and indexes only a few MinHash values per segment.
 References in a decompressed stream point either into the chunk being
 rebuilt or backwards into the output file (which is `mmap`ed). Both are
 untrusted input: `dedupe_decompress` checks that a reference lies in data
-that already exists before copying it.
+that already exists before copying it.  The index is untrusted too: the
+block count must fit the context's block array, a duplicate or delta block
+must name an earlier literal block, and every literal, reference and
+bsdiff patch must lie inside the chunk's block data and the restored size
+before anything is copied.  `test/fuzz/fuzz_dedupe.c` fuzzes all three
+forms (`-D`, `-F`, `-G`).
 
 ## Hashes
 
@@ -460,8 +475,8 @@ safe with several contexts in one process and measured no faster than
 `chunk.c` gives backup tools three building blocks; none of them touches
 the `.pz` format.
 
-- **Chunker.** The Rabin rolling hash of the dedupe code (16-byte window,
-  the same polynomial tables), restarted at every boundary. A boundary
+- **Chunker.** A Rabin rolling hash (16-byte window, the polynomial
+  tables of `rabin/rabin_dedup.c`), restarted at every boundary. A boundary
   follows byte *i* once the chunk has `min` bytes and
   `(roll ^ ir[out]) & (avg - 1) == 0`, or at `max`. Since state resets at
   each boundary, the boundaries depend only on the data, never on how it

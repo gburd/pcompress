@@ -32,7 +32,7 @@
 /* --- Content-defined chunker ------------------------------------------- */
 
 /*
- * The rolling hash is dedupe_compress()'s: a 16-byte window, multiplier
+ * The Rabin rolling hash: a 16-byte window, multiplier
  * RAB_POLYNOMIAL_CONST, and the ir[]/out[] tables. A boundary is placed
  * after byte i when at least min bytes are in the chunk and
  * ((roll ^ ir[pushed_out]) & mask) == 0, or when the chunk reaches max.
@@ -64,8 +64,8 @@ struct pc_chunker {
 #define	PC_CHUNK_MAX_LIMIT	(64UL * 1024 * 1024)
 
 /* The gear table: splitmix64 seeded with "pcompres". */
-static void
-gear_table(uint64_t g[256])
+void
+pc_gear_table(uint64_t g[256])
 {
 	uint64_t s = 0x70636f6d70726573ULL, z;
 	int i;
@@ -117,7 +117,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 		/* Expected gap past min is about avg - min; keep the mask at avg. */
 		c->mask = a - 1;
 	} else {
-		gear_table(c->gear);
+		pc_gear_table(c->gear);
 		c->mask_s = ~(uint64_t)0 << (64 - (bits + 2));
 		c->mask_l = ~(uint64_t)0 << (64 - (bits - 2));
 	}

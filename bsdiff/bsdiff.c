@@ -443,8 +443,9 @@ bsdiff(u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t newsize,
 
 	/* Write extra data */
 	len = newsize - rv;
-	ulen = len;
+	ulen = 0;
 	if (eblen > 0) {
+		ulen = len;
 		if (zero_rle_encode(eb, eblen, BUFPTR(&pf), &ulen) == -1) {
 			rv = 0;
 			goto out;

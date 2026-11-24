@@ -72,24 +72,38 @@ valini32(u_char *buf)
 	return ntohl(I32_P(buf));
 }
 
+/*
+ * Size of the bsdiff patch at pbuf, of which at most avail bytes lie in
+ * the buffer: its header and the three blocks the header lists.  Returns
+ * 0 if the header does not fit, a length is negative, or the blocks run
+ * past avail (the patch is untrusted).
+ */
 bsize_t
-get_bsdiff_sz(u_char *pbuf) {
-	bsize_t newsize;
-	bsize_t lzctrllen, ctrllen, lzdatalen, datalen, lzextralen, extralen;
-	int hdrsz;
+get_bsdiff_sz(u_char *pbuf, uint64_t avail)
+{
+	uint64_t sz;
+	int i;
 
-	hdrsz = 4*7;
-
-	lzctrllen = valini32(pbuf);
-	ctrllen = valini32(pbuf+4);
-	lzdatalen = valini32(pbuf+4*2);
-	datalen = valini32(pbuf+4*3);
-	lzextralen = valini32(pbuf+4*4);
-	extralen = valini32(pbuf+4*5);
-	newsize = valini32(pbuf+4*6);
-	return (lzctrllen + lzdatalen + lzextralen + hdrsz);
+	if (avail < 4*7)
+		return (0);
+	for (i = 0; i < 7; i++) {
+		if (valini32(pbuf + 4*i) < 0)
+			return (0);
+	}
+	sz = 4*7 + (uint64_t)valini32(pbuf) + (uint64_t)valini32(pbuf + 4*2) +
+	    (uint64_t)valini32(pbuf + 4*4);
+	if (sz > avail || sz > INT32_MAX)
+		return (0);
+	return ((bsize_t)sz);
 }
 
+/*
+ * Apply the patch at pbuf to oldbuf, writing at most *_newsize bytes to
+ * newbuf; *_newsize returns the size written.  NB: get_bsdiff_sz() must
+ * have accepted the patch, so its blocks lie in the buffer.  Every
+ * length and control triple is still untrusted.  Returns 1 on success, 0
+ * for a corrupt patch.
+ */
 int
 bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t *_newsize)
 {
@@ -97,7 +111,7 @@ bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t *
 	bsize_t lzctrllen, ctrllen, lzdatalen, datalen, lzextralen, extralen;
 	u_char buf[8];
 	u_char *diffdata, *extradata, *ctrldata;
-	bsize_t oldpos,newpos;
+	int64_t oldpos, newpos;
 	bsize_t ctrl[3];
 	bsize_t lenread;
 	bsize_t i;
@@ -133,7 +147,14 @@ bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t *
 	extralen = valini32(pbuf+4*5);
 	newsize = valini32(pbuf+4*6);
 
-	if((ctrllen<0) || (lzdatalen<0) || (newsize<0) || (lzextralen<0)) {
+	/*
+	 * bsdiff() writes the whole patch, control block included, into a
+	 * buffer of the new size, and diff and extra data are each at most
+	 * that long: bounds that also cap what is allocated below.
+	 */
+	if (lzctrllen < 0 || ctrllen < 0 || lzdatalen < 0 || datalen < 0 ||
+	    lzextralen < 0 || extralen < 0 || newsize < 0 || ctrllen > newsize ||
+	    datalen > newsize || extralen > newsize) {
 		log_msg(LOG_ERR, 0, "1: Corrupt patch\n");
 		return (0);
 	}
@@ -144,8 +165,8 @@ bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t *
 	*_newsize = newsize;
 
 	/* Allocate buffers. */
-	diffdata = (u_char *)slab_alloc(NULL, datalen);
-	extradata = (u_char *)slab_alloc(NULL, extralen);
+	diffdata = (u_char *)slab_alloc(NULL, datalen + 1);	/* + 1: never malloc(0) */
+	extradata = (u_char *)slab_alloc(NULL, extralen + 1);
 	if (diffdata == NULL || extradata == NULL) {
 		log_msg(LOG_ERR, 0, "bspatch: Out of memory.\n");
 		if (diffdata) slab_free(NULL, diffdata);
@@ -213,6 +234,11 @@ bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t *
 			}
 			ctrl[i]=valini32(buf);
 		};
+		if (ctrl[0] < 0 || ctrl[1] < 0) {
+			log_msg(LOG_ERR, 0, "2: Corrupt diff data\n");
+			rv = 0;
+			goto out;
+		}
 
 		/* Sanity-check */
 		if(newpos+ctrl[0]>newsize) {
