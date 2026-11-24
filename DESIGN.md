@@ -281,14 +281,16 @@ and both header copies are written; repair uses any good copy and
 rewrites all of them. A copy is good if it parses: its hash covers all
 80 bytes, the tag included, so repair (which has no key) never takes a
 copy with a damaged tag for the good one. Two copies that both parse
-and differ are refused, and nothing is changed.
+and differ are refused, and nothing is changed. A block whose CRC
+matches neither table entry but which the parity rebuilds to its own
+bytes was good: its entries are what is damaged, and are rewritten.
 The header (80 bytes, little-endian):
 
 | offset | size | field |
 |--------|------|-------|
 | 0 | 8 | magic `PCRPAIR1` |
 | 8 | 4 | block size `B` (512 to 64 KB, a power of 2) |
-| 12 | 2 + 2 + 2 | `k`, `m`, `G` (k + m at most 255, G at most 256) |
+| 12 | 2 + 2 + 2 | `k`, `m`, `G` (m at most k, k + m at most 255, G at most 256) |
 | 18 | 2 | flags: 1 sealed (version 12) |
 | 20 | 4 | zero |
 | 24 | 8 | `plen` |

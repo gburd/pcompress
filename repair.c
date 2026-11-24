@@ -379,6 +379,10 @@ rp_stripe_fix(unsigned char **blk, unsigned char *ok, uint32_t k, uint32_t m, si
 /*
  * Fill in the derived sizes of h from plen, bsz, k, m and g, refusing
  * any value no writer uses or that would overflow. 0 or -1.
+ *
+ * The limits bound every product below: plen < 2^52 and bsz >= 512 make
+ * nblk < 2^43, and m <= k (every writer's parity is at most the data)
+ * makes npar < nblk + k * g, so npar * bsz < 2^60 and rlen fits.
  */
 static int
 rp_geometry(rp_hdr_t *h)
@@ -386,7 +390,7 @@ rp_geometry(rp_hdr_t *h)
 	uint64_t per;
 
 	if (h->bsz < RP_BLOCK_MIN || h->bsz > RP_BLOCK_MAX || (h->bsz & (h->bsz - 1)) != 0 ||
-	    h->k < 1 || h->m < 1 || h->k + h->m > RP_STRIPE_MAX ||
+	    h->k < 1 || h->m < 1 || h->m > h->k || h->k + h->m > RP_STRIPE_MAX ||
 	    h->g < 1 || h->g > RP_G_MAX ||
 	    (uint64_t)h->m * h->g * h->bsz > RP_GROUP_PARITY_MAX ||
 	    h->plen == 0 || h->plen > (1ULL << 52))
@@ -395,6 +399,8 @@ rp_geometry(rp_hdr_t *h)
 	per = (uint64_t)h->k * h->g;
 	h->ngroups = (h->nblk + per - 1) / per;
 	h->npar = h->ngroups * h->m * h->g;
+	if (h->npar > (1ULL << 60) / h->bsz)
+		return (-1);
 	h->rlen = 2 * RP_HDR_SZ + 8 + 2 * 4 * (h->nblk + h->npar) + h->npar * h->bsz;
 	return (0);
 }
@@ -833,9 +839,29 @@ rp_stripe_bad(const rp_job_t *j, uint64_t gi, uint32_t s, unsigned char *ok)
 }
 
 /*
- * Rebuild stripe (gi, s) in blk (k + m blocks of scratch) and write its
- * bad blocks back. A rebuilt block must match its CRC: a mismatch means
- * the table, not the block, is what is damaged beyond repair.
+ * A rebuilt block whose CRC matches neither table entry: if the block on
+ * disk is readable and equal to it, the block was good and both entries
+ * are what is damaged, so the CRC is taken from the data (and rewritten
+ * with the tables). Any other mismatch is damage beyond repair. 0 if the
+ * block is good on disk as it stands, -1 if not (logged). tmp: B bytes.
+ */
+static int
+rp_crc_from_data(rp_job_t *j, uint64_t idx, const unsigned char *blk, unsigned char *tmp)
+{
+	if (rp_read_blk(j, idx, tmp) != 0 || memcmp(tmp, blk, j->h.bsz) != 0) {
+		log_msg(LOG_ERR, 0, "Rebuilt block %" PRIu64 " does not match its "
+		    "checksum: the repair data is damaged too.", idx);
+		return (-1);
+	}
+	j->t1[idx] = j->t2[idx] = j->crc[idx];
+	j->have1[idx] = j->have2[idx] = 1;
+	return (0);
+}
+
+/*
+ * Rebuild stripe (gi, s) in blk (k + m blocks of scratch, and one more
+ * for rp_crc_from_data()) and write its bad blocks back. A rebuilt block
+ * must match its CRC, or the block it replaces.
  */
 static int
 rp_fix_one(rp_job_t *j, uint64_t gi, uint32_t s, unsigned char *mem)
@@ -862,9 +888,10 @@ rp_fix_one(rp_job_t *j, uint64_t gi, uint32_t s, unsigned char *mem)
 		idx = rp_stripe_idx(&j->h, gi, r, s);
 		j->crc[idx] = lzma_crc32(blk[r], j->h.bsz, 0);
 		if ((j->have1[idx] || j->have2[idx]) && !rp_crc_ok(j, idx, j->crc[idx])) {
-			log_msg(LOG_ERR, 0, "Rebuilt block %" PRIu64 " does not match its "
-			    "checksum: the repair data is damaged too.", idx);
-			return (-1);
+			if (rp_crc_from_data(j, idx, blk[r], mem + (size_t)n * j->h.bsz) != 0)
+				return (-1);
+			j->bad[idx] = 0;
+			continue;
 		}
 		off = rp_blk_off(&j->h, idx);
 		len = idx < j->h.nblk && off + j->h.bsz > j->h.plen ? j->h.plen - off : j->h.bsz;
@@ -903,7 +930,7 @@ rp_fix(rp_job_t *j, uint64_t *nstripes)
 		    "changed.", j->nbad, j->h.bsz, j->h.k + j->h.m, j->h.m);
 		return (-1);
 	}
-	if ((mem = pc_malloc((size_t)(j->h.k + j->h.m) * j->h.bsz)) == NULL)
+	if ((mem = pc_malloc((size_t)(j->h.k + j->h.m + 1) * j->h.bsz)) == NULL)
 		return (-1);
 	for (i = 0; i < j->ncrc; i++) {
 		if (!j->bad[i])
@@ -1135,8 +1162,12 @@ rp_make_copy(rp_job_t *j, const char *path, const char *out, char *tmp, size_t t
 	}
 	add_fname(tmp);
 	*fdp = fd;
-	if (fstat(j->fd, &sb) == 0)
+	/* Mode and, where allowed, owner: not ACLs or extended attributes. */
+	if (fstat(j->fd, &sb) == 0) {
+		if (fchown(fd, sb.st_uid, sb.st_gid) != 0 && errno != EPERM)
+			log_msg(LOG_WARN, 1, "Cannot keep the owner of %s: ", path);
 		(void) fchmod(fd, sb.st_mode & 07777);
+	}
 	if (rp_copy(j->fd, fd, fsize) != 0) {
 		log_msg(LOG_ERR, 1, "Cannot copy %s: ", path);
 		return (-1);
@@ -1167,6 +1198,29 @@ rp_fix_copy(rp_job_t *j, int fd)
 	log_msg(LOG_WARN, 0, "Repaired %" PRIu64 " damaged blocks of %u bytes in %" PRIu64
 	    " stripes.", before, j->h.bsz, nstripes);
 	return (0);
+}
+
+/*
+ * Make the rename of a repaired file over path durable: fsync() its
+ * directory. POSIX only (Windows has no directory handle to flush, and
+ * MoveFileEx() is as durable as NTFS makes it); a failure is ignored,
+ * since the file itself was synced and renamed.
+ */
+static void
+rp_sync_dir(const char *path)
+{
+#ifndef _WIN32
+	char dir[PATH_MAX];
+	int dfd;
+
+	snprintf(dir, sizeof (dir), "%s", path);
+	if ((dfd = open(dirname(dir), O_RDONLY, 0)) != -1) {
+		(void) fsync(dfd);
+		close(dfd);
+	}
+#else
+	(void) path;
+#endif
 }
 
 int
@@ -1206,6 +1260,8 @@ rp_repair(const char *path, const char *out)
 		log_msg(LOG_ERR, 1, "Cannot replace %s: ", path);
 		unlink(tmp);
 	} else {
+		if (out == NULL)
+			rp_sync_dir(path);
 		rv = 0;
 	}
 	rm_fname(tmp);

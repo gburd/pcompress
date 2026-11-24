@@ -129,6 +129,10 @@ which must not exist.
 It needs no password.
 It fails, changing nothing, if a file has no repair data or more
 damage than its parity can rebuild.
+A repaired file replacing
+.Ar file
+keeps its mode and, where the user may set it, its owner; ACLs and
+extended attributes are not kept.
 .It Fl h
 Print usage and exit.
 .It Fl V

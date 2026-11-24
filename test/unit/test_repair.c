@@ -282,6 +282,11 @@ MU_TEST(test_rp_hdr_hostile)
 	b[70] = 1;
 	rehash(b);
 	mu_assert_int_eq(-1, rp_hdr_parse(b, &h));
+	/* More parity than data per stripe: no writer makes it. */
+	memcpy(b, tr, sizeof (b));
+	b[14] = (unsigned char)(b[12] + 1);
+	rehash(b);
+	mu_assert_int_eq(-1, rp_hdr_parse(b, &h));
 	pc_mfree(orig);
 	unlink(tpath("h"));
 }
@@ -307,6 +312,44 @@ spill(const char *name, const unsigned char *b, uint64_t off, uint64_t n)
 	if (fd == -1 || lseek(fd, (off_t)off, SEEK_SET) == -1 || write(fd, b, n) != (ssize_t)n)
 		perror("spill");
 	close(fd);
+}
+
+/*
+ * A block's CRC damaged in both tables: the block is rebuilt, equals what
+ * is on disk, and so the tables, not the block, are rewritten.
+ */
+MU_TEST(test_rp_crc_both)
+{
+	const uint64_t n = 1000000;
+	unsigned char *orig = NULL, *whole, junk[4] = { 1, 2, 3, 4 };
+	uint64_t fsize = make_file("t", n, 10, &orig), tab1, tab2;
+	rp_hdr_t h;
+
+	mu_assert(fsize > n, "rp_write failed");
+	whole = slurp("t", fsize);
+	mu_assert_int_eq(0, rp_hdr_parse(whole + fsize - RP_TRAILER_SZ, &h));
+	tab1 = h.plen + RP_HDR_SZ;
+	tab2 = tab1 + 4 * (h.nblk + h.npar) + h.npar * h.bsz;
+	spill("t", junk, tab1 + 4 * 7, 4);
+	spill("t", junk, tab2 + 4 * 7, 4);
+	mu_assert_int_eq(0, rp_repair(tpath("t"), NULL));
+	pc_mfree(orig);
+	orig = slurp("t", fsize);
+	mu_assert(memcmp(orig, whole, fsize) == 0, "tables not rewritten");
+
+	/* The same, with the block damaged too: refused, unchanged. */
+	spill("t", junk, tab1 + 4 * 7, 4);
+	spill("t", junk, tab2 + 4 * 7, 4);
+	smash("t", 7 * h.bsz + 100, 10);
+	pc_mfree(orig);
+	orig = slurp("t", fsize);
+	mu_assert_int_eq(-1, rp_repair(tpath("t"), NULL));
+	pc_mfree(whole);
+	whole = slurp("t", fsize);
+	mu_assert(memcmp(orig, whole, fsize) == 0, "refused repair changed the file");
+	pc_mfree(orig);
+	pc_mfree(whole);
+	unlink(tpath("t"));
 }
 
 /*
@@ -344,6 +387,7 @@ MU_TEST_SUITE(suite_repair)
 	MU_RUN_TEST(test_rp_file);
 	MU_RUN_TEST(test_rp_small);
 	MU_RUN_TEST(test_rp_hdr_hostile);
+	MU_RUN_TEST(test_rp_crc_both);
 	MU_RUN_TEST(test_rp_hdr_disagree);
 }
 
