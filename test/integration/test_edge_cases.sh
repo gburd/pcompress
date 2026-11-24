@@ -82,6 +82,23 @@ for algo in lz4 zlib zstd; do
 	fi
 	rm -f datafiles/single.dat.pz datafiles/single.dat.out
 done
+# A 64-byte checksum: the chunk header is larger than with the default.
+# One byte, and 300 bytes of text through LZP (4.4.0 could not read either).
+head -c 300 "$(dirname "$0")/../../README.md" > datafiles/short.txt
+for c in "single.dat none -S SHA512" "single.dat none -S KECCAK512" \
+    "short.txt zstd -L -S SHA512" "short.txt zstd -L -S BLAKE512"; do
+	set -- $c
+	f=datafiles/$1; shift
+	rm -f "$f.pz" "$f.out"
+	if $PCOMPRESS -c "$@" -l 6 -s 64k "$f" 2>/dev/null &&
+	    $PCOMPRESS -d "$f.pz" "$f.out" 2>/dev/null && cmp -s "$f" "$f.out"; then
+		log_pass "$c: round-trip OK"
+	else
+		log_fail "$c: round trip"
+	fi
+	rm -f "$f.pz" "$f.out"
+done
+rm -f datafiles/short.txt
 
 # --- Invalid algorithm ---
 echo ""

@@ -856,6 +856,48 @@ MU_TEST(test_index)
 }
 
 /*
+ * The id filter never says "absent" for an id it was built from (with
+ * repeats in the input), says it for nearly all others, and handles the
+ * empty and one-id sets.
+ */
+MU_TEST(test_idfilter)
+{
+	size_t n = 200000, i, fp = 0;
+	uint8_t *ids = malloc(n * 32), id[32];
+	pc_idfilter_t *f;
+	uint64_t v;
+
+	mu_assert(ids != NULL, "malloc");
+	for (i = 0; i < n; i++) {
+		v = i % (n / 2);	/* every id twice */
+		pc_chunk_id(&v, sizeof (v), NULL, 0, ids + i * 32);
+	}
+	f = pc_idfilter_new(ids, n);
+	mu_assert(f != NULL, "build");
+	for (i = 0; i < n; i++)
+		mu_assert_int_eq(1, pc_idfilter_maybe(f, ids + i * 32));
+	for (i = 0; i < 100000; i++) {
+		v = n + i;
+		pc_chunk_id(&v, sizeof (v), NULL, 0, id);
+		fp += pc_idfilter_maybe(f, id);
+	}
+	mu_assert(fp < 1000, "false positives under 1%");
+	mu_assert(pc_idfilter_size(f) < n / 2 * 10 / 8 + 1024, "about 9 bits per id");
+	pc_idfilter_free(f);
+	f = pc_idfilter_new(ids, 1);
+	mu_assert(f != NULL && pc_idfilter_maybe(f, ids) == 1 &&
+	    pc_idfilter_maybe(f, ids + 32) == 0, "one id");
+	pc_idfilter_free(f);
+	f = pc_idfilter_new(NULL, 0);
+	mu_assert(f != NULL && pc_idfilter_maybe(f, ids) == 0, "empty set");
+	pc_idfilter_free(f);
+	mu_assert(pc_idfilter_new(NULL, 1) == NULL && pc_idfilter_maybe(NULL, ids) == -1,
+	    "bad arguments");
+	pc_idfilter_free(NULL);
+	free(ids);
+}
+
+/*
  * Paths given to the library are UTF-8 on every platform: an index whose
  * name has Japanese, Greek, and emoji characters opens, reopens with its
  * ids, and is found by that name.
@@ -1097,6 +1139,7 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_object_versions);
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_index_utf8_path);
+	MU_RUN_TEST(test_idfilter);
 	MU_RUN_TEST(test_keyfile);
 	MU_RUN_TEST(test_keyfile_scrypt);
 	MU_RUN_TEST(test_ids);

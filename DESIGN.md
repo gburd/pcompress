@@ -604,6 +604,14 @@ reading the record back, so memory is 11 to 21 bytes per id. The `.pz` global-de
 (`rabin/global/index.c`) is separate and still per file: making it
 persistent would make one `.pz` depend on others.
 
+**Id filter** (`pc_idfilter_*`): an in-memory Binary Fuse filter (Graf
+and Lemire 2022, FastFilter's `binaryfusefilter.h`, 8-bit fingerprints)
+over the first 8 bytes of each id, built once from a list of ids. It
+answers "certainly absent" or "maybe", with about 9 bits per id and 0.4%
+false positives; a "maybe" is confirmed in an exact table. It has no
+on-disk form: a caller rebuilds it from its own table at start-up (2 s
+for 10M ids).
+
 **Manifests** (`pc_manifest_*`): `PCMF2`, three zero bytes, a u64 entry
 count, then the entries sorted by path bytes, each: u16 path length and
 path, u8 type, u32 mode, uid, gid, i64 mtime, u32 nanoseconds, u64 size,

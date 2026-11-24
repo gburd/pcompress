@@ -25,6 +25,7 @@ PCOMPRESS_1 {
 		pc_set_progress;
 		pc_dict_train; pc_set_dict; pc_dict_id;
 		pc_chunk_id2;
+		pc_idfilter_new; pc_idfilter_maybe; pc_idfilter_size; pc_idfilter_free;
 	local:
 		*;
 };

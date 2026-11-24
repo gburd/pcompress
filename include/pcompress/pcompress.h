@@ -355,6 +355,25 @@ int pc_index_sync(pc_index_t *idx);
 int pc_index_close(pc_index_t *idx);
 
 /**
+ * A static filter over a set of chunk ids (a Binary Fuse filter, about
+ * 9 bits per id), to put in front of an exact id table so that looking
+ * up an id that is not stored, the common case, costs no table probe or
+ * read. pc_idfilter_new() builds it from n ids (32 bytes each, back to
+ * back, any order, repeats allowed; NULL on error or out of memory).
+ * pc_idfilter_maybe() returns 0 if the id is certainly not in the set,
+ * 1 if it may be (always 1 for an id the filter was built from, and for
+ * about 0.4% of others), -1 on bad arguments: confirm a 1 in the exact
+ * table. The filter cannot grow: rebuild it, and check ids added since
+ * the build some other way. pc_idfilter_size() is its memory in bytes.
+ * A built filter may be read from several threads at once.
+ */
+typedef struct pc_idfilter pc_idfilter_t;
+pc_idfilter_t *pc_idfilter_new(const void *ids, size_t n);
+int pc_idfilter_maybe(const pc_idfilter_t *f, const uint8_t id[32]);
+size_t pc_idfilter_size(const pc_idfilter_t *f);
+void pc_idfilter_free(pc_idfilter_t *f);
+
+/**
  * An object does not say which chunk it is: whoever controls the storage
  * can put a valid object under another one's name. After pc_chunk_open(),
  * check pc_chunk_id() of the result against the name it was fetched by

@@ -75,6 +75,18 @@ Change: -D and -G find block boundaries with the gear hash of the
   4 to 7% at -G (one thread, c7i), output within 0.5% at -D and 1.2%
   at -G. No format change: 4.4 reads the new files, and the new
   reader reads old ones.
+Test: ci/difffuzz.sh, a seeded differential fuzzer: files from this
+  build and from the previous release must read back with the other,
+  over random inputs and option sets, and the chunker, ids, manifest
+  and index formats must match an independent Python model
+  (test/tools/xver_model.py). Nightly runs 300 seeds against 4.4.0.
+Library: pc_idfilter_new(), pc_idfilter_maybe(), pc_idfilter_size()
+  and pc_idfilter_free(), a static Binary Fuse filter over chunk ids
+  (9 bits per id, 0.4% false positives), to put in front of an exact
+  id table. With 10M ids on a Xeon 8488C, looking up absent ids ran at
+  59M/s through the filter and 10M/s through pc_index_has(). A filter
+  plus a sorted id file and a sparse fence (docs/BACKUP.md) took 1.2
+  bytes of memory per id, where pc_index takes 13.4. No format.
 Change: a version 12 file with bytes after its end record is refused
   as corrupt, unless they end in the seek index trailer "PCSEEK01".
 Security: the version 12 file key is wiped when each job returns, not
@@ -89,6 +101,13 @@ Security: decompressing with a password (-w, pc_set_password()) refuses
   a file that is not encrypted ("the file is not encrypted",
   PC_ERR_CRYPTO), where it decompressed it: anyone can substitute a
   plain file for an encrypted one, and nothing would authenticate it.
+Fix: files with a 64-byte chunk checksum (-S SHA512, KECCAK512,
+  BLAKE512) whose chunks are small did not decompress: the reader
+  sized its buffers for a 32-byte checksum, before it read the file's.
+  In 4.4.0 and earlier this broke small -L (LZP) chunks ("Chunk length
+  exceeds buffer"), and with the read bound below any chunk under 32
+  bytes ("Compressed length too big for chunk"). Such files written
+  by 4.4.0 now read back.
 Fix: a data chunk whose stored length was at most 256 bytes over the
   chunk size, which the reader accepted, was read into a buffer with
   less slack than that (about 50 bytes for zstd at 64 KB chunks): a

@@ -48,6 +48,34 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}
 
+  difffuzz:
+    # ci/difffuzz.sh: this build against the 4.4.0 release, both ways,
+    # and the chunk/manifest/index formats against the Python model.
+    name: "Cross-version differential fuzz (vs 4.4.0)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential libomp-dev libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config python3
+      - name: Build this tree
+        run: ./config --disable-wavpack && make -j"$(nproc)"
+      - name: Build 4.4.0 from its release tarball
+        run: |
+          curl -fsSLo /tmp/old.tar.gz \
+            https://github.com/gburd/pcompress/releases/download/v4.4.0/pcompress-4.4.0.tar.gz
+          echo "36d27e621aa2be5dd7cb13b12cdf6c4b840c09f0f841ca5afc1d5c00da90853d  /tmp/old.tar.gz" |
+            sha256sum -c
+          mkdir -p /tmp/old && tar -C /tmp/old -xzf /tmp/old.tar.gz
+          cd /tmp/old/pcompress-4.4.0 && ./config --disable-wavpack && make -j"$(nproc)"
+      - name: 300 seeds
+        run: sh ci/difffuzz.sh . /tmp/old/pcompress-4.4.0 300
+
   coverage:
     # Line and branch coverage of pcompress's own code (make coverage).
     name: "Coverage (gcov)"

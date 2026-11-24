@@ -18,6 +18,7 @@ dependencies managed as git submodules and any API changes required.
 | Monocypher     | crypto/monocypher/                  | 4.0.2    | Vendored   | monocypher.org                |
 | zlib (deflate) | filters/reflate/zlib/               | 1.3.1    | Vendored   | zlib.net; pinned, never update|
 | XZ Utils BCJ   | filters/bcj/                        | 5.8.1    | Vendored   | tukaani.org/xz (ARM64, RISC-V)|
+| Binary Fuse    | utils/binaryfusefilter.h            | f6f09de  | Vendored   | FastFilter/xor_singleheader|
 
 ---
 
@@ -403,3 +404,19 @@ Archives hold the coders' output, so it must never change. To update,
 replace the coder bodies from the new release only if they still produce
 the same bytes: `test_filters` pins both against xz 5.8.1's own output.
 
+---
+
+## Vendored: Binary Fuse filter (utils/binaryfusefilter.h)
+
+**Upstream**: https://github.com/FastFilter/xor_singleheader,
+`include/binaryfusefilter.h` at commit f6f09ded055001a673f5570041607753c75b3d36
+(after tag v2.2.1; file sha256
+3ea8d9ac122dec9b55de0bad7516806ab744e6060130cae5fb1dda29ced62667).
+**License**: Apache-2.0 (`utils/LICENSE.binaryfusefilter`).
+**Modifications**: none. `idfilter.c` includes it with `malloc`,
+`calloc` and `free` defined to the library allocator, and sorts and
+deduplicates the keys itself before populating (upstream's fallback
+duplicate removal compares keys by a truncated difference).
+
+To update: copy the file from the new commit, update the hash here, and
+run `test_chunk` (`test_idfilter`).
