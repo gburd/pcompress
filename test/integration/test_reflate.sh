@@ -120,6 +120,45 @@ else
 	log_fail "-Z accepted without -a"
 fi
 
+# A record that does not rebuild: the member is written as stored, listed
+# in filter_failures.txt, and extraction exits non-zero. The archive is
+# made by hand (as test/tools/craft_hostile_archive.py does): a PAX
+# member tagged for the reflate filter whose record is not one,
+# compressed with -c none as a file, then flagged as an archive.
+rm -f "$T/n.pz"
+find "$T/x" -depth -delete 2>/dev/null
+mkdir -p "$T/x"
+if python3 - "$PCOMPRESS" "$T/n" <<'PYEOF'
+import base64, io, os, struct, subprocess, sys, tarfile, zlib
+pc, out = sys.argv[1], sys.argv[2]
+data = struct.pack("<Q", 40) + b"PCRF\x01\x00" + b"\x07" * 90
+buf = io.BytesIO()
+with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as t:
+    ti = tarfile.TarInfo("bad.gz")
+    ti.size = len(data)
+    ti.mode = 0o644
+    ti.pax_headers = {"LIBARCHIVE.xattr._._pc_filter_xattr":
+                      base64.b64encode(b"Reflate").decode()}
+    t.addfile(ti, io.BytesIO(data))
+open(out, "wb").write(buf.getvalue())
+subprocess.run([pc, "-c", "none", "-l1", out], check=True, stderr=subprocess.DEVNULL)
+d = bytearray(open(out + ".pz", "rb").read())
+d[10:12] = struct.pack(">H", struct.unpack(">H", d[10:12])[0] | 2048)
+d[24:28] = struct.pack(">I", zlib.crc32(bytes(d[0:24])))
+open(out + ".pz", "wb").write(d)
+PYEOF
+then
+	if ! $PCOMPRESS -d "$T/n.pz" "$T/x" > "$T/err" 2>&1 &&
+	    grep -q "1 pathnames failed filter decoding" "$T/err" &&
+	    [ -f "$T/x/filter_failures.txt" ]; then
+		log_pass "a record that does not rebuild fails the extraction"
+	else
+		log_fail "a record that does not rebuild: $(tail -n 2 "$T/err")"
+	fi
+else
+	log_fail "making the damaged record"
+fi
+
 echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed, $SKIP skipped"

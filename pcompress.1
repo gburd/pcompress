@@ -419,6 +419,12 @@ A corrupt or truncated input, a failed checksum or HMAC, and any write
 or extraction error are reported and make
 .Nm
 exit with status 1.
+So does an archive member that a filter
+.Pq Fl Z , No packJPG and the others
+cannot decode: it is written as stored, the extraction goes on, and
+its path is listed in
+.Pa filter_failures.txt
+in the target directory.
 .Sh EXAMPLES
 Compress a file with zstd at level 9 and restore it:
 .Bd -literal -offset indent

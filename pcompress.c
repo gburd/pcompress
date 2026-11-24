@@ -2541,10 +2541,14 @@ dec_free_workers(pc_ctx_t *pctx, struct cmp_data **dary, uint32_t nprocs)
 /*
  * Archive mode teardown: end and join the extractor, free the metadata
  * context and the listing buffer, remove the global-dedupe temp file.
+ * Returns err, or 1 if the extractor wrote a member that a filter could
+ * not decode (its stored bytes, not the original's).
  */
-static void
+static int
 dec_archive_done(pc_ctx_t *pctx, int err)
 {
+	int extracted = pctx->archive_thread_started && !pctx->list_mode;
+
 	if (pctx->archive_thread_started) {
 		/*
 		 * On error the extractor may be blocked waiting for data
@@ -2578,6 +2582,9 @@ dec_archive_done(pc_ctx_t *pctx, int err)
 	}
 	Sem_Destroy(&(pctx->read_sem));
 	Sem_Destroy(&(pctx->write_sem));
+	if (extracted && pctx->errored_count > 0)
+		err = 1;
+	return (err);
 }
 
 /*
@@ -2873,7 +2880,7 @@ uncomp_done:
 	if ((err || pctx->cancelled) && own_uncompfd)
 		unlink(to_filename);
 	if (pctx->archive_mode)
-		dec_archive_done(pctx, err);
+		err = dec_archive_done(pctx, err);
 	/* The metadata thread reads compfd2 until meta_ctx_done() above. */
 	if (compfd2 != -1) close(compfd2);
 

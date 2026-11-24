@@ -631,8 +631,9 @@ pcompress carries a small patch to libarchive
 - two xattr helpers used to tag filtered entries.
 
 On extraction, filters are reversed per entry; if a filter cannot decode
-an entry the stored bytes are written unchanged and the path is listed in
-`filter_failures.txt`.
+an entry the stored bytes are written unchanged, the path is listed in
+`filter_failures.txt`, and the extraction fails (exit status 1,
+`PC_ERR_CORRUPT`) once every entry is written.
 
 ## Reflate
 
@@ -656,8 +657,9 @@ never change; a newer deflate would go beside it, chosen by a new value
 in the record. Each record is decoded again at compress time and the
 member is stored as is unless the result is identical, so what is
 written always extracts; on extraction a record that does not rebuild
-(or fails its checksum) is written as stored and listed in
-`filter_failures.txt`, as for the other filters.
+(or fails its checksum) is written as stored, listed in
+`filter_failures.txt`, and fails the extraction, as for the other
+filters.
 
 Each stream is inflated into a budget of `RF_MAX_OUT` (256 MB) per
 member, spent whether the stream is kept or not, so a zip of many

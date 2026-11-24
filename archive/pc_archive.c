@@ -1946,6 +1946,7 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	 * Read archive entries and extract to disk.
 	 */
 	pctx->arc_eof = 0;
+	pctx->errored_count = 0;
 	while ((rv = archive_read_next_header(arc, &entry)) != ARCHIVE_EOF) {
 #ifndef	__APPLE__
 		const char *xt_name, *xt_value;
@@ -2020,11 +2021,14 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	}
 
 	if (!pctx->list_mode) {
+		/* Those members hold their stored bytes, not the originals: a failure. */
 		if (pctx->errored_count > 0) {
-			log_msg(LOG_WARN, 0, "WARN: %d pathnames failed filter decoding.");
+			log_error_code(PC_ERR_CORRUPT);
+			log_msg(LOG_ERR, 0, "%u pathnames failed filter decoding and were "
+			    "written as stored.", pctx->errored_count);
 			if (pctx->err_paths_fd) {
 				fclose(pctx->err_paths_fd);
-				log_msg(LOG_WARN, 0, "Please see file filter_failures.txt.");
+				log_msg(LOG_ERR, 0, "Please see file filter_failures.txt.");
 			}
 		} else {
 			if (pctx->err_paths_fd) {
