@@ -24,10 +24,19 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+# Every build below runs git clean -fdx: refuse a tree that holds anything
+# git would delete, so a checkout with work in it is never wiped.
+if [ -n "$(git status --porcelain --ignored)" ] ||
+    [ -n "$(git submodule foreach -q 'git status --porcelain --ignored')" ]; then
+	echo "pgo-build: the tree has untracked, ignored or modified files, which" >&2
+	echo "it would delete; run it in a fresh clone or git worktree." >&2
+	exit 1
+fi
 CC=${CC:-gcc}
 MAKE=${MAKE:-make}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}
 work=$(mktemp -d "${TMPDIR:-/tmp}/pcompress-pgo.XXXXXX")
+trap 'find "$work" -depth -delete 2>/dev/null' EXIT
 prof=$work/profile
 train=$work/train
 case "$CC" in

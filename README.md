@@ -88,8 +88,9 @@ library directory; then `make install LIBDIR=...`), `--enable-lto`,
 `--disable-zstd`, `--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and
 `LDFLAGS` from the environment are honoured; Clang is used with
 `CC=clang CXX=clang++`. `sh ci/pgo-build.sh` makes a profile-guided
-build (it measured within a few percent of a plain one, so releases
-do not use it). `make static` links one static binary
+build in a clean clone or worktree (it refuses a tree with untracked
+files, since it runs `git clean -fdx`; it measured within a few percent
+of a plain build, so releases do not use it). `make static` links one static binary
 (`buildtmp/pcompress-static`; fully static with musl). Release packages
 (RPM, Debian, static binaries) and how to verify a download are in
 `packaging/README.md`.
