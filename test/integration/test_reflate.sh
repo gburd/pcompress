@@ -37,32 +37,62 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 0
 fi
 
-# Containers built with Python's zlib (the system zlib): a zip with a
-# docx-like name, a jar, two gzip files at levels 6 and 9, a PNG, a gzip
-# made with a strategy -Z does not search (stored as is), a truncated
-# zip, and plain text.
+# Containers whose deflate streams come from the pinned deflate
+# (buildtmp/rf_pdeflate), not the system zlib: on Fedora and Debian
+# riscv64 that is zlib-ng, whose streams -Z cannot reproduce. A zip with
+# a docx-like name, a jar, two gzip files at levels 6 and 9, a PNG, a
+# gzip made with a strategy -Z does not search (Python's zlib, Huffman
+# only: stored as is), a truncated zip, and plain text.
+PDEFLATE="$(dirname "$PCOMPRESS")/buildtmp/rf_pdeflate"
+case "$(uname -s)" in MINGW*) PDEFLATE="$PDEFLATE.exe" ;; esac
+if [ ! -x "$PDEFLATE" ]; then
+	echo "  SKIP: $PDEFLATE not built (make buildtmp/rf_pdeflate)"
+	exit 0
+fi
 mkdir -p "$T/in/sub"
-python3 - "$T/in" <<'PYEOF'
-import os, struct, sys, zipfile, zlib, gzip, random
-d = sys.argv[1]
+python3 - "$T/in" "$PDEFLATE" <<'PYEOF'
+import os, struct, subprocess, sys, zlib, random
+d, pdeflate = sys.argv[1], sys.argv[2]
 random.seed(7)
 words = [bytes(random.choice(b"etaoinshrdlu") for _ in range(random.randint(2, 9)))
          for _ in range(400)]
 def text(n):
     return b" ".join(random.choice(words) for _ in range(n))
+def deflate(data, level):
+    # Raw deflate, window 15, memLevel 8, default strategy: zlib's defaults.
+    return subprocess.run([pdeflate, str(level), "8", "15", "0"], input=data,
+                          stdout=subprocess.PIPE, check=True).stdout
+def zipfile_bytes(members):
+    # members: (name, data, deflated?). Local headers, then the central
+    # directory, as zipfile writes them (no data descriptors).
+    out, cd = b"", b""
+    for name, data, defl in members:
+        body = deflate(data, 6) if defl else data
+        crc, method = zlib.crc32(data), 8 if defl else 0
+        fields = struct.pack("<HHHHHIIIHH", 20, 0, method, 0, 0x21, crc,
+                             len(body), len(data), len(name), 0)
+        cd += (b"PK\1\2" + struct.pack("<H", 20) + fields + struct.pack("<HHHII", 0, 0, 0, 0,
+               len(out)) + name)
+        out += b"PK\3\4" + fields + name + body
+    end = struct.pack("<IHHHHIIH", 0x06054b50, 0, 0, len(members), len(members),
+                      len(cd), len(out), 0)
+    return out + cd + end
 for name in ("report.docx", "lib.jar"):
-    with zipfile.ZipFile(os.path.join(d, name), "w", zipfile.ZIP_DEFLATED) as z:
-        for i in range(6):
-            z.writestr("part%d.xml" % i, text(4000 + 3000 * i))
-        z.writestr("stored.bin", text(500), compress_type=zipfile.ZIP_STORED)
+    m = [(b"part%d.xml" % i, text(4000 + 3000 * i), True) for i in range(6)]
+    m.append((b"stored.bin", text(500), False))
+    open(os.path.join(d, name), "wb").write(zipfile_bytes(m))
 for lvl in (6, 9):
-    with open(os.path.join(d, "sub", "t%d.gz" % lvl), "wb") as f:
-        f.write(gzip.compress(text(60000), compresslevel=lvl, mtime=0))
+    body = text(60000)
+    xfl = 2 if lvl == 9 else 0
+    open(os.path.join(d, "sub", "t%d.gz" % lvl), "wb").write(
+        b"\x1f\x8b\x08\0\0\0\0\0" + bytes([xfl, 255]) + deflate(body, lvl)
+        + struct.pack("<II", zlib.crc32(body), len(body)))
 raw = b"".join(b"\0" + bytes((x * y) & 255 for x in range(300)) for y in range(200))
 def chunk(t, b):
     return struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b))
+idat = b"\x78\x9c" + deflate(raw, 6) + struct.pack(">I", zlib.adler32(raw))
 png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 300, 200, 8, 0, 0, 0, 0))
-       + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+       + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 open(os.path.join(d, "img.png"), "wb").write(png)
 c = zlib.compressobj(6, zlib.DEFLATED, -15, 8, zlib.Z_HUFFMAN_ONLY)
 body = text(20000)
@@ -109,9 +139,12 @@ echo "--- Format ---"
 rm -f "$T/a.pz" "$T/p.pz"
 $PCOMPRESS -a -l6 -Z "$T/in" "$T/a" >/dev/null 2>&1
 $PCOMPRESS -a -l6 "$T/in" "$T/p" >/dev/null 2>&1
-v=$(od -An -tu1 -j9 -N1 "$T/a.pz" | tr -d ' ')
-f=$(od -An -tu1 -j11 -N1 "$T/a.pz" | tr -d ' ')
-vp=$(od -An -tu1 -j9 -N1 "$T/p.pz" | tr -d ' ')
+# One byte as a decimal number: od zero-pads on illumos ("013"), which
+# the shell would read as octal.
+byte_at() { echo $(( $(od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' ' | sed 's/^0*\(.\)/\1/') )); }
+v=$(byte_at "$T/a.pz" 9)
+f=$(byte_at "$T/a.pz" 11)
+vp=$(byte_at "$T/p.pz" 9)
 if [ "$v" = 13 ] && [ $((f & 64)) = 64 ] && [ "$vp" = 10 ]; then
 	log_pass "-Z writes version 13 with flag 0x40; without it, version 10"
 else

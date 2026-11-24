@@ -385,7 +385,13 @@ SKEIN_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
 SHA2_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
 KECCAK_FLAGS = $(GEN_OPT) $(VEC_FLAGS) $(CPPFLAGS) @FPTR_FLAG@
 
-all: $(PROG)
+all: $(PROG) buildtmp/rf_pdeflate
+
+# test_reflate.sh builds its containers with the pinned deflate.
+buildtmp/rf_pdeflate: test/tools/rf_pdeflate.c $(LIB)
+	mkdir -p buildtmp
+	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) test/tools/rf_pdeflate.c -o buildtmp/rf_pdeflate.o
+	$(LINK.PROG) -o $@ buildtmp/rf_pdeflate.o $(OBJS) $(LDLIBS)
 
 $(LZMAOBJS): $(LZMASRCS) $(LZMAHDRS)
 	$(COMPILE) $(GEN_OPT) $(CPPFLAGS) $(@:.o=.c) -o $@
@@ -777,7 +783,7 @@ fuzz: fuzz-build
 topclean:
 	$(RM) buildtmp/$(PROG) $(OBJS) $(PROGOBJS) $(BAKFILES) $(LIB) $(LIB).$(LIBVER) $(PROG_LDFLAGS)
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
-	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk*
+	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk* buildtmp/rf_pdeflate*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress buildtmp/fuzz_seek_index
 	$(RM) buildtmp/fuzz_repair buildtmp/fuzz_reflate buildtmp/fuzz_dedupe
 	$(RM) buildtmp/fuzz_chunk buildtmp/fuzz_manifest buildtmp/fuzz_seeds
