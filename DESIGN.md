@@ -355,7 +355,21 @@ Two heap overflows (lz4, libbsc) came from compressors that sized their
 output from the input length instead of `*dstlen`.
 
 Buffers come from the system allocator, or the host's (see Embedding
-below). Pcompress used to ship a
+below). On Linux, a block of 4 MB or more from the C library's
+allocator is given `madvise(MADV_HUGEPAGE)` over its 2 MB-aligned part
+(`advise_huge()` in `allocator.c`): the chunk buffers and the codecs'
+match tables and suffix arrays are read at random, and with 4 KB pages
+nearly every access missed the TLB. On a c7i.4xlarge with 64 MB chunks
+it cut dTLB load misses from 490 million to 0.3 million (lzma -l 14,
+enwik8 four times) and 530 million to 0.1 million (libbsc, a /usr/lib
+tar), and compress time by 4 to 16% (lz4 -l 1 by 22 to 30%), on
+Graviton3 (c7g.4xlarge) as well. Peak RSS grew by about 1% (a partly
+used huge page at each end of a block). lz4 decompression got 2 to 7%
+slower (its output buffer is written once, and faulting 2 MB pages
+costs more than the TLB saves); the other codecs decompress 1 to 18%
+faster. The host's memory
+from `pc_set_allocator()` is never advised: it is the host's to manage.
+Pcompress used to ship a
 process-wide slab allocator; it was removed in 4.1 because it was not
 safe with several contexts in one process and measured no faster than
 `malloc` (within 2.5% on a 192-core Graviton4, within noise on a
