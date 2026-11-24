@@ -358,3 +358,18 @@ XChaCha20-Poly1305 extended nonce (the AEAD itself is OpenSSL's
 ChaCha20-Poly1305, 9 times as fast as Monocypher's portable C on x86-64),
 and Argon2id, which OpenSSL has only from 3.2. `test/unit/test_crypto.c`
 pins both to the published vectors (draft-irtf-cfrg-xchacha-03, RFC 9106).
+
+## Vendored: Binary Fuse filter (utils/binaryfusefilter.h)
+
+**Upstream**: https://github.com/FastFilter/xor_singleheader,
+`include/binaryfusefilter.h` at commit f6f09ded055001a673f5570041607753c75b3d36
+(after tag v2.2.1; file sha256
+3ea8d9ac122dec9b55de0bad7516806ab744e6060130cae5fb1dda29ced62667).
+**License**: Apache-2.0 (`utils/LICENSE.binaryfusefilter`).
+**Modifications**: none. `idfilter.c` includes it with `malloc`,
+`calloc` and `free` defined to the library allocator, and sorts and
+deduplicates the keys itself before populating (upstream's fallback
+duplicate removal compares keys by a truncated difference).
+
+To update: copy the file from the new commit, update the hash here, and
+run `test_chunk` (`test_idfilter`).

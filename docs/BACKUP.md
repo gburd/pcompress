@@ -155,6 +155,18 @@ and the repository's lifecycle.
 - **Local cache:** `pc_index_*` in `arghd`'s cache directory. It is only
   a cache: losing it costs one extra lookup per chunk, never a wrong
   backup.
+- **Large repositories:** `pc_index` keeps 11 to 21 bytes per id in
+  memory. To keep memory nearly independent of repository size, keep the
+  stored ids in a file sorted by id, and in memory only a
+  `pc_idfilter_t` built from them plus a fence (the first 8 bytes of
+  every 128th id, 0.06 bytes per id). A lookup asks the filter first;
+  only a "maybe" binary-searches the fence and reads one 4 KB block of
+  the file. Ids stored since the file was last sorted go in a small
+  `pc_index` (or an in-memory set) checked as well, and are merged into
+  the sorted file at the end of the run, when the filter is rebuilt.
+  Measured with 10M ids (a Xeon 8488C, page cache warm): 1.2 bytes per
+  id in memory against 13.4 for `pc_index`, 0.004 reads per absent id,
+  one read per present id, and 0.9M present lookups/s against 1.6M.
 - **Many jobs in one process:** `arghd` can back up several folders at
   once. Every libpcompress call takes its own context, and the library
   is reentrant (ROADMAP Phase 1).

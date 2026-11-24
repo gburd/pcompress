@@ -34,6 +34,8 @@
 .Nm pc_dict_id ,
 .Nm pc_keyfile_create ,
 .Nm pc_keyfile_open ,
+.Nm pc_idfilter_new ,
+.Nm pc_idfilter_maybe ,
 .Nm pc_version ,
 .Nm pc_set_allocator ,
 .Nm pc_set_default_log ,
@@ -139,6 +141,14 @@ libpcompress
 .Fn pc_index_sync "pc_index_t *idx"
 .Ft int
 .Fn pc_index_close "pc_index_t *idx"
+.Ft pc_idfilter_t *
+.Fn pc_idfilter_new "const void *ids" "size_t n"
+.Ft int
+.Fn pc_idfilter_maybe "const pc_idfilter_t *f" "const uint8_t id[32]"
+.Ft size_t
+.Fn pc_idfilter_size "const pc_idfilter_t *f"
+.Ft void
+.Fn pc_idfilter_free "pc_idfilter_t *f"
 .Ft pc_manifest_t *
 .Fn pc_manifest_new "void"
 .Ft int
@@ -543,6 +553,24 @@ make the tool store a chunk twice, never skip one.
 Use one thread at a time per index.
 Several processes may append to one file; each sees the others' ids at its
 next open.
+.It Fn pc_idfilter_new
+Builds a static Binary Fuse filter, about 9 bits per id, from
+.Fa n
+32-byte ids stored back to back (any order; repeats are allowed).
+It returns NULL on bad arguments or when out of memory.
+.Fn pc_idfilter_maybe
+returns 0 when the id is certainly not in the set and 1 when it may be:
+always for an id the filter was built from, and for about 0.4% of other
+ids.
+It returns \-1 on bad arguments.
+Confirm a 1 in an exact table, such as a
+.Fn pc_index_has
+lookup or a sorted id file.
+The filter cannot grow; rebuild it, and check ids added since then some
+other way.
+.Fn pc_idfilter_size
+returns its memory in bytes.
+Several threads may query one filter at once.
 Only a hash table is held in memory, 11 to 21 bytes per id; the ids stay
 in the file, and a lookup that matches reads its id back to confirm it.
 Callers with their own catalogue need not use it: look ids up there
