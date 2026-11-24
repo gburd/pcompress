@@ -678,7 +678,12 @@ bcj_probe(const char *fpath, const struct stat *sb, int tflag)
 	    sb->st_size > BCJ_FILE_SIZE_LIMIT ||
 	    detect_type_by_ext(fpath, strlen(fpath)) != TYPE_UNKNOWN)
 		return;
+	/* O_NONBLOCK: a file swapped for a FIFO since the walk must not block. */
+#ifdef O_NONBLOCK
+	if ((fd = open(fpath, O_RDONLY | O_NONBLOCK)) == -1)
+#else
 	if ((fd = open(fpath, O_RDONLY)) == -1)
+#endif
 		return;
 	n = read(fd, buf, sizeof (buf));
 	close(fd);

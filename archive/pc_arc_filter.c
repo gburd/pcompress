@@ -216,7 +216,12 @@ copy_archive_data(struct archive *ar, uchar_t *out_buf, uint64_t cap)
 			break;
 		if (r != ARCHIVE_OK)
 			return (0);
-		if (offset < 0 || (uint64_t)offset > cap || size > cap - offset)
+		/*
+		 * Filtered members are written contiguously. A block anywhere
+		 * else (a hostile sparse map with overlapping blocks) would
+		 * leave part of the buffer unwritten while tot still adds up.
+		 */
+		if (offset < 0 || (uint64_t)offset != tot || size > cap - tot)
 			return (0);
 		memcpy(out_buf + offset, buff, size);
 		tot += size;
