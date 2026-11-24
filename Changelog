@@ -1,4 +1,8 @@
 == Unreleased ==
+Fix: -E and -EE with -c none found similar blocks on some platforms
+  and not others: the minimum distance between a block and its delta
+  base was never set for "none" and read from uninitialized stack
+  memory. It is now 0 for "none" (and by default for any algorithm).
 Security: a corrupt or hostile deduplicated chunk (-D, -F, -G, -E)
   could make the reader write past its block array and read or write
   past its chunk buffers: the block count, a block's index entry, a

@@ -51,6 +51,8 @@ none_props(algo_props_t *data, int level, uint64_t chunksize) {
 	data->decompress_mt_capable = 0;
 	data->buf_extra = 0;
 	data->delta2_span = 50;
+	/* No compressor window to find a near match first: delta at any distance. */
+	data->deltac_min_distance = 0;
 }
 
 int
