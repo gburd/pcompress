@@ -153,6 +153,24 @@ set of files with every algorithm, checksum and cipher on one host
 (ideally big-endian), then decompress them on another. The same is done
 for an archive containing a symlink.
 
+### Cross-version differential fuzzing
+
+`ci/difffuzz.sh <new-build> <old-build> [seeds] [first-seed]` compares
+two built trees, normally this one and the previous release. For each
+seed, `test/tools/xver_model.py` makes a random input (text, random
+bytes, zeros, repeats; 0 to 3 MB) and a random single-file option set
+the old release understands (algorithm, level, chunk size, -D/-E/-F/-G,
+-B, -L, -P, -S, -e, -t, pipe mode). It compresses with each build and
+decompresses with the other, and with itself. The library checks run
+`test/tools/xver_drv.c`, built against each library, and compare gear
+chunk boundaries, plain and keyed chunk ids, a random PCMF2 manifest,
+and the PCIDX1 index file with an independent Python model written from
+DESIGN.md, and with each other. They also re-encode each build's
+manifest with the other, and open each build's sealed objects with the
+other. A case only the old release gets wrong prints as `OLDBUG`. One
+seed always replays the same case. The nightly job runs 300 seeds
+against 4.4.0, built from the release tarball (about 4 minutes).
+
 ### Running Integration Tests
 
 ```sh

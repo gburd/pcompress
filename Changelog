@@ -1,4 +1,9 @@
 == Unreleased ==
+Test: ci/difffuzz.sh, a seeded differential fuzzer: files from this
+  build and from the previous release must read back with the other,
+  over random inputs and option sets, and the chunker, ids, manifest
+  and index formats must match an independent Python model
+  (test/tools/xver_model.py). Nightly runs 300 seeds against 4.4.0.
 Library: pc_idfilter_new(), pc_idfilter_maybe(), pc_idfilter_size()
   and pc_idfilter_free(), a static Binary Fuse filter over chunk ids
   (9 bits per id, 0.4% false positives), to put in front of an exact
