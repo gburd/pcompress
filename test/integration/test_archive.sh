@@ -162,7 +162,10 @@ echo "--- -x: ARM64 and RISC-V branch filters ---"
 # goes through the BCJ filter, and the archive becomes version 13; one
 # with no such member stays version 10. Header bytes 8-9 hold the version.
 BDIR="datafiles/bcjtest"
-hdr_version() { od -An -tu1 -j8 -N2 "$1" | awk '{ print $1 * 256 + $2 }'; }
+# One byte at a time: BSD od (macOS) prints -N2 output differently, and
+# zero-padded ("011") values must not be read as octal.
+hdr_byte() { echo $(( $(dd if="$1" bs=1 skip="$2" count=1 2>/dev/null | od -An -tu1 | tr -d ' \n' | sed 's/^0*\(.\)/\1/') )); }
+hdr_version() { echo $(( $(hdr_byte "$1" 8) * 256 + $(hdr_byte "$1" 9) )); }
 mk_elf() { # file e_machine: an ELF header, then calls to a few functions
 	python3 - "$1" "$2" <<'PYEOF'
 import random, struct, sys
