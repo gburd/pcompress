@@ -5,10 +5,14 @@ on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      rebaseline:
+        description: "Benchmark: record this run as the new baseline, skip the compare"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  actions: read   # bench: find the previous run's artifact
 
 jobs:
   long:
@@ -123,6 +127,9 @@ jobs:
     name: "Benchmark tracking"
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read   # find the previous run's artifact
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -134,7 +141,11 @@ jobs:
             autoconf automake libtool pkg-config
       - uses: actions/cache@v4
         with: { path: corpus, key: enwik8-547994d9 }
+      # A download failure skips the measurement instead of failing the
+      # nightly: the corpus is cached, so this only matters on a cache miss.
       - name: Corpus (enwik8, pinned by sha256)
+        id: corpus
+        continue-on-error: true
         run: |
           mkdir -p corpus
           if [ ! -f corpus/enwik8.zip ]; then
@@ -146,15 +157,21 @@ jobs:
       # --portable: runners differ in CPU; a host-tuned build would make
       # the numbers depend on which one the job landed on.
       - name: Build
+        if: steps.corpus.outcome == 'success'
         run: ./config --disable-wavpack --portable && make -j"$(nproc)" && make buildtmp/bench_chunk
       - name: Measure
+        if: steps.corpus.outcome == 'success'
         run: python3 ci/bench.py run ./pcompress corpus/enwik8 buildtmp/bench_chunk bench.json
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}
       - uses: actions/upload-artifact@v4
+        if: steps.corpus.outcome == 'success'
         with: { name: bench, path: bench.json }
       - name: Compare with the previous nightly
+        if: steps.corpus.outcome == 'success' && !inputs.rebaseline
         env: { GH_TOKEN: "${{ github.token }}" }
+        # bash, not the default bash -e: pipefail, or tee hides a failure.
+        shell: bash
         run: |
           prev=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?status=success&branch=$GITHUB_REF_NAME&per_page=10" \
             --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID)][0].id // empty")
