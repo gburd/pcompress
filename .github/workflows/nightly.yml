@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # bench: find the previous run's artifact
 
 jobs:
   long:
@@ -113,3 +114,55 @@ jobs:
             test/oom-*
             test/timeout-*
           if-no-files-found: ignore
+
+  bench:
+    # Fixed-corpus benchmark (ci/bench.py): enwik8 with the main codecs,
+    # and bench_chunk, compared with the last successful nightly's result.
+    # A worse ratio fails the job; slower MB/s only warns, since shared
+    # runners vary 10 to 20% between runs.
+    name: "Benchmark tracking"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - name: Dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential libomp-dev libssl-dev zlib1g-dev libbz2-dev \
+            autoconf automake libtool pkg-config
+      - uses: actions/cache@v4
+        with: { path: corpus, key: enwik8-547994d9 }
+      - name: Corpus (enwik8, pinned by sha256)
+        run: |
+          mkdir -p corpus
+          if [ ! -f corpus/enwik8.zip ]; then
+            curl -sSfL --retry 3 -o corpus/enwik8.zip https://mattmahoney.net/dc/enwik8.zip
+          fi
+          echo "547994d9980ebed1288380d652999f38a14fe291a6247c157c3d33d4932534bc  corpus/enwik8.zip" \
+            | sha256sum -c -
+          unzip -o -q corpus/enwik8.zip -d corpus
+      # --portable: runners differ in CPU; a host-tuned build would make
+      # the numbers depend on which one the job landed on.
+      - name: Build
+        run: ./config --disable-wavpack --portable && make -j"$(nproc)" && make buildtmp/bench_chunk
+      - name: Measure
+        run: python3 ci/bench.py run ./pcompress corpus/enwik8 buildtmp/bench_chunk bench.json
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}
+      - uses: actions/upload-artifact@v4
+        with: { name: bench, path: bench.json }
+      - name: Compare with the previous nightly
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?status=success&branch=$GITHUB_REF_NAME&per_page=10" \
+            --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID)][0].id // empty")
+          if [ -z "$prev" ] || ! gh run download "$prev" -n bench -D prev 2>/dev/null; then
+            echo "No earlier bench result: nothing to compare."
+            exit 0
+          fi
+          python3 ci/bench.py compare prev/bench.json bench.json | tee compare.txt
+          { echo '### Benchmark vs previous nightly'; echo '```'; cat compare.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
+

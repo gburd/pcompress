@@ -349,6 +349,19 @@ For representative real-world results, benchmark with the Silesia corpus
 (200MB mixed data). Place the corpus files in `test/datafiles/` and update
 `bench_algos.c` to read them.
 
+### Benchmark tracking
+
+`ci/bench.py run PCOMPRESS CORPUS BENCH_CHUNK OUT.json` compresses and
+decompresses a corpus with zstd 3 and 9, lz4 1, lzma 6, libbsc 6 and
+adapt2 6 (8 MB chunks, best of three), runs `bench_chunk 64`, and writes
+the ratios and MB/s as JSON. `ci/bench.py compare OLD.json NEW.json`
+prints one against the other and exits 1 if a ratio fell by more than
+0.1% or a case is missing; a speed drop of more than 25% is only a
+warning. The nightly workflow's "Benchmark tracking" job runs it on
+enwik8 (downloaded once, checked by sha256, cached) and compares with
+the result of the last successful nightly on the branch, which it keeps
+as the `bench` artifact.
+
 ## Test Infrastructure
 
 ### Master Runner (`test/run_all_tests.sh`)
