@@ -82,6 +82,18 @@ for algo in lz4 zlib zstd; do
 	fi
 	rm -f datafiles/single.dat.pz datafiles/single.dat.out
 done
+# A 64-byte checksum: the chunk header is larger than with the default.
+for cks in SHA512 KECCAK512; do
+	rm -f datafiles/single.dat.pz datafiles/single.dat.out
+	if $PCOMPRESS -c none -l 1 -s 64k -S $cks datafiles/single.dat 2>/dev/null &&
+	    $PCOMPRESS -d datafiles/single.dat.pz datafiles/single.dat.out 2>/dev/null &&
+	    cmp -s datafiles/single.dat datafiles/single.dat.out; then
+		log_pass "single_byte/none -S $cks: round-trip OK"
+	else
+		log_fail "single_byte/none -S $cks: round trip"
+	fi
+	rm -f datafiles/single.dat.pz datafiles/single.dat.out
+done
 
 # --- Invalid algorithm ---
 echo ""

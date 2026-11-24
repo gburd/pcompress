@@ -2620,6 +2620,10 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 		UNCOMP_BAIL;
 	}
 
+	/* dec_flags() sets the file's checksum size, which CHUNK_HDR_SZ uses. */
+	if (dec_flags(pctx, &h, to_filename, &dedupe_flag, &props) != 0) {
+		UNCOMP_BAIL;
+	}
 	compressed_chunksize = h.chunksize + CHUNK_HDR_SZ + zlib_buf_extra(h.chunksize);
 	if (pctx->_props_func) {
 		pctx->_props_func(&props, h.level, h.chunksize);
@@ -2627,9 +2631,6 @@ start_decompress_impl(pc_ctx_t *pctx, const char *filename, char *to_filename)
 			compressed_chunksize += (h.chunksize + props.buf_extra -
 			    compressed_chunksize);
 		}
-	}
-	if (dec_flags(pctx, &h, to_filename, &dedupe_flag, &props) != 0) {
-		UNCOMP_BAIL;
 	}
 
 	/* Version 12 is only ever written encrypted. */
