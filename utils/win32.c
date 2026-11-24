@@ -180,6 +180,12 @@ pc_win32_unlink(const char *path)
 	return (rv);
 }
 
+/*
+ * rename() as POSIX has it: an existing target is replaced, which the
+ * CRT's _wrename() refuses (EEXIST). pcompress renames a finished
+ * temporary file over the file it replaces (an in-place -y repair, the
+ * pcbackup example's index).
+ */
 int
 pc_win32_rename(const char *from, const char *to)
 {
@@ -188,8 +194,12 @@ pc_win32_rename(const char *from, const char *to)
 
 	wf = utf8_to_wide(from);
 	wt = wf == NULL ? NULL : utf8_to_wide(to);
-	if (wt != NULL)
-		rv = _wrename(wf, wt);
+	if (wt != NULL) {
+		if (MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING))
+			rv = 0;
+		else
+			set_errno_win32(GetLastError());
+	}
 	pc_mfree(wf);
 	pc_mfree(wt);
 	return (rv);

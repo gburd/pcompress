@@ -1,4 +1,8 @@
 == Unreleased ==
+Fix: rename() on Windows replaces an existing file, as on POSIX
+  (MoveFileExW with MOVEFILE_REPLACE_EXISTING), where _wrename()
+  refused: in-place repair (-y) failed there, and so did the pcbackup
+  example's index and object rewrites.
 New: -Z (archive mode) stores the deflate streams of zip containers
   (jar, odt, docx, xlsx, apk ...), gzip files and PNG images inflated,
   when pcompress's bundled zlib 1.3.1 deflate reproduces them bit for
