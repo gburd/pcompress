@@ -30,7 +30,7 @@ extern "C" {
 
 #define	RP_HDR_MAGIC	"PCRPAIR1"	/* first 8 bytes of each header copy */
 #define	RP_TAIL_MAGIC	"PCREPR01"	/* last 8 bytes of the file */
-#define	RP_HDR_SZ	80		/* fields 48, their hash 16, AEAD tag 16 */
+#define	RP_HDR_SZ	80		/* fields 48, hash 16 (of fields and tag), tag 16 */
 #define	RP_TRAILER_SZ	(RP_HDR_SZ + 8)	/* header copy, then the magic */
 #define	RP_BLOCK	4096		/* block size the writer uses */
 #define	RP_PCT_MAX	50		/* -Y bound */

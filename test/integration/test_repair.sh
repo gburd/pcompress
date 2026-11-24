@@ -203,6 +203,21 @@ PYEOF
 	else
 		log_fail "bytes after the repair region accepted"
 	fi
+	# The trailer copy's AEAD tag damaged: repair has no key, but the
+	# header hash covers the tag, so it rebuilds the trailer from the
+	# first copy and never the other way round.
+	cp "$T/a.pz" "$T/tag.pz"
+	size=$(wc -c < "$T/tag.pz" | tr -d ' ')
+	printf 'X' | dd of="$T/tag.pz" bs=1 seek=$((size - 88 + 70)) conv=notrunc 2>/dev/null
+	rm -f "$T/out"
+	cp "$T/pw.src" "$T/pw"
+	if $PCOMPRESS -y "$T/tag.pz" >/dev/null 2>&1 && cmp -s "$T/tag.pz" "$T/a.pz" &&
+	    $PCOMPRESS -d -w "$T/pw" "$T/tag.pz" "$T/out" >/dev/null 2>&1 &&
+	    cmp -s "$T/in" "$T/out"; then
+		log_pass "damaged tag of the last header copy repaired from the first"
+	else
+		log_fail "damaged tag of the last header copy"
+	fi
 else
 	SKIP=$((SKIP + 1)); echo "  SKIP: sealed region (no python3)"
 fi

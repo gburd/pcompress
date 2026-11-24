@@ -56,7 +56,7 @@ extern uint32_t lzma_crc32(const uint8_t *buf, size_t size, uint32_t crc);
 #define	RP_TARGET_M	4	/* parity blocks per stripe the writer aims for */
 #define	RP_G_DEFAULT	64	/* stripes per group the writer uses */
 #define	RP_TAG_OFF	64	/* AEAD tag, after the fields and their hash */
-#define	RP_HASH_OFF	48
+#define	RP_HASH_OFF	48	/* BLAKE2b-128 of the fields and the tag */
 
 static unsigned char gf_exp[512], gf_log[256];
 static void (*muladd_fn)(unsigned char *, const unsigned char *, unsigned char, size_t);
@@ -429,11 +429,23 @@ rp_choose(rp_hdr_t *h, uint64_t plen, int pct)
 		h->g = (uint32_t)((n + h->k - 1) / h->k);
 }
 
-/* The fields of h, their hash, and for version 12 the AEAD tag. */
+/*
+ * The hash of a header: bytes 0 to 47 and the tag (zero when unsealed),
+ * so that repair, which has no key, finds a damaged tag as it finds any
+ * other damaged byte, and never takes such a copy for the good one.
+ */
+static int
+rp_hdr_hash(const unsigned char *b, unsigned char sum[16])
+{
+	return (blake2b_keyed2(sum, 16, NULL, 0, b, RP_HASH_OFF, b + RP_TAG_OFF,
+	    RP_HDR_SZ - RP_TAG_OFF));
+}
+
+/* The fields of h, for version 12 the AEAD tag, and their hash. */
 static int
 rp_hdr_encode(rp_hdr_t *h, uint64_t ilen, const pz_aead_t *a, const unsigned char *end)
 {
-	unsigned char *b = h->raw, ad[RP_TAG_OFF + PZ_END_LEN];
+	unsigned char *b = h->raw, ad[RP_HASH_OFF + PZ_END_LEN];
 
 	memset(b, 0, RP_HDR_SZ);
 	memcpy(b, RP_HDR_MAGIC, 8);
@@ -445,13 +457,14 @@ rp_hdr_encode(rp_hdr_t *h, uint64_t ilen, const pz_aead_t *a, const unsigned cha
 	put_le(b + 24, h->plen, 8);
 	put_le(b + 32, ilen, 8);
 	put_le(b + 40, h->rlen, 8);
-	if (blake2b_keyed2(b + RP_HASH_OFF, 16, NULL, 0, b, RP_HASH_OFF, NULL, 0) != 0)
-		return (-1);
-	if (a == NULL)
-		return (0);
-	memcpy(ad, b, RP_TAG_OFF);
-	memcpy(ad + RP_TAG_OFF, end, PZ_END_LEN);
-	return (pc_pz_seal(a, PZ_STREAM_REPAIR, 0, ad, sizeof (ad), NULL, 0, b + RP_TAG_OFF));
+	if (a != NULL) {
+		memcpy(ad, b, RP_HASH_OFF);
+		memcpy(ad + RP_HASH_OFF, end, PZ_END_LEN);
+		if (pc_pz_seal(a, PZ_STREAM_REPAIR, 0, ad, sizeof (ad), NULL, 0,
+		    b + RP_TAG_OFF) != 0)
+			return (-1);
+	}
+	return (rp_hdr_hash(b, b + RP_HASH_OFF));
 }
 
 int
@@ -462,8 +475,7 @@ rp_hdr_parse(const unsigned char *b, rp_hdr_t *h)
 	int flags, i;
 
 	memset(h, 0, sizeof (*h));
-	if (memcmp(b, RP_HDR_MAGIC, 8) != 0 ||
-	    blake2b_keyed2(sum, 16, NULL, 0, b, RP_HASH_OFF, NULL, 0) != 0 ||
+	if (memcmp(b, RP_HDR_MAGIC, 8) != 0 || rp_hdr_hash(b, sum) != 0 ||
 	    memcmp(sum, b + RP_HASH_OFF, 16) != 0)
 		return (-1);
 	flags = (int)get_le(b + 18, 2);
@@ -489,14 +501,14 @@ int
 rp_tail_ok(const unsigned char *tr, uint64_t tail, const pz_aead_t *a,
     const unsigned char *end, uint64_t *rlen)
 {
-	unsigned char ad[RP_TAG_OFF + PZ_END_LEN];
+	unsigned char ad[RP_HASH_OFF + PZ_END_LEN];
 	rp_hdr_t h;
 
 	if (memcmp(tr + RP_HDR_SZ, RP_TAIL_MAGIC, 8) != 0 || rp_hdr_parse(tr, &h) != 0 ||
 	    !(get_le(tr + 18, 2) & RP_FLAG_SEALED))
 		return (-1);
-	memcpy(ad, tr, RP_TAG_OFF);
-	memcpy(ad + RP_TAG_OFF, end, PZ_END_LEN);
+	memcpy(ad, tr, RP_HASH_OFF);
+	memcpy(ad + RP_HASH_OFF, end, PZ_END_LEN);
 	if (pc_pz_verify(a, PZ_STREAM_REPAIR, 0, ad, sizeof (ad), NULL, 0,
 	    tr + RP_TAG_OFF) != 0)
 		return (-1);
@@ -997,22 +1009,49 @@ rp_job_free(rp_job_t *j)
 }
 
 /*
+ * Whether the header copy read into hb (n bytes read) differs from the
+ * one repair uses: 0 the same, 1 damaged, -1 a second well-formed
+ * header that disagrees. Each copy's hash covers all 80 bytes, so
+ * damage fails the parse; two copies that both parse and differ mean
+ * the file was not written this way, and neither can be trusted.
+ */
+static int
+rp_hdr_copy_differs(const rp_job_t *j, const unsigned char *hb, int64_t n)
+{
+	rp_hdr_t other;
+
+	if (n == RP_HDR_SZ && memcmp(hb, j->h.raw, RP_HDR_SZ) == 0)
+		return (0);
+	if (n == RP_HDR_SZ && rp_hdr_parse(hb, &other) == 0)
+		return (-1);
+	return (1);
+}
+
+/*
  * Damage outside the blocks: a header copy, the magic, or a CRC table
  * entry (each has a second copy). Returns how many of those differ from
- * what they should be once the blocks are good.
+ * what they should be once the blocks are good, or -1 (logged) if the
+ * two header copies are both well formed and disagree.
  */
-static uint64_t
+static int64_t
 rp_meta_damage(rp_job_t *j)
 {
 	unsigned char hb[RP_TRAILER_SZ];
-	uint64_t i, n = 0, pend = j->tab2 + 4 * j->ncrc;
+	uint64_t i, pend = j->tab2 + 4 * j->ncrc;
+	int64_t n = 0;
+	int d1, d2;
 
-	if (rp_pread(j->fd, j->h.plen, hb, RP_HDR_SZ) != RP_HDR_SZ ||
-	    memcmp(hb, j->h.raw, RP_HDR_SZ) != 0)
-		n++;
-	if (rp_pread(j->fd, pend, hb, RP_TRAILER_SZ) != RP_TRAILER_SZ ||
-	    memcmp(hb, j->h.raw, RP_HDR_SZ) != 0 ||
-	    memcmp(hb + RP_HDR_SZ, RP_TAIL_MAGIC, 8) != 0)
+	d1 = rp_hdr_copy_differs(j, hb, rp_pread(j->fd, j->h.plen, hb, RP_HDR_SZ));
+	d2 = rp_hdr_copy_differs(j, hb, rp_pread(j->fd, pend, hb, RP_HDR_SZ));
+	if (d1 < 0 || d2 < 0) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "The two repair headers disagree: not repairing. "
+		    "Nothing was changed.");
+		return (-1);
+	}
+	n = d1 + d2;
+	if (rp_pread(j->fd, pend + RP_HDR_SZ, hb, 8) != 8 ||
+	    memcmp(hb, RP_TAIL_MAGIC, 8) != 0)
 		n++;
 	for (i = 0; i < j->ncrc; i++)
 		n += (!j->have1[i] || j->t1[i] != j->crc[i]) +
@@ -1136,7 +1175,7 @@ rp_repair(const char *path, const char *out)
 	char tmp[PATH_MAX];
 	struct stat sb;
 	rp_job_t j;
-	uint64_t meta;
+	int64_t meta;
 	int fd, ofd = -1, rv = -1;
 
 	tmp[0] = '\0';
@@ -1148,7 +1187,8 @@ rp_repair(const char *path, const char *out)
 	}
 	if (rp_job_open(&j, fd, (uint64_t)sb.st_size) != 0 || rp_scan(&j) != 0)
 		goto done;
-	meta = rp_meta_damage(&j);
+	if ((meta = rp_meta_damage(&j)) < 0)
+		goto done;
 	if (j.nbad == 0 && meta == 0 && out == NULL) {
 		log_msg(LOG_INFO, 0, "%s: no damage found (%" PRIu64 " blocks checked).",
 		    path, j.ncrc);

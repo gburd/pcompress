@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <utils.h>
 #include <pc_alloc.h>
+#include <crypto_utils.h>
 #include <repair.h>
 #include "minunit.h"
 
@@ -248,6 +249,13 @@ MU_TEST(test_rp_small)
 	unlink(tpath("s"));
 }
 
+/* Recompute a header's hash (bytes 0 to 47 and the tag) after an edit. */
+static void
+rehash(unsigned char *b)
+{
+	(void) blake2b_keyed2(b + 48, 16, NULL, 0, b, 48, b + 64, 16);
+}
+
 MU_TEST(test_rp_hdr_hostile)
 {
 	unsigned char *orig = NULL, tr[RP_TRAILER_SZ], b[RP_HDR_SZ];
@@ -263,18 +271,68 @@ MU_TEST(test_rp_hdr_hostile)
 	mu_assert_int_eq(0, rp_hdr_parse(tr, &h));
 	mu_assert_uint64_eq(100000, h.plen);
 	mu_assert_uint64_eq(fsize - 100000, h.rlen);
-	/* Any changed byte of the fields or their hash is refused. */
-	for (i = 0; i < 64; i++) {
+	/* Any changed byte, the tag's included, is refused. */
+	for (i = 0; i < RP_HDR_SZ; i++) {
 		memcpy(b, tr, sizeof (b));
 		b[i] ^= 1;
 		mu_assert_int_eq(-1, rp_hdr_parse(b, &h));
 	}
-	/* Unsealed: the tag bytes must be zero. */
+	/* Unsealed: the tag bytes must be zero, even with the hash fixed up. */
 	memcpy(b, tr, sizeof (b));
 	b[70] = 1;
+	rehash(b);
 	mu_assert_int_eq(-1, rp_hdr_parse(b, &h));
 	pc_mfree(orig);
 	unlink(tpath("h"));
+}
+
+/* Read or write the whole file. */
+static unsigned char *
+slurp(const char *name, uint64_t n)
+{
+	unsigned char *b = pc_malloc(n);
+	int fd = open(tpath(name), O_RDONLY, 0);
+
+	if (fd == -1 || read(fd, b, n) != (ssize_t)n)
+		perror("slurp");
+	close(fd);
+	return (b);
+}
+
+static void
+spill(const char *name, const unsigned char *b, uint64_t off, uint64_t n)
+{
+	int fd = open(tpath(name), O_WRONLY, 0);
+
+	if (fd == -1 || lseek(fd, (off_t)off, SEEK_SET) == -1 || write(fd, b, n) != (ssize_t)n)
+		perror("spill");
+	close(fd);
+}
+
+/*
+ * Two well-formed header copies that disagree (here in the seek index
+ * length) cannot both be right, and repair has no key to tell which is:
+ * refused, unchanged.
+ */
+MU_TEST(test_rp_hdr_disagree)
+{
+	const uint64_t n = 200000;
+	unsigned char *orig = NULL, *whole, *after;
+	uint64_t fsize = make_file("d", n, 10, &orig), tr;
+
+	mu_assert(fsize > n, "rp_write failed");
+	whole = slurp("d", fsize);
+	tr = fsize - RP_TRAILER_SZ;
+	whole[tr + 32] = 9;	/* ilen 9, still at most plen */
+	rehash(whole + tr);
+	spill("d", whole + tr, tr, RP_HDR_SZ);
+	mu_assert_int_eq(-1, rp_repair(tpath("d"), NULL));
+	after = slurp("d", fsize);
+	mu_assert(memcmp(after, whole, fsize) == 0, "refused repair changed the file");
+	pc_mfree(orig);
+	pc_mfree(whole);
+	pc_mfree(after);
+	unlink(tpath("d"));
 }
 
 MU_TEST_SUITE(suite_repair)
@@ -286,6 +344,7 @@ MU_TEST_SUITE(suite_repair)
 	MU_RUN_TEST(test_rp_file);
 	MU_RUN_TEST(test_rp_small);
 	MU_RUN_TEST(test_rp_hdr_hostile);
+	MU_RUN_TEST(test_rp_hdr_disagree);
 }
 
 int

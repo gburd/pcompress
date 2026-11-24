@@ -278,7 +278,11 @@ bad blocks.
 `crc[n]` is the CRC-32 of each of the `n` data and parity blocks, in
 that order, little-endian; it is how repair finds damage. Both tables
 and both header copies are written; repair uses any good copy and
-rewrites all of them. The header (80 bytes, little-endian):
+rewrites all of them. A copy is good if it parses: its hash covers all
+80 bytes, the tag included, so repair (which has no key) never takes a
+copy with a damaged tag for the good one. Two copies that both parse
+and differ are refused, and nothing is changed.
+The header (80 bytes, little-endian):
 
 | offset | size | field |
 |--------|------|-------|
@@ -290,7 +294,7 @@ rewrites all of them. The header (80 bytes, little-endian):
 | 24 | 8 | `plen` |
 | 32 | 8 | bytes between the file's trailer (the end marker, or the end record) and the region: the seek index, or 0 |
 | 40 | 8 | region length, header to magic |
-| 48 | 16 | BLAKE2b-128 of bytes 0 to 47 |
+| 48 | 16 | BLAKE2b-128 of bytes 0 to 47, then bytes 64 to 79 |
 | 64 | 16 | flag 1: AEAD tag, else zero |
 
 The parser checks the hash, every limit, the region length against the
@@ -307,7 +311,7 @@ index reader (`-r`, `-R`) finds the index where the region starts.
 file, a seek index, or a repair region (in that order, the region
 last), and refuses anything else. A region is accepted only if its
 header is sealed with the file's AEAD as stream 5, ordinal 0, with the
-header's first 64 bytes and the end record as associated data, and if
+header's first 48 bytes and the end record as associated data, and if
 the file after the end record is exactly the seek index length the
 header records plus the region. So a region cannot be moved from
 another file, bytes cannot be appended after one, and garbage that
@@ -739,7 +743,7 @@ Every authenticated piece of the file belongs to a *stream* and has an
 | metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
 | end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
 | seek index | 4 | 0 | the index body; AD: its length (u64 LE), `PCSEEK01`, the end record |
-| repair header | 5 | 0 | nothing; AD: the header's first 64 bytes, the end record (see "Repair data") |
+| repair header | 5 | 0 | nothing; AD: the header's first 48 bytes, the end record (see "Repair data") |
 
 The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
 zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
