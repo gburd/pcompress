@@ -1,4 +1,8 @@
 == Unreleased ==
+Change: zstd at levels 1 to 3 with chunks of 128 MB or more (-s 128m)
+  turns on zstd's long-distance matching: 1.5 to 10% smaller on tars
+  of /usr/lib and /usr/share, half the size on enwik8 repeated, and as
+  fast or faster. The output is ordinary zstd frames that 4.4 reads.
 Format: version 13, for features that change how data is decoded: the
   version 10 layout (version 12 when encrypted), and a reader refuses
   any header flag bit it does not know, where 10 to 12 ignored them.
