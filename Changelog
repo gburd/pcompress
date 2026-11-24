@@ -1,4 +1,12 @@
 == Unreleased ==
+Security: a corrupt or hostile deduplicated chunk (-D, -F, -G, -E)
+  could make the reader write past its block array and read or write
+  past its chunk buffers: the block count, a block's index entry, a
+  literal's length, a bsdiff patch's sizes and a global index's entry
+  count were used without being checked against the chunk (all found
+  with ASan by the new fuzz_dedupe target, which ran 10 minutes clean on
+  the fix). Every one is now checked before use, and the chunk is
+  refused as corrupt. Old files decode as before.
 Format: version 13, for features that change how data is decoded: the
   version 10 layout (version 12 when encrypted), and a reader refuses
   any header flag bit it does not know, where 10 to 12 ignored them.

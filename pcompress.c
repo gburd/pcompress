@@ -860,13 +860,15 @@ redo:
 				&dedupe_index_sz_cmp, &dedupe_data_sz_cmp, &_chunksize);
 		/*
 		 * Untrusted sizes: the compressed parts must lie inside this
-		 * chunk, and the restored parts inside the chunk buffer.
+		 * chunk, and the restored parts (header, index and block data,
+		 * one after the other) inside the chunk buffer.
 		 */
 		if (tdat->len_cmp < RABIN_HDR_SIZE ||
 		    dedupe_index_sz_cmp > tdat->len_cmp - RABIN_HDR_SIZE ||
 		    dedupe_data_sz_cmp > tdat->len_cmp - RABIN_HDR_SIZE - dedupe_index_sz_cmp ||
 		    dedupe_index_sz > tdat->chunksize || dedupe_data_sz > tdat->chunksize ||
-		    _chunksize > tdat->chunksize) {
+		    _chunksize > tdat->chunksize ||
+		    RABIN_HDR_SIZE + dedupe_index_sz + _chunksize > tdat->buf_size) {
 			log_error_code(PC_ERR_CORRUPT);
 			log_msg(LOG_ERR, 0, "Chunk %" PRIu64
 			    ", invalid dedupe header. File corrupt ?",

@@ -337,7 +337,12 @@ temp file and indexes only a few MinHash values per segment.
 References in a decompressed stream point either into the chunk being
 rebuilt or backwards into the output file (which is `mmap`ed). Both are
 untrusted input: `dedupe_decompress` checks that a reference lies in data
-that already exists before copying it.
+that already exists before copying it.  The index is untrusted too: the
+block count must fit the context's block array, a duplicate or delta block
+must name an earlier literal block, and every literal, reference and
+bsdiff patch must lie inside the chunk's block data and the restored size
+before anything is copied.  `test/fuzz/fuzz_dedupe.c` fuzzes all three
+forms (`-D`, `-F`, `-G`).
 
 ## Hashes
 

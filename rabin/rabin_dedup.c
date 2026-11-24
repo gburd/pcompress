@@ -111,7 +111,7 @@ extern int lzma_decompress(void *src, uint64_t srclen, void *dst,
 extern int lzma_deinit(void **data);
 extern int bsdiff(u_char *oldbuf, bsize_t oldsize, u_char *newbuf, bsize_t newsize,
        u_char *diff, u_char *scratch, bsize_t scratchsize);
-extern bsize_t get_bsdiff_sz(u_char *pbuf);
+extern bsize_t get_bsdiff_sz(u_char *pbuf, uint64_t avail);
 extern int bspatch(u_char *pbuf, u_char *oldbuf, bsize_t oldsize, u_char *newbuf,
 	bsize_t *_newsize);
 
@@ -1489,194 +1489,270 @@ parse_dedupe_hdr(uchar_t *buf, uint32_t *blknum, uint64_t *dedupe_index_sz,
 	*dedupe_data_sz_cmp = ntohll(entries[3]);
 }
 
-void
-dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size)
+/*
+ * Copy len bytes of a global dedupe reference to pos1 (a file offset)
+ * into ctx->cbuf at sz.  The segment being rebuilt starts at file offset
+ * `offset`: a reference at or after it must lie in the sz bytes already
+ * rebuilt, and one before it in the output file written so far.  Dedupe
+ * only makes backward references, so either holds for a valid file.
+ * Returns 0, or -1 for a reference that points elsewhere.  NB: the
+ * caller has checked that sz + len fits the output.
+ */
+static int
+dedupe_copy_ref(dedupe_context_t *ctx, uint64_t pos1, uint32_t len, uint64_t offset,
+    uint64_t sz)
 {
-	uint32_t blknum, blk, oblk, len;
-	pc_u32u_t *dedupe_index;	/* buffer offsets are unaligned */
-	uint64_t data_sz, sz, indx_cmp, data_sz_cmp, deduped_sz;
-	uint64_t dedupe_index_sz, pos1;
-	uchar_t *pos2;
+	uchar_t *src;
+	uint64_t adj;
+	struct stat sb;
 
-	parse_dedupe_hdr(buf, &blknum, &dedupe_index_sz, &data_sz, &indx_cmp, &data_sz_cmp, &deduped_sz);
-	dedupe_index = (pc_u32u_t *)(buf + RABIN_HDR_SIZE);
-	pos1 = dedupe_index_sz + RABIN_HDR_SIZE;
-	pos2 = ctx->cbuf;
+	if (pos1 >= offset) {
+		if (pos1 - offset > sz || len > sz - (pos1 - offset))
+			return (-1);
+		memcpy(ctx->cbuf + sz, ctx->cbuf + (pos1 - offset), len);
+		return (0);
+	}
+
+	/*
+	 * Output can be short if an earlier chunk failed; an mmap() beyond
+	 * EOF would SIGBUS.
+	 */
+	if (len > offset - pos1 || fstat(ctx->out_fd, &sb) == -1 ||
+	    pos1 > (uint64_t)sb.st_size || len > (uint64_t)sb.st_size - pos1)
+		return (-1);
+	adj = pos1 % ctx->pagesize;
+	src = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, ctx->out_fd, pos1 - adj);
+	if (src == MAP_FAILED) {
+		log_msg(LOG_ERR, 1, "MMAP failed ");
+		return (-1);
+	}
+	memcpy(ctx->cbuf + sz, src + adj, len);
+	munmap(src, len + adj);
+	return (0);
+}
+
+/*
+ * Rebuild a global dedupe (-G) chunk into ctx->cbuf.  buf is the chunk
+ * (header, an index of nent 32-bit entries, then dlen bytes of block
+ * data) and data_sz the size to restore.  The index starts with the
+ * segment's file offset (two entries); then a literal is one entry, its
+ * bytes next in the data, and a reference three, its length and a file
+ * offset.  Returns the bytes restored, clearing ctx->valid on an entry
+ * that does not fit.  NB: the caller holds the index token.
+ */
+static uint64_t
+dedupe_decompress_global(dedupe_context_t *ctx, uchar_t *buf, uint32_t nent,
+    uint64_t dlen, uint64_t data_sz)
+{
+	uchar_t *idx, *src;
+	uint64_t offset, pos1, sz, dpos;
+	uint32_t blk, len, flag;
+
+	if (nent < 2) {
+		log_msg(LOG_ERR, 0, "Dedup index too short.\n");
+		ctx->valid = 0;
+		return (0);
+	}
+	idx = buf + RABIN_HDR_SIZE;
+	src = idx + (uint64_t)nent * RABIN_ENTRY_SIZE;
+	offset = LE64(U64_P(idx));
+	idx += (RABIN_ENTRY_SIZE * 2);
 	sz = 0;
-	ctx->valid = 1;
+	dpos = 0;
+	for (blk = 2; blk < nent; blk++) {
+		len = LE32(U32_P(idx));
+		idx += RABIN_ENTRY_SIZE;
+		flag = len & RABIN_INDEX_FLAG;
+		len &= RABIN_INDEX_VALUE;
 
-	/*
-	 * Handling for Global Deduplication.
-	 */
-	if (blknum & GLOBAL_FLAG) {
-		uchar_t *g_dedupe_idx, *src1, *src2;
-		uint64_t adj, offset;
-		uint32_t flag;
-
-		blknum &= CLEAR_GLOBAL_FLAG;
-		g_dedupe_idx = buf + RABIN_HDR_SIZE;
-		offset = LE64(U64_P(g_dedupe_idx));
-		g_dedupe_idx += (RABIN_ENTRY_SIZE * 2);
-		blknum -= 2;
-		src1 = buf + RABIN_HDR_SIZE + dedupe_index_sz;
-
-		Sem_Wait(ctx->index_sem);
-		for (blk=0; blk<blknum;) {
-			len = LE32(U32_P(g_dedupe_idx));
-			g_dedupe_idx += RABIN_ENTRY_SIZE;
-			++blk;
-			flag = len & RABIN_INDEX_FLAG;
-			len &= RABIN_INDEX_VALUE;
-
-			if (sz + len > data_sz) {
-				log_msg(LOG_ERR, 0, "Dedup data overflows chunk.\n");
-				ctx->valid = 0;
-				break;
-			}
-			if (flag == 0) {
-				memcpy(pos2, src1, len);
-				pos2 += len;
-				src1 += len;
-				sz += len;
-			} else {
-				pos1 = LE64(U64_P(g_dedupe_idx));
-				g_dedupe_idx += (RABIN_ENTRY_SIZE * 2);
-				blk += 2;
-
-				/*
-				 * Handling of chunk references at duplicate chunks.
-				 * 
-				 * If required data offset is greater than the current segment's starting
-				 * offset then the referenced chunk is already in the current segment in
-				 * RAM. Just mem-copy it.
-				 * Otherwise it will be in the current output file. We mmap() the relevant
-				 * region and copy it. The way deduplication is done it is guaranteed that
-				 * all duplicate references will be backward references so this approach works.
-				 * 
-				 * However this approach precludes pipe-mode streamed decompression since
-				 * it requires random access to the output file.
-				 */
-				if (pos1 >= offset) {
-					/* Must reference data already rebuilt in this segment. */
-					if (pos1 - offset + len > sz) {
-						log_msg(LOG_ERR, 0, "Invalid dedup reference.\n");
-						ctx->valid = 0;
-						break;
-					}
-					src2 = ctx->cbuf + (pos1 - offset);
-					memcpy(pos2, src2, len);
-				} else {
-					struct stat sb;
-
-					/*
-					 * Must reference data already written to the output.
-					 * Output can be short if an earlier chunk failed; an
-					 * mmap() beyond EOF would SIGBUS.
-					 */
-					if (pos1 + len > offset || fstat(ctx->out_fd, &sb) == -1 ||
-					    pos1 + len > (uint64_t)sb.st_size) {
-						log_msg(LOG_ERR, 0, "Invalid dedup reference.\n");
-						ctx->valid = 0;
-						break;
-					}
-					adj = pos1 % ctx->pagesize;
-					src2 = mmap(NULL, len + adj, PROT_READ, MAP_SHARED, ctx->out_fd, pos1 - adj);
-					if (src2 == MAP_FAILED) {
-						log_msg(LOG_ERR, 1, "MMAP failed ");
-						ctx->valid = 0;
-						break;
-					}
-					memcpy(pos2, src2 + adj, len);
-					munmap(src2, len + adj);
-				}
-				pos2 += len;
-				sz += len;
-			}
-		}
-		*size = data_sz;
-		return;
-	}
-
-	/*
-	 * Handling for per-segment Deduplication.
-	 * First pass re-create the rabin block array from the index metadata.
-	 * Second pass copy over blocks to the target buffer to re-create the original segment.
-	 */
-	slab_cache_add(sizeof (rabin_blockentry_t));
-	for (blk = 0; blk < blknum; blk++) {
-		if (ctx->blocks[blk] == 0)
-			ctx->blocks[blk] = (rabin_blockentry_t *)slab_alloc(NULL, sizeof (rabin_blockentry_t));
-		len = ntohl(U32_P(&dedupe_index[blk]));	/* U32_P: see utils.h */
-		ctx->blocks[blk]->hash = 0;
-		if (len == 0) {
-			ctx->blocks[blk]->hash = 1;
-
-		} else if (!(len & RABIN_INDEX_FLAG)) {
-			ctx->blocks[blk]->length = len;
-			ctx->blocks[blk]->offset = pos1;
-			pos1 += len;
-		} else {
-			bsize_t blen;
-
-			ctx->blocks[blk]->length = 0;
-			if (len & GET_SIMILARITY_FLAG) {
-				ctx->blocks[blk]->offset = pos1;
-				ctx->blocks[blk]->index = (len & RABIN_INDEX_VALUE) | SET_SIMILARITY_FLAG;
-				blen = get_bsdiff_sz(buf + pos1);
-				pos1 += blen;
-			} else {
-				ctx->blocks[blk]->index = len & RABIN_INDEX_VALUE;
-			}
-		}
-	}
-
-	for (blk = 0; blk < blknum; blk++) {
-		int rv;
-		bsize_t newsz;
-
-		if (ctx->blocks[blk]->hash == 1) continue;
-		if (ctx->blocks[blk]->length > 0) {
-			len = ctx->blocks[blk]->length;
-			pos1 = ctx->blocks[blk]->offset;
-		} else {
-			oblk = ctx->blocks[blk]->index;
-
-			if (oblk & GET_SIMILARITY_FLAG) {
-				oblk = oblk & CLEAR_SIMILARITY_FLAG;
-				len = ctx->blocks[oblk]->length;
-				pos1 = ctx->blocks[oblk]->offset;
-				newsz = data_sz - sz;
-				rv = bspatch(buf + ctx->blocks[blk]->offset, buf + pos1, len, pos2, &newsz);
-				if (rv == 0) {
-					log_msg(LOG_ERR, 0, "Failed to bspatch block.\n");
-					ctx->valid = 0;
-					break;
-				}
-				pos2 += newsz;
-				sz += newsz;
-				if (sz > data_sz) {
-					log_msg(LOG_ERR, 0, "Dedup data overflows chunk.\n");
-					ctx->valid = 0;
-					break;
-				}
-				continue;
-			} else {
-				len = ctx->blocks[oblk]->length;
-				pos1 = ctx->blocks[oblk]->offset;
-			}
-		}
-		memcpy(pos2, buf + pos1, len);
-		pos2 += len;
-		sz += len;
-		if (sz > data_sz) {
+		if (len > data_sz - sz) {
 			log_msg(LOG_ERR, 0, "Dedup data overflows chunk.\n");
 			ctx->valid = 0;
 			break;
 		}
+		if (flag == 0) {
+			if (len > dlen - dpos) {
+				log_msg(LOG_ERR, 0, "Dedup block past the chunk data.\n");
+				ctx->valid = 0;
+				break;
+			}
+			memcpy(ctx->cbuf + sz, src + dpos, len);
+			dpos += len;
+		} else {
+			/* A reference: its file offset takes two more entries. */
+			if (nent - blk - 1 < 2) {
+				log_msg(LOG_ERR, 0, "Dedup index too short.\n");
+				ctx->valid = 0;
+				break;
+			}
+			pos1 = LE64(U64_P(idx));
+			idx += (RABIN_ENTRY_SIZE * 2);
+			blk += 2;
+			if (dedupe_copy_ref(ctx, pos1, len, offset, sz) != 0) {
+				log_msg(LOG_ERR, 0, "Invalid dedup reference.\n");
+				ctx->valid = 0;
+				break;
+			}
+		}
+		sz += len;
+	}
+	return (sz);
+}
+
+/*
+ * First pass of per-segment dedupe recovery: fill ctx->blocks[] from the
+ * chunk's index of blknum entries, which buf holds after the header,
+ * followed by dlen bytes of block data.  A literal block gets its offset
+ * in buf and its length; a duplicate the index of the block it repeats;
+ * a delta block that index (with SET_SIMILARITY_FLAG) and the offset of
+ * its patch.  Every entry other than a literal gets length 0, so a
+ * reference to it can be told from a reference to a literal.  Returns 0,
+ * or -1 if a block or patch runs past the data.
+ */
+static int
+dedupe_index_blocks(dedupe_context_t *ctx, uchar_t *buf, uint32_t blknum, uint64_t dlen)
+{
+	pc_u32u_t *dedupe_index;	/* buffer offsets are unaligned */
+	uint64_t pos1, end;
+	uint32_t blk, len;
+	bsize_t blen;
+
+	dedupe_index = (pc_u32u_t *)(buf + RABIN_HDR_SIZE);
+	pos1 = (uint64_t)blknum * RABIN_ENTRY_SIZE + RABIN_HDR_SIZE;
+	end = pos1 + dlen;
+	for (blk = 0; blk < blknum; blk++) {
+		rabin_blockentry_t *be;
+
+		if (ctx->blocks[blk] == 0)
+			ctx->blocks[blk] = (rabin_blockentry_t *)slab_alloc(NULL,
+			    sizeof (rabin_blockentry_t));
+		if ((be = ctx->blocks[blk]) == NULL) {
+			log_msg(LOG_ERR, 0, "Out of memory.\n");
+			return (-1);
+		}
+		len = ntohl(U32_P(&dedupe_index[blk]));	/* U32_P: see utils.h */
+		be->hash = 0;
+		be->length = 0;
+		if (len == 0) {
+			be->hash = 1;
+		} else if (!(len & RABIN_INDEX_FLAG)) {
+			if (len > end - pos1)
+				return (-1);
+			be->length = len;
+			be->offset = pos1;
+			pos1 += len;
+		} else if (len & GET_SIMILARITY_FLAG) {
+			blen = get_bsdiff_sz(buf + pos1, end - pos1);
+			if (blen == 0)
+				return (-1);
+			be->offset = pos1;
+			be->index = (len & RABIN_INDEX_VALUE) | SET_SIMILARITY_FLAG;
+			pos1 += blen;
+		} else {
+			be->index = len & RABIN_INDEX_VALUE;
+		}
+	}
+	return (0);
+}
+
+/*
+ * Second pass of per-segment dedupe recovery: copy the blocks that
+ * dedupe_index_blocks() described into ctx->cbuf, up to data_sz bytes.
+ * Duplicate and delta blocks must refer to a literal block.  Returns the
+ * bytes restored, clearing ctx->valid on a block that does not fit.
+ */
+static uint64_t
+dedupe_restore_blocks(dedupe_context_t *ctx, uchar_t *buf, uint32_t blknum,
+    uint64_t data_sz)
+{
+	rabin_blockentry_t *be, *ob;
+	uint64_t sz;
+	uint32_t blk, oblk;
+	bsize_t newsz;
+
+	sz = 0;
+	for (blk = 0; blk < blknum; blk++) {
+		be = ctx->blocks[blk];
+		if (be->hash == 1)
+			continue;
+		ob = be;
+		if (be->length == 0) {
+			oblk = be->index & CLEAR_SIMILARITY_FLAG;
+			if (oblk >= blknum || ctx->blocks[oblk]->length == 0) {
+				log_msg(LOG_ERR, 0, "Invalid dedup block reference.\n");
+				ctx->valid = 0;
+				break;
+			}
+			ob = ctx->blocks[oblk];
+		}
+		if (be->length == 0 && (be->index & GET_SIMILARITY_FLAG)) {
+			newsz = data_sz - sz > INT32_MAX ? INT32_MAX : (bsize_t)(data_sz - sz);
+			if (bspatch(buf + be->offset, buf + ob->offset, ob->length,
+			    ctx->cbuf + sz, &newsz) == 0) {
+				log_msg(LOG_ERR, 0, "Failed to bspatch block.\n");
+				ctx->valid = 0;
+				break;
+			}
+			sz += newsz;
+			continue;
+		}
+		if (ob->length > data_sz - sz) {
+			log_msg(LOG_ERR, 0, "Dedup data overflows chunk.\n");
+			ctx->valid = 0;
+			break;
+		}
+		memcpy(ctx->cbuf + sz, buf + ob->offset, ob->length);
+		sz += ob->length;
+	}
+	return (sz);
+}
+
+/*
+ * Rebuild a deduplicated chunk into ctx->cbuf.  buf holds the dedupe
+ * header, the block index and the block data, and *size on entry the
+ * number of block data bytes (what the data decompressor produced);
+ * *size returns the restored size.  Everything in buf comes from the
+ * file: each count, index, offset and length is checked before use, and
+ * any that does not fit clears ctx->valid.  A global chunk (GLOBAL_FLAG)
+ * takes the index token, ctx->index_sem; it is refused, without waiting,
+ * if ctx was not set up for global dedupe.
+ */
+void
+dedupe_decompress(dedupe_context_t *ctx, uchar_t *buf, uint64_t *size)
+{
+	uint32_t blknum;
+	uint64_t data_sz, sz, indx_cmp, data_sz_cmp, deduped_sz, dedupe_index_sz, dlen;
+
+	parse_dedupe_hdr(buf, &blknum, &dedupe_index_sz, &data_sz, &indx_cmp, &data_sz_cmp,
+	    &deduped_sz);
+	dlen = *size;
+	*size = data_sz;
+	ctx->valid = 1;
+
+	if (blknum & GLOBAL_FLAG) {
+		if (ctx->dedupe_flag != RABIN_DEDUPE_FILE_GLOBAL) {
+			log_msg(LOG_ERR, 0, "Global dedup chunk in a file without it.\n");
+			ctx->valid = 0;
+			return;
+		}
+		Sem_Wait(ctx->index_sem);
+		sz = dedupe_decompress_global(ctx, buf, blknum & CLEAR_GLOBAL_FLAG, dlen,
+		    data_sz);
+	} else {
+		if (ctx->blocks == NULL || blknum > ctx->blknum) {
+			log_msg(LOG_ERR, 0, "Invalid dedup block count.\n");
+			ctx->valid = 0;
+			return;
+		}
+		if (dedupe_index_blocks(ctx, buf, blknum, dlen) != 0) {
+			log_msg(LOG_ERR, 0, "Dedup block past the chunk data.\n");
+			ctx->valid = 0;
+			return;
+		}
+		sz = dedupe_restore_blocks(ctx, buf, blknum, data_sz);
 	}
 	if (ctx->valid && sz < data_sz) {
 		log_msg(LOG_ERR, 0, "Too little dedup data processed.\n");
 		ctx->valid = 0;
 	}
-	*size = data_sz;
 }

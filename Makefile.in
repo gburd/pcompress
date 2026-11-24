@@ -717,6 +717,8 @@ fuzz-build: $(LIB)
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_compress.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_seek_index \
 			$(TEST_CPPFLAGS) test/fuzz/fuzz_seek_index.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
+		clang -fsanitize=fuzzer,address -o buildtmp/fuzz_dedupe \
+			$(TEST_CPPFLAGS) test/fuzz/fuzz_dedupe.c $(OBJS) $(LDLIBS) -lstdc++ @OMP_FLAGS@ @OMP_LIBS@; \
 		for t in fuzz_chunk fuzz_manifest; do \
 			clang -fsanitize=fuzzer,address -g -Iinclude -o buildtmp/$$t test/fuzz/$$t.c \
 				-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ || exit 1; \
@@ -724,7 +726,7 @@ fuzz-build: $(LIB)
 		clang -fsanitize=address -g -Iinclude -o buildtmp/fuzz_seeds test/fuzz/seeds.c \
 			-L. -l$(LINKLIB) $(PROG_RPATH) @TEST_RPATH@ && \
 		mkdir -p buildtmp/fuzz-seeds/chunk buildtmp/fuzz-seeds/manifest \
-		    buildtmp/fuzz-seeds/seek_index && \
+		    buildtmp/fuzz-seeds/seek_index buildtmp/fuzz-seeds/dedupe && \
 		ASAN_OPTIONS=detect_leaks=0 buildtmp/fuzz_seeds buildtmp/fuzz-seeds || exit 1; \
 	else \
 		echo "SKIP: clang not found; fuzz harnesses require clang with libFuzzer support"; \
@@ -736,6 +738,7 @@ fuzz: fuzz-build
 	@echo "  buildtmp/fuzz_compress -max_total_time=60"
 	@echo "  buildtmp/fuzz_crc -max_total_time=60"
 	@echo "  buildtmp/fuzz_seek_index -max_total_time=60 corpus/ buildtmp/fuzz-seeds/seek_index"
+	@echo "  buildtmp/fuzz_dedupe -max_total_time=60 corpus/ buildtmp/fuzz-seeds/dedupe"
 	@echo "  buildtmp/fuzz_chunk -max_total_time=60 corpus/ buildtmp/fuzz-seeds/chunk"
 	@echo "  buildtmp/fuzz_manifest -max_total_time=60 corpus/ buildtmp/fuzz-seeds/manifest"
 
@@ -744,6 +747,7 @@ topclean:
 	$(RM) $(LIBBSC_CPP_OBJS) $(LIBBSC_C_OBJS) $(LIBBSCLIB)
 	$(RM) buildtmp/test_* buildtmp/bench_algos* buildtmp/bench_chunk*
 	$(RM) buildtmp/fuzz_decompress buildtmp/fuzz_crc buildtmp/fuzz_compress buildtmp/fuzz_seek_index
+	$(RM) buildtmp/fuzz_dedupe
 	$(RM) buildtmp/fuzz_chunk buildtmp/fuzz_manifest buildtmp/fuzz_seeds
 	$(RM_RF) buildtmp/fuzz-seeds
 	$(RM) test.log
