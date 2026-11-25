@@ -111,6 +111,11 @@ elif san_ok thread; then
 		OMP_TOOL_LIBRARIES=$archer; export OMP_TOOL_LIBRARIES
 		TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 suppressions=$d/ci/tsan.supp"
 		export TSAN_OPTIONS
+		# As the ASan step: the archive tests need a writable TMPDIR, and
+		# PCOMPRESS_SANITIZE stops the fd-leak check from counting the
+		# symbolizer's pipes (ci/build-test.sh sets both for ASan).
+		mkdir -p "$d/tsantmp"; TMPDIR="$d/tsantmp"; export TMPDIR
+		PCOMPRESS_SANITIZE=1; export PCOMPRESS_SANITIZE
 		for t in test_reentrant test_api test_public test_chunk test_sem; do
 			echo "== $t"; buildtmp/$t || return 1
 		done
