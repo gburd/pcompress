@@ -1443,6 +1443,28 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
  * arc_utf8_end() before the thread returns. Where no UTF-8 locale exists
  * the locale is left alone (names then go out as raw bytes, as before).
  */
+#ifndef _WIN32
+/*
+ * One UTF-8 locale for the whole process, made once and never freed: a
+ * locale_t may be used by several threads at once, and a newlocale() and
+ * freelocale() per thread made glibc load and unload its locale data
+ * concurrently (synchronised by a lock inside glibc that ThreadSanitizer
+ * cannot see, so it reported races there).
+ */
+static pthread_once_t utf8_once = PTHREAD_ONCE_INIT;
+static locale_t utf8_loc = (locale_t)0;
+
+static void
+utf8_locale_init(void)
+{
+	static const char *names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
+	size_t i;
+
+	for (i = 0; i < sizeof (names) / sizeof (names[0]) && utf8_loc == (locale_t)0; i++)
+		utf8_loc = newlocale(LC_CTYPE_MASK, names[i], (locale_t)0);
+}
+#endif
+
 static void *
 arc_utf8_begin(void)
 {
@@ -1451,15 +1473,10 @@ arc_utf8_begin(void)
 	(void) setlocale(LC_CTYPE, ".UTF-8");
 	return (NULL);
 #else
-	static const char *names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
-	locale_t loc = (locale_t)0;
-	size_t i;
-
-	for (i = 0; i < sizeof (names) / sizeof (names[0]) && loc == (locale_t)0; i++)
-		loc = newlocale(LC_CTYPE_MASK, names[i], (locale_t)0);
-	if (loc != (locale_t)0)
-		(void) uselocale(loc);
-	return ((void *)loc);
+	pthread_once(&utf8_once, utf8_locale_init);
+	if (utf8_loc != (locale_t)0)
+		(void) uselocale(utf8_loc);
+	return ((void *)utf8_loc);
 #endif
 }
 
@@ -1470,10 +1487,8 @@ arc_utf8_end(void *loc)
 #ifdef _WIN32
 	(void) loc;
 #else
-	if (loc != NULL) {
+	if (loc != NULL)
 		(void) uselocale(LC_GLOBAL_LOCALE);
-		freelocale((locale_t)loc);
-	}
 #endif
 }
 
