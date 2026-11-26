@@ -99,8 +99,4 @@ int scrypt_params_ok(const scrypt_params_t *kp);
 int scrypt_derive(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
     size_t saltlen, const scrypt_params_t *kp, uint8_t *key, size_t keylen);
 
-#ifndef _WIN32
-#define	HAVE_POSIX_MEMALIGN
-#endif
-
 #endif /* !_CRYPTO_SCRYPT_H_ */

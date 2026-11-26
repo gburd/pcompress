@@ -87,7 +87,10 @@ library directory; then `make install LIBDIR=...`), `--enable-lto`,
 `--enable-debug`, `--enable-coverage` (then `make coverage`),
 `--disable-zstd`, `--with-openssl=<dir>`. `CC`, `CXX`, `CFLAGS` and
 `LDFLAGS` from the environment are honoured; Clang is used with
-`CC=clang CXX=clang++`. `make static` links one static binary
+`CC=clang CXX=clang++`. `sh ci/pgo-build.sh` makes a profile-guided
+build in a clean clone or worktree (it refuses a tree with untracked
+files, since it runs `git clean -fdx`; it measured within a few percent
+of a plain build, so releases do not use it). `make static` links one static binary
 (`buildtmp/pcompress-static`; fully static with musl). Release packages
 (RPM, Debian, static binaries) and how to verify a download are in
 `packaging/README.md`.
@@ -177,6 +180,7 @@ Third-Party Dependency Licenses
 | xxHash         | BSD                | Non-cryptographic hashing      |
 | Keccak (SHA-3) | Public Domain      | SHA-3 checksums                |
 | BLAKE2         | CC0 / Apache-2.0   | Fast checksums (default)       |
+| BLAKE3         | CC0 / Apache-2.0   | Chunk ids (pc_chunk_id2)       |
 | Skein          | Public Domain      | Cryptographic hash             |
 
 See the COPYING and COPYING.LESSER files for the full LGPL license text.
@@ -563,7 +567,9 @@ Advanced usage
                 relative offsets to absolute values which compress better. The given
                 chunk is split into 32KB blocks and some heuristics are used per block
                 to identify whether it represents x86 instruction stream or not. This
-                works only when archiving.
+                works only when archiving. ARM64 and RISC-V executables and
+                libraries go through the XZ Utils branch filters instead; an
+                archive with such members needs pcompress 4.5 or later to extract.
 
        -j       Enable PackJPG processing for Jpeg files. This works only when archiving.
 

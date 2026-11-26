@@ -29,9 +29,11 @@ done > "$T/in"
 echo "secretpassw0rd" > "$T/pw"
 
 # expect <status> <label> <args...>: run pcompress, check exit status.
+# TMO: seconds before a run counts as hung.
+TMO=120
 expect() {
 	want=$1; label=$2; shift 2
-	timeout 120 $PCOMPRESS "$@" >"$T/out.log" 2>&1 </dev/null
+	timeout "$TMO" $PCOMPRESS "$@" >"$T/out.log" 2>&1 </dev/null
 	got=$?
 	if [ $got -ge 124 ]; then
 		log_fail "$label: crashed or hung (status $got)"
@@ -124,6 +126,8 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 	rm -f "$T/in.pz"
 	echo "secretpassw0rd" > "$T/pw"
 	case "$o" in *"-s "*) cs="" ;; *) cs="-s 64k" ;; esac
+	# A password with a plain file is refused before any chunk is read.
+	case "$o" in *"-e "*) dw="-w $T/pw" ;; *) dw="" ;; esac
 	if ! $PCOMPRESS -c $a $cs $o "$T/in" >/dev/null 2>&1; then
 		log_fail "$a $o: compress"; continue
 	fi
@@ -135,7 +139,7 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 		cp "$T/in.pz" "$T/c.pz"; flip "$T/c.pz" $off
 		echo "secretpassw0rd" > "$T/pw"
 		rm -f "$T/c.out"
-		timeout 120 $PCOMPRESS -d -w "$T/pw" "$T/c.pz" "$T/c.out" >/dev/null 2>&1
+		timeout 120 $PCOMPRESS -d $dw "$T/c.pz" "$T/c.out" >/dev/null 2>&1
 		st=$?
 		if [ $st -ge 124 ]; then
 			log_fail "$a $o: flip@$off crashed/hung ($st)"; ok=0
@@ -148,7 +152,7 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 		dd if="$T/in.pz" of="$T/c.pz" bs=$len count=1 2>/dev/null
 		echo "secretpassw0rd" > "$T/pw"
 		rm -f "$T/c.out"
-		timeout 120 $PCOMPRESS -d -w "$T/pw" "$T/c.pz" "$T/c.out" >/dev/null 2>&1
+		timeout 120 $PCOMPRESS -d $dw "$T/c.pz" "$T/c.out" >/dev/null 2>&1
 		st=$?
 		if [ $st -ge 124 ] || [ $st -eq 0 ]; then
 			log_fail "$a $o: truncated to $len: status $st"; ok=0
@@ -156,6 +160,55 @@ for spec in "zstd:-l6" "lz4:-l3" "lzma:-l6" "bzip2:-l6" "ppmd:-l6" "lzfx:-l6" "z
 	done
 	[ $ok -eq 1 ] && log_pass "$a $o: corruption/truncation rejected"
 done
+
+# A first chunk length of chunk size + 256, the most the reader allowed:
+# more than the buffer's slack for zstd, a heap overflow under ASan.
+# Header 24 bytes and its CRC32, then the big-endian length.
+rm -f "$T/in.pz"
+if $PCOMPRESS -c zstd -l 1 -s 64k "$T/in" >/dev/null 2>&1; then
+	cp "$T/in.pz" "$T/long.pz"
+	printf '\000\000\000\000\000\001\001\000' |
+	    dd of="$T/long.pz" bs=1 seek=28 conv=notrunc 2>/dev/null
+	head -c 70000 /dev/zero >> "$T/long.pz"
+	# The message, not just the status: ASan also exits 1. Where the
+	# buffer has the full 256 bytes of slack (it depends on the codec's
+	# bound) the read fits, and the header check refuses the chunk instead.
+	expect 1 "chunk length past its buffer"	-d "$T/long.pz" "$T/long.out"
+	grep -q -E "Compressed length too big|Header CRC verification failed" "$T/out.log" ||
+	    log_fail "chunk length past its buffer: not refused"
+else
+	log_fail "zstd -s 64k: compress"
+fi
+
+# Version 13 (DESIGN.md, Versioning): a file is read when its flags are
+# all known, refused with a clear message when one is not. The header
+# CRC is recomputed, so only the version rule can refuse it.
+rm -f "$T/in.pz"
+if command -v python3 >/dev/null 2>&1 &&
+    $PCOMPRESS -c zstd -l 1 -s 64k "$T/in" >/dev/null 2>&1; then
+	for case in known unknown; do
+		python3 - "$T/in.pz" "$T/v13.pz" $case <<'PYEOF'
+import struct, sys, zlib
+d = bytearray(open(sys.argv[1], "rb").read())
+d[8:10] = struct.pack(">H", 13)
+if sys.argv[3] == "unknown":
+    d[10:12] = struct.pack(">H", struct.unpack(">H", d[10:12])[0] | 0x8000)
+d[24:28] = struct.pack(">I", zlib.crc32(bytes(d[:24])))
+open(sys.argv[2], "wb").write(d)
+PYEOF
+		rm -f "$T/v13.out"
+		if [ $case = known ]; then
+			expect 0 "version 13, known flags: read" -d "$T/v13.pz" "$T/v13.out"
+			cmp -s "$T/in" "$T/v13.out" || log_fail "version 13, known flags: output"
+		else
+			expect 1 "version 13, unknown flag: refused" -d "$T/v13.pz" "$T/v13.out"
+			grep -q "features this build does not know" "$T/out.log" ||
+			    log_fail "version 13, unknown flag: message"
+		fi
+	done
+else
+	SKIP=$((SKIP + 1)); echo "  SKIP: version 13 (no python3)"
+fi
 
 echo ""
 echo "--- Corrupt archive ---"
@@ -175,6 +228,48 @@ if $PCOMPRESS -a -c zstd -l 6 "$T/tree" "$T/arc" >/dev/null 2>&1; then
 	[ $ok -eq 1 ] && log_pass "archive corruption rejected"
 else
 	log_fail "archive create"
+fi
+
+# Metadata chunks with lengths past the 3 MB metadata buffer: a stored
+# length (read into the buffer before any check: a heap overflow) and an
+# original length under a CRC32 recomputed to match, as anyone can.
+if command -v python3 >/dev/null 2>&1 &&
+    $PCOMPRESS -a -c lz4 -s 64k "$T/tree" "$T/meta" >/dev/null 2>&1; then
+	python3 - "$T/meta.pz" "$T/mlen.pz" "$T/morig.pz" "$T/mback.pz" "$T/dback.pz" <<'PYEOF'
+import struct, sys, zlib
+d = open(sys.argv[1], "rb").read()
+pos = 28				# header and its CRC32
+while True:
+    n = struct.unpack(">Q", d[pos:pos + 8])[0]
+    if n == 1:
+        break
+    pos += 8 + n + 32 + 4 + 1		# length, BLAKE256, CRC32, flags, data
+a = bytearray(d)
+a[pos + 8:pos + 16] = struct.pack("<Q", 8 << 20)
+open(sys.argv[2], "wb").write(a + bytes(16 << 20))
+b = bytearray(d)
+b[pos + 16:pos + 24] = struct.pack("<Q", 64 << 20)
+b[pos + 89:pos + 93] = bytes(4)
+b[pos + 89:pos + 93] = struct.pack("<I", zlib.crc32(bytes(b[pos:pos + 93])))
+open(sys.argv[3], "wb").write(b)
+# Lengths that wrap a seek back onto themselves: a metadata chunk length
+# the main reader skips (16 bytes back), and a data chunk length the
+# metadata thread skips (8 bytes back). Both used to loop for good.
+open(sys.argv[4], "wb").write(d[:28] + struct.pack(">Q", 1) +
+    struct.pack("<Q", (1 << 64) - 93) + d[28:])
+c = bytearray(d)
+c[28:36] = struct.pack(">Q", (1 << 64) - 45)
+open(sys.argv[5], "wb").write(c)
+PYEOF
+	mkdir -p "$T/xm1" "$T/xm2" "$T/xm3" "$T/xm4"
+	expect 1 "metadata chunk length past its buffer" -d "$T/mlen.pz" "$T/xm1"
+	expect 1 "metadata original length past its buffer" -d "$T/morig.pz" "$T/xm2"
+	TMO=20
+	expect 1 "metadata chunk length seeking back" -d "$T/mback.pz" "$T/xm3"
+	expect 1 "data chunk length seeking back (metadata thread)" -d "$T/dback.pz" "$T/xm4"
+	TMO=120
+else
+	SKIP=$((SKIP + 1)); echo "  SKIP: metadata chunk lengths (no python3)"
 fi
 
 # A hand-made archive with an absolute path and a "../" entry must extract

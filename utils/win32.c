@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <termios.h>
 #include <ftw.h>
+#include "pc_alloc.h"
 
 /* This file defines the functions the macros in win32.h name. */
 #undef	open
@@ -94,7 +95,7 @@ utf8_to_wide(const char *path)
 		errno = ENOENT;
 		return (NULL);
 	}
-	if ((w = malloc((size_t)len * sizeof (wchar_t))) == NULL) {
+	if ((w = pc_malloc((size_t)len * sizeof (wchar_t))) == NULL) {
 		errno = ENOMEM;
 		return (NULL);
 	}
@@ -110,19 +111,19 @@ utf8_to_wide(const char *path)
 	n = GetFullPathNameW(w, 0, NULL, NULL);
 	if (n != 0 && n <= MAX_PATH)
 		return (w);
-	if (n == 0 || (full = malloc((n + 4) * sizeof (wchar_t))) == NULL) {
+	if (n == 0 || (full = pc_malloc((n + 4) * sizeof (wchar_t))) == NULL) {
 		errno = n == 0 ? ENOENT : ENOMEM;
-		free(w);
+		pc_mfree(w);
 		return (NULL);
 	}
 	memcpy(full, L"\\\\?\\", 4 * sizeof (wchar_t));
 	if (GetFullPathNameW(w, n, full + 4, NULL) == 0) {
 		errno = ENOENT;
-		free(w);
-		free(full);
+		pc_mfree(w);
+		pc_mfree(full);
 		return (NULL);
 	}
-	free(w);
+	pc_mfree(w);
 	for (p = full + 4; *p != L'\0'; p++)
 		if (*p == L'/')
 			*p = L'\\';
@@ -149,7 +150,7 @@ pc_win32_stat(const char *path, struct stat *st)
 	    !(len == 3 && w[1] == L':'))
 		w[--len] = L'\0';
 	rv = _wstat64(w, (struct _stat64 *)st);
-	free(w);
+	pc_mfree(w);
 	return (rv);
 }
 
@@ -162,7 +163,7 @@ pc_win32_mkdir(const char *path)
 	if ((w = utf8_to_wide(path)) == NULL)
 		return (-1);
 	rv = _wmkdir(w);
-	free(w);
+	pc_mfree(w);
 	return (rv);
 }
 
@@ -175,10 +176,16 @@ pc_win32_unlink(const char *path)
 	if ((w = utf8_to_wide(path)) == NULL)
 		return (-1);
 	rv = _wunlink(w);
-	free(w);
+	pc_mfree(w);
 	return (rv);
 }
 
+/*
+ * rename() as POSIX has it: an existing target is replaced, which the
+ * CRT's _wrename() refuses (EEXIST). pcompress renames a finished
+ * temporary file over the file it replaces (an in-place -y repair, the
+ * pcbackup example's index).
+ */
 int
 pc_win32_rename(const char *from, const char *to)
 {
@@ -187,10 +194,14 @@ pc_win32_rename(const char *from, const char *to)
 
 	wf = utf8_to_wide(from);
 	wt = wf == NULL ? NULL : utf8_to_wide(to);
-	if (wt != NULL)
-		rv = _wrename(wf, wt);
-	free(wf);
-	free(wt);
+	if (wt != NULL) {
+		if (MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING))
+			rv = 0;
+		else
+			set_errno_win32(GetLastError());
+	}
+	pc_mfree(wf);
+	pc_mfree(wt);
 	return (rv);
 }
 
@@ -208,7 +219,7 @@ pc_win32_fopen(const char *path, const char *mode)
 	if ((w = utf8_to_wide(path)) == NULL)
 		return (NULL);
 	f = _wfopen(w, wmode);
-	free(w);
+	pc_mfree(w);
 	return (f);
 }
 
@@ -234,7 +245,7 @@ walk_append(struct pc_walk *w, size_t len, const wchar_t *name)
 	if (len + 1 + (size_t)n > w->cap) {
 		size_t nc = (len + 1 + (size_t)n) * 2;
 
-		if ((nb = realloc(w->buf, nc)) == NULL) {
+		if ((nb = pc_realloc(w->buf, nc)) == NULL) {
 			errno = ENOMEM;
 			return (-1);
 		}
@@ -276,7 +287,7 @@ walk_path(struct pc_walk *w, size_t len, int base, int level)
 	if (pat == NULL)
 		return (-1);
 	h = FindFirstFileW(pat, &fd);
-	free(pat);
+	pc_mfree(pat);
 	if (h == INVALID_HANDLE_VALUE)
 		return (w->fn(w->buf, &st, FTW_DNR, &ftw));
 	do {
@@ -314,7 +325,7 @@ pc_win32_nftw(const char *path,
 		return (-1);
 	}
 	w.cap = len + 1024;
-	if ((w.buf = malloc(w.cap)) == NULL) {
+	if ((w.buf = pc_malloc(w.cap)) == NULL) {
 		errno = ENOMEM;
 		return (-1);
 	}
@@ -326,7 +337,7 @@ pc_win32_nftw(const char *path,
 	w.flags = flags;
 	w.fn = fn;
 	rv = walk_path(&w, len, base, 0);
-	free(w.buf);
+	pc_mfree(w.buf);
 	return (rv);
 }
 
@@ -384,7 +395,7 @@ open_shared(const char *path, int flags)
 		return (-1);
 	h = CreateFileW(wpath, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 	    NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
-	free(wpath);
+	pc_mfree(wpath);
 	if (h == INVALID_HANDLE_VALUE) {
 		set_errno_win32(GetLastError());
 		return (-1);
@@ -603,9 +614,11 @@ socketpair(int domain, int type, int protocol, int sv[2])
 
 /*
  * realpath(): GetFullPathNameW() gives the absolute path; the file must
- * exist, as POSIX requires. The result is UTF-8, without the \\?\ prefix
- * utf8_to_wide() may add, and its separators are '/', which Windows
- * accepts and pcompress's path handling (PATHSEP_CHAR) expects.
+ * exist, as POSIX requires. A result it allocates is malloc() memory, as
+ * POSIX says, for free() (pc_realpath() copies it). The result is UTF-8,
+ * without the \\?\ prefix utf8_to_wide() may add, and its separators are
+ * '/', which Windows accepts and pcompress's path handling (PATHSEP_CHAR)
+ * expects.
  */
 char *
 realpath(const char *path, char *resolved)
@@ -623,27 +636,27 @@ realpath(const char *path, char *resolved)
 	if (pc_win32_stat(path, (struct stat *)&st) == -1 || (w = utf8_to_wide(path)) == NULL)
 		return (NULL);
 	n = GetFullPathNameW(w, 0, NULL, NULL);
-	if (n == 0 || (full = malloc(n * sizeof (wchar_t))) == NULL) {
+	if (n == 0 || (full = pc_malloc(n * sizeof (wchar_t))) == NULL) {
 		errno = n == 0 ? ENOENT : ENOMEM;
-		free(w);
+		pc_mfree(w);
 		return (NULL);
 	}
 	n = GetFullPathNameW(w, n, full, NULL);
-	free(w);
+	pc_mfree(w);
 	skip = wcsncmp(full, L"\\\\?\\", 4) == 0 ? 4 : 0;
 	len = n == 0 ? 0 : WideCharToMultiByte(CP_UTF8, 0, full + skip, -1, NULL, 0, NULL, NULL);
 	if (len == 0 || (resolved != NULL && len > PATH_MAX)) {
 		errno = len == 0 ? ENOENT : ENAMETOOLONG;
-		free(full);
+		pc_mfree(full);
 		return (NULL);
 	}
 	if ((buf = resolved) == NULL && (buf = malloc((size_t)len)) == NULL) {
 		errno = ENOMEM;
-		free(full);
+		pc_mfree(full);
 		return (NULL);
 	}
 	(void) WideCharToMultiByte(CP_UTF8, 0, full + skip, -1, buf, len, NULL, NULL);
-	free(full);
+	pc_mfree(full);
 	for (p = buf; *p != '\0'; p++)
 		if (*p == '\\')
 			*p = '/';

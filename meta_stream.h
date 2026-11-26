@@ -44,6 +44,9 @@ extern "C" {
 /** Compressed length value that indicates a metadata chunk. */
 #define METADATA_INDICATOR	1
 
+/** Largest metadata chunk, before and after compression. */
+#define	METADATA_CHUNK_SIZE	(3 * 1024 * 1024)
+
 /**
  * Metadata chunk header format:
  * - 64-bit integer = 1: Compressed length (metadata indicator)
@@ -71,9 +74,11 @@ typedef struct _meta_msg {
  * @param pc            Pointer to pc_ctx_t (cast to void*).
  * @param file_version  File format version.
  * @param comp_fd       File descriptor for compressed output.
+ * @param chunksize     The file's chunk size: bounds the data chunks the
+ *                      decompressing thread skips.
  * @return Allocated metadata context, or NULL on failure.
  */
-meta_ctx_t *meta_ctx_create(void *pc, int file_version, int comp_fd);
+meta_ctx_t *meta_ctx_create(void *pc, int file_version, int comp_fd, uint64_t chunksize);
 
 /**
  * Send data through the metadata stream for compression.

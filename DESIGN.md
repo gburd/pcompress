@@ -24,10 +24,14 @@ diagrams. Read this before changing `pcompress.c`, `rabin/` or
 
 ```
 file header   algo[8] version[2] flags[2] chunksize[8] level[4]
-              [salt, nonce, keylen, KDF cost if encrypted]  CRC32 or HMAC
+              [salt, KDF cost if encrypted]  CRC32 or AEAD tag
 chunk*        len_cmp[8] digest[n] mac[m] flags[1] payload [orig_size[8]]
-trailer       0[8]
+trailer       0[8]  [end record if encrypted: counts[16] tag[16]]
 ```
+
+(Version 12, encrypted. Versions 7 to 11 have salt, nonce, key length
+and, from 11, the scrypt cost in the header, an HMAC in place of the
+tag, and no end record.)
 
 Header fields and `len_cmp` are big-endian; dedupe indexes and the
 metadata-chunk length are little-endian. `len_cmp == 0` is end of stream.
@@ -42,11 +46,29 @@ header has `FLAG_META_STREAM`. Do not add another sentinel in the length
 field; extend the flags instead.
 
 **Versioning.** `VERSION` in `pcompress.h` is the format version (10).
-Encrypted files are written as `VERSION_KDF` (11): the same chunks, with
-the scrypt cost added to the header. Keeping plain files at 10 lets older
-releases still read them. The reader accepts `VERSION-4` up to
+Encrypted files are written as `VERSION_AEAD` (12, since 4.5): an AEAD
+per chunk bound to its stream and position, and an end record (see
+Encryption); 4.3 and 4.4 wrote them as `VERSION_KDF` (11), which this
+reader still reads. Keeping plain files at 10 lets older releases still
+read them, and 4.4 refuses version 12 as newer than it knows. The reader accepts `VERSION-4` up to
 `VERSION_MAX`; older-version quirks are handled inline (look for
 `version <`). Bump it only when the format changes, never for a release.
+
+Version 13 (`VERSION_FLAGS`, since 4.5) is version 10, or version 12
+when encrypted, with one rule added: the reader refuses a header flag
+bit it does not know (`FLAG_KNOWN`). Readers of 10 to 12 ignore unknown
+bits, so a new bit alone could not stop them from misreading data that
+needs it. A feature that changes how data must be decoded therefore
+takes a free flag bit, and `write_file_header()` writes version 13 for
+any flags outside the version 12 set (`FLAG_V12`): 4.4 and older refuse the file as newer, and a later build
+without the feature refuses the bit, rather than either producing wrong
+output. A file that uses no such feature keeps version 10 or 12, so
+older releases still read it. Encrypted version 13 files follow every
+version 12 rule (Argon2id, the AEAD streams, the end record); an
+unencrypted one is a version 10 file in all but the number. Taken
+bits: 0x40 `FLAG_REFLATE` (archive members may be reflate records, see
+"Reflate") and 0x2000 `FLAG_BCJ_ARM` (archive members may be
+BCJ-filtered, see "Archive mode"). Free: 0x8, 0x80, 0x4000, 0x8000.
 
 ## Pipeline
 
@@ -114,6 +136,213 @@ Before logging an error, a failure site may call
 `pc_last_error_code()` returns. An error logged with `errno` counts as
 `PC_ERR_IO` unless a site said otherwise.
 
+`pc_set_progress()` cancels the same way, from the calling thread: after
+it hands a chunk to a worker, `report_progress()` calls the host's
+callback, and a non-zero return records `PC_ERR_CANCELLED`, sets
+`pctx->cancelled` and `main_cancel`, and leaves the feed loop. The usual
+teardown then releases and joins every thread; `cancelled` makes the
+job fail (a cancel is not a worker failure, so `t_errored` stays 0) and
+removes the output file the job created.
+
+## Seek index
+
+`-X` appends an index after the end-of-stream marker, so that `-r`
+(a byte range of a single file) and `-R` (one archive member) decode
+only the chunks they need (`seek_index.c` builds and parses the body;
+`pcompress.c` places, authenticates and uses it).
+
+```
+... chunk*  0[8]  [end record]  body  tag[t]  len[8]  "PCSEEK01"
+```
+
+`len` (little-endian) is the body's size and `t` is the chunk tag size:
+the checksum size, or 16 (the AEAD tag) when encrypted. The end record
+is there only in encrypted files (format version 12). The body is
+little-endian:
+
+| field | size |
+|-------|------|
+| magic `PCSXIDX1` | 8 |
+| t, then 7 zero bytes | 8 |
+| file offset of the end-of-stream marker | 8 |
+| chunk count, member count | 8 + 8 |
+| per chunk: file offset of its length field, uncompressed length, its tag (the `t` bytes after its length field: its checksum, or its AEAD tag) | 16 + t |
+| per member: PAX stream offset, length, u16 name length, name | 18 + n |
+
+**Old readers.** A reader stops at the end-of-stream marker and never
+reads past it, so 4.4 and earlier read an unencrypted `-X` file
+(format version 10) byte for byte as any other (checked with the 4.4.0
+binary by ci/xcompat.sh, for files and archives). This needs no new
+version or flag, and an old reader cannot misread the index because it
+never reads it. Encrypted files are version 12, which 4.4 refuses
+whether or not they have an index.
+
+**Authentication.** `sx_seal()` and `sx_check()` are the one place the
+tag is defined. Without encryption it is the file's chunk checksum over
+the body, which anyone can recompute: it catches damage, not forgery,
+like the chunk checksums. With encryption (version 12) the body is
+sealed with the file's AEAD as stream 4, ordinal 0 (see "Encryption"),
+and the associated data is the body's length, the trailer magic, and
+the end record that precedes the body. The end record is itself under
+the file's key and holds the chunk counts, so an index cannot be moved
+to another file, cut, or put after other chunks, and nothing else is
+sealed in stream 4, so no other piece of the file passes as an index.
+The body records the end marker's offset, so it cannot be moved along
+the file either. Each chunk entry holds that chunk's own tag (its
+checksum, or its 16-byte AEAD tag), and a random read checks every
+chunk it reads against it before decoding. Without encryption that is
+what binds a chunk to its place; with it, each chunk is also opened as
+its own ordinal of stream 1 (the index gives the ordinal), so a moved
+or swapped chunk fails twice over (test_seek.sh swaps two).
+
+**Random reads of version 12 files.** A random read stops inside the
+chunks, so it does not reach the end record and does not check the end
+record's own tag. It does not need to: the index tag covers the end
+record's bytes and the index holds the chunk count and every chunk's
+offset and tag, so a truncated or extended file, or one whose chunks
+were dropped, fails the index or the chunk check. A full decode of an
+indexed file checks the end record as usual and then accepts the index
+after it unparsed (the trailer magic must be last).
+
+**Untrusted.** The reader checks the trailer magic, then bounds `len`
+by the file and by 1 GB, reads the 8 bytes before the body (they must
+be the zero marker), and verifies the tag over the body mapped from the
+file (constant time for the checksum; the AEAD only checks, decrypting
+into a scratch buffer it wipes), so a forged length costs no memory. Only
+then is the body read into memory; its tag is checked again on that
+copy (the file may have changed), and it is decrypted and parsed. `sx_parse()` checks every count against the body's
+size, the end marker against the file, every chunk inside
+[header, marker) in increasing order and decoding to 1 to chunksize
+bytes, and every member inside the stream, in order, with a nonempty
+name and no NUL. `test_seek_index` pins the encoding with a vector
+built independently in Python, and `test/fuzz/fuzz_seek_index.c` fuzzes
+the parser.
+
+**What it serves.**
+
+- Global dedupe (`-G`, and the automatic choice at level > 3) makes a
+  chunk depend on any chunk before it. `-X` turns the automatic choice
+  off and refuses `-G`. Per-chunk dedupe (`-D`, `-F`) and delta (`-E`)
+  stay chunk-local and work.
+- The metadata stream puts entry headers in chunks of their own, so a
+  member would be two streams. `-X` turns it off (as `-T` does). A
+  member is then one range of the PAX stream: its record runs from its
+  header to the end of its padding, written by `write_header()` after it
+  finishes the previous entry. A member read feeds that range to the
+  extractor, followed by two zero blocks, so libarchive sees a
+  one-member archive and applies the usual path checks.
+- Pipe output works, since the index goes at the end. Reading needs a
+  seekable file: `-r`/`-R` on standard input, on a file without the
+  trailer, or on a global-dedupe or metadata-stream file is refused
+  with a message. It never falls back to a full decode.
+- Decoding the chosen chunks runs on the usual workers. `dec_feed()`
+  seeks to each one and starts numbering at the first (the number keys
+  its cipher stream). The writer checks that each chunk decodes to the
+  length the index gives it, and keeps the part inside the range.
+
+Cost, on a c7i.4xlarge, zstd -l6, cold cache: a 1.3 GB tar of /usr/lib
+(21525 files) with `-T -D` against `-T -D -X` grows from 426.6 MB to
+428.6 MB (+0.47%: a 2.0 MB index plus 0.1% from the PAX stream's
+per-member alignment). Time is 25.7 s against 26.0 s, within run-to-run
+noise (25.2 to 26.3 s). Extracting one 20 KB member near the end takes
+0.08 s with the index and 3.0 s without. The index is opt-in because
+`-X` gives up global dedupe and the metadata stream (those make the
+default archive 419.5 MB), not because of its own size.
+
+## Repair data
+
+`-Y <percent>` appends Reed-Solomon parity to a finished `.pz` file, and
+`pcompress -y file.pz [out.pz]` rebuilds damaged blocks from it
+(`repair.c`). Decompression does not repair: a damaged file fails as
+before, and the error names `-y`. Repair needs no password and no parse
+of the chunks: it treats the file as bytes.
+
+```
+... chunk*  0[8]  [end record]  [seek index]  header  crc[n]  parity  crc[n]  header  "PCREPR01"
+```
+
+The region comes last and covers every byte before it (`plen` bytes:
+the header, the chunks, the end record and the seek index), cut into
+blocks of `B` bytes, the last one padded with zeros. Blocks are grouped
+into stripes of `k` data and `m` parity blocks, a systematic code over
+GF(2^8) (polynomial 0x11d) with the Cauchy generator 1 / (i XOR (m + r))
+for parity row i and data row r, so that any `k` of a stripe's `k + m`
+blocks rebuild it. Stripes are interleaved `G` to a group: data block
+`b` of group `g` is row `(b mod kG) / G` of stripe `b mod G`, so a run of
+`G * m` damaged blocks costs each stripe at most `m`. The writer uses
+4 KB blocks (doubled until there are at most 2^20 of them), `m` = 4 and
+`k` = 400 / percent where that fits the 255 points of the field, and
+`G` = 64, so at 10% a run of 1 MB of bad sectors is repaired anywhere in
+the file; scattered damage is repaired while no stripe has more than `m`
+bad blocks.
+
+`crc[n]` is the CRC-32 of each of the `n` data and parity blocks, in
+that order, little-endian; it is how repair finds damage. Both tables
+and both header copies are written; repair uses any good copy and
+rewrites all of them. A copy is good if it parses: its hash covers all
+80 bytes, the tag included, so repair (which has no key) never takes a
+copy with a damaged tag for the good one. Two copies that both parse
+and differ are refused, and nothing is changed. A block whose CRC
+matches neither table entry but which the parity rebuilds to its own
+bytes was good: its entries are what is damaged, and are rewritten.
+The header (80 bytes, little-endian):
+
+| offset | size | field |
+|--------|------|-------|
+| 0 | 8 | magic `PCRPAIR1` |
+| 8 | 4 | block size `B` (512 to 64 KB, a power of 2) |
+| 12 | 2 + 2 + 2 | `k`, `m`, `G` (m at most k, k + m at most 255, G at most 256) |
+| 18 | 2 | flags: 1 sealed (version 12) |
+| 20 | 4 | zero |
+| 24 | 8 | `plen` |
+| 32 | 8 | bytes between the file's trailer (the end marker, or the end record) and the region: the seek index, or 0 |
+| 40 | 8 | region length, header to magic |
+| 48 | 16 | BLAKE2b-128 of bytes 0 to 47, then bytes 64 to 79 |
+| 64 | 16 | flag 1: AEAD tag, else zero |
+
+The parser checks the hash, every limit, the region length against the
+geometry, and that the region ends at the end of the file, before
+anything else is read. The geometry bounds what a crafted header can
+make repair allocate: one stripe of blocks and the per-block tables.
+
+**Old readers.** Like the seek index, the region lies after the end
+marker, which 4.4 and earlier never read past, so they read an
+unencrypted `-Y` file (version 10) as any other (ci/xcompat.sh). A seek
+index reader (`-r`, `-R`) finds the index where the region starts.
+
+**Version 12.** After the end record a reader accepts the end of the
+file, a seek index, or a repair region (in that order, the region
+last), and refuses anything else. A region is accepted only if its
+header is sealed with the file's AEAD as stream 5, ordinal 0, with the
+header's first 48 bytes and the end record as associated data, and if
+the file after the end record is exactly the seek index length the
+header records plus the region. So a region cannot be moved from
+another file, bytes cannot be appended after one, and garbage that
+happens to end in `PCREPR01` is not skipped. The parity and tables are
+not authenticated, and need not be: what repair rebuilds is checked,
+block by block, against its CRC, and then by the chunks' own AEAD tags
+when the file is decompressed. A forged region can at worst make repair
+write bytes that then fail decompression, as the damage would have.
+
+**Cost**, on a c7i.4xlarge (Xeon 8488C), a 1.3 GB tar of `/usr/lib` at
+zstd -l6, 8 MB chunks, 16 threads, warm cache, three runs each:
+
+| -Y | size | time |
+|----|------|------|
+| none | 424.2 MB | 10.50 to 10.70 s |
+| 1 | 430.6 MB (+1.5%) | 10.97 to 11.06 s |
+| 5 | 447.1 MB (+5.4%) | 10.96 to 11.12 s |
+| 10 | 468.1 MB (+10.3%) | 10.97 to 11.03 s |
+| 25 | 532.2 MB (+25.5%) | 11.03 to 11.11 s |
+
+The size is the percent asked for plus the CRC tables (0.2%). The parity
+pass reads the finished file back once (from the page cache here) and
+costs 0.4 to 0.5 s whatever the percent: the multiply runs at memory
+speed with AVX2 (SSSE3 or NEON elsewhere), so the time goes to reading
+and CRC. `-y` on an intact file takes 0.24 to 0.29 s; repairing a run of
+256 KB took 2.9 to 3.8 s, most of it copying the file to a temporary
+name before it is fixed and renamed over the original.
+
 ## Library and contexts
 
 One `pc_ctx_t` is one job; the struct is private (`pcompress.h`) and
@@ -140,11 +369,59 @@ with the caller's descriptors in place of stdin/stdout, in a fresh
 internal context built from the caller's settings, so one `pc_ctx_t` can
 run many jobs. Only the symbols in `libpcompress.map` are exported.
 
+## Embedding
+
+A host runtime (an event loop, a backup daemon) can give the library its
+own process-wide hooks before the first call. They are plain globals set
+once: a host sets them at start-up, before it creates threads that use
+the library, and does not change them while jobs run.
+
+- `pc_set_allocator()`: every allocation in the library's own code goes
+  through `pc_malloc()`, `pc_calloc()`, `pc_realloc()`, `pc_mfree()` and
+  `pc_strdup()` (`utils/pc_alloc.h`, in `allocator.c`), which call the
+  host's functions or the C library's. The `slab_*` wrappers the codecs
+  and the pipeline use call them too. zstd gets them through
+  `ZSTD_customMem`, libbsc through `bsc_init_full()`, lz4 through
+  `LZ4_USER_MEMORY_FUNCTIONS`; lzma, PPMd, zlib and bzip2 through their
+  allocator structs. Aligned memory (BLAKE2b and Keccak states, scrypt)
+  is over-allocated through `pc_malloc()` with the block's own address
+  stored below the aligned one, so there is no `posix_memalign()` /
+  `_aligned_malloc()` split. The first allocation sets a flag, and from
+  then on `pc_set_allocator()` refuses: a block must go back to the
+  allocator it came from.
+  Memory another library allocates goes back through that library:
+  `realpath()` results are copied (`pc_realpath()`) and `free()`d,
+  packJPG/packPNM output is copied into `pc_malloc()` memory
+  (`pc_adopt()`), OpenSSL HMAC contexts go to `HMAC_CTX_free()`.
+  Not covered: libarchive, OpenSSL, the C++ filters (packJPG, packPNM,
+  dispack, the dictionary filter) and the OpenMP runtime. Nothing the
+  library allocates outlives the object that holds it: the extension
+  table is static, and `test_alloc` checks that no block is live once
+  every object is freed.
+- `pc_set_default_log()`: the sink and level `log_msg()` uses when the
+  thread has no context bound, or the bound context has no sink or
+  level of its own (`utils/utils.c`, next to `log_msg()`).
+- `pc_set_thread_hooks()`: every thread the library creates goes through
+  `pc_thread_create()` (`utils/utils.c`), which runs the host's start
+  hook with the thread's name, the thread function, then the stop hook.
+  A thread keeps the hooks that were set when it was created. Threads
+  started inside OpenMP, zstd's pool, lzmaMt and libbsc are not covered.
+
 ## Deduplication
 
-`rabin/rabin_dedup.c` cuts a chunk into content-defined blocks with a
-Rabin rolling hash (`-D`) or fixed blocks (`-F`), hashes each block with
-XXH32 and replaces repeats with references. With `-E`, blocks whose
+`rabin/rabin_dedup.c` cuts a chunk into content-defined blocks (`-D`) or
+fixed blocks (`-F`), hashes each block with XXH32 and replaces repeats
+with references. A content-defined block ends after the first byte past
+`min` (about 1 KB below the `-B` average) where the top 10 bits of the
+gear hash of `chunk.c` are zero, or at 128 KB (64 KB for `-G` below
+`-B3`). Before 4.5 this was a Rabin rolling hash; the decoder reads
+block lengths, so the boundaries are not part of the format and files
+from either version read in both. On a 16-vCPU c7i host the gear scan
+cut single-thread CPU time for `-D` by 18 to 30% (tar of five PostgreSQL
+trees, a tar of `/usr/lib`, two ext4 images) with output within 0.5%
+of Rabin's; `-G` output moved by under 1.2% either way, which is the
+noise of where boundaries fall. FastCDC's normalized chunking deduped
+11% worse at `-G` and is not used. With `-E`, blocks whose
 MinHash sketch matches an earlier block at least `deltac_min_distance`
 bytes away are delta-encoded with bsdiff.
 
@@ -156,7 +433,12 @@ temp file and indexes only a few MinHash values per segment.
 References in a decompressed stream point either into the chunk being
 rebuilt or backwards into the output file (which is `mmap`ed). Both are
 untrusted input: `dedupe_decompress` checks that a reference lies in data
-that already exists before copying it.
+that already exists before copying it.  The index is untrusted too: the
+block count must fit the context's block array, a duplicate or delta block
+must name an earlier literal block, and every literal, reference and
+bsdiff patch must lie inside the chunk's block data and the restored size
+before anything is copied.  `test/fuzz/fuzz_dedupe.c` fuzzes all three
+forms (`-D`, `-F`, `-G`).
 
 ## Hashes
 
@@ -182,7 +464,22 @@ if the output would not fit it returns -1 and the chunk is stored raw.
 Two heap overflows (lz4, libbsc) came from compressors that sized their
 output from the input length instead of `*dstlen`.
 
-Buffers come from the system allocator. Pcompress used to ship a
+Buffers come from the system allocator, or the host's (see Embedding
+below). On Linux, a block of 4 MB or more from the C library's
+allocator is given `madvise(MADV_HUGEPAGE)` over its 2 MB-aligned part
+(`advise_huge()` in `allocator.c`): the chunk buffers and the codecs'
+match tables and suffix arrays are read at random, and with 4 KB pages
+nearly every access missed the TLB. On a c7i.4xlarge with 64 MB chunks
+it cut dTLB load misses from 490 million to 0.3 million (lzma -l 14,
+enwik8 four times) and 530 million to 0.1 million (libbsc, a /usr/lib
+tar), and compress time by 4 to 16% (lz4 -l 1 by 22 to 30%), on
+Graviton3 (c7g.4xlarge) as well. Peak RSS grew by about 1% (a partly
+used huge page at each end of a block). lz4 decompression got 2 to 7%
+slower (its output buffer is written once, and faulting 2 MB pages
+costs more than the TLB saves); the other codecs decompress 1 to 18%
+faster. The host's memory
+from `pc_set_allocator()` is never advised: it is the host's to manage.
+Pcompress used to ship a
 process-wide slab allocator; it was removed in 4.1 because it was not
 safe with several contexts in one process and measured no faster than
 `malloc` (within 2.5% on a 192-core Graviton4, within noise on a
@@ -193,45 +490,110 @@ safe with several contexts in one process and measured no faster than
 `chunk.c` gives backup tools three building blocks; none of them touches
 the `.pz` format.
 
-- **Chunker.** The Rabin rolling hash of the dedupe code (16-byte window,
-  the same polynomial tables), restarted at every boundary. A boundary
+- **Chunker.** A Rabin rolling hash (16-byte window, the polynomial
+  tables of `rabin/rabin_dedup.c`), restarted at every boundary. A boundary
   follows byte *i* once the chunk has `min` bytes and
   `(roll ^ ir[out]) & (avg - 1) == 0`, or at `max`. Since state resets at
   each boundary, the boundaries depend only on the data, never on how it
   was split across `pc_chunker_feed()` calls.
-- **Ids.** BLAKE2b-256, optionally keyed.
+- **Ids.** BLAKE2b-256, optionally keyed (`pc_chunk_id`), or, chosen per
+  repository with `pc_chunk_id2`, BLAKE3-256, keyed with exactly 32
+  bytes. BLAKE3 is the bundled official C code (`crypto/blake3`, 1.8.7),
+  with its own run-time dispatch to SSE2, SSE4.1, AVX2 and AVX-512 on
+  x86 and NEON on little-endian ARM64, portable C elsewhere; only the C
+  intrinsics files are built (no `.S`), so it builds wherever the rest
+  does. Object tags, subkeys and `pc_derive_key` stay BLAKE2b: the id
+  function is the only part that hashes every byte for naming, and
+  derive runs once per repository open, where speed does not matter.
 - **Objects** (`pc_chunk_seal`/`pc_chunk_open`), little-endian:
 
 | offset | size | field |
 |--------|------|-------|
-| 0  | 4  | magic `PCK1` |
-| 4  | 1  | version (1) |
-| 5  | 1  | flags: 1 encrypted, 2 stored raw |
+| 0  | 4  | magic `PCK1`, or `PCK2` when keyed (4.5) |
+| 4  | 1  | version (1, or 2 with `PCK2`) |
+| 5  | 1  | flags: 1 encrypted, 2 stored raw, 4 dictionary (4.5) |
 | 6  | 1  | algorithm id (stable table in `chunk.c`; 0 when raw) |
 | 7  | 1  | level (low 4 bits), adaptive sub-algorithm (high 4) |
 | 8  | 8  | plaintext length |
 | 16 | 24 | nonce (random when encrypted, else 0) |
-| 40 | n  | payload |
-| 40+n | 32 | tag: BLAKE2b-256 over bytes [0, 40+n) |
+| 40 | 32 | dictionary id, only with flag 4 |
+| h  | n  | payload (h is 72 with flag 4, else 40) |
+| h+n | 32 | v1 tag: BLAKE2b-256 over bytes [0, h+n) |
+| h+n | 16 | v2 tag: Poly1305, from XChaCha20-Poly1305 |
 
-With a key, the payload is XSalsa20-encrypted and the tag is keyed
-(encrypt-then-MAC). The encryption and MAC keys are the two halves of
-BLAKE2b-512(caller's key, "pcompress chunk subkeys"). They must not be
-32-byte BLAKE2b outputs: chunk ids are exactly those, keyed with the same
-key over caller data, and they are public as object names. `pc_chunk_open()` checks magic,
+Without a key an object is version 1 with an unkeyed BLAKE2b tag (an
+integrity check). With a key, since 4.5, it is version 2: flag 1 always
+set, the payload sealed with XChaCha20-Poly1305 under the random 24-byte
+nonce and the first half of BLAKE2b-512(caller's key, "pcompress chunk
+aead"), with header bytes [0, h) as associated data, so the whole header
+is authenticated. A random 192-bit nonce per object: a repeat among 2^48
+objects under one key has probability about 2^-96. 4.4 sealed keyed
+objects as version 1: XSalsa20 with the first half of BLAKE2b-512(key,
+"pcompress chunk subkeys") and a BLAKE2b-256 tag keyed with the second
+(encrypt-then-MAC); those still open, and 4.4 refuses version 2 objects
+(unknown magic). Subkeys are halves of 64-byte digests, never 32-byte
+BLAKE2b outputs: chunk ids are exactly those, keyed with the same key
+over caller data, and they are public as object names. Sealing with a
+key ran at 468 MB/s and opening at 681 MB/s with v1 (zstd:3,
+bench_chunk on a Xeon 8488C), 897 and 2226 MB/s with v2: one AEAD pass
+in place of a cipher pass and a BLAKE2b pass. `pc_chunk_open()` checks magic,
 version, flags, algorithm id and the declared length (at most 4 GB, and
 for raw objects exactly the payload length) before anything else, then
 the tag in constant time, and only then decrypts and decompresses into
 exactly the declared length. The algorithm ids never change meaning:
 add new ones at the end.
 
+**Incompressible chunks.** Before running the codec, seal takes 16 runs
+of 128 bytes spread over a chunk of 16 KB or more and computes the
+chi-square statistic of their byte histogram against uniform. If it is
+under 1000 (random bytes score 255), each 256 KB segment of the chunk
+(or the whole chunk, if smaller) is sampled again with 64 runs, and
+both its byte histogram and the histogram of differences between
+neighbouring bytes must score under 350; then the chunk is stored raw
+without compressing. The difference test keeps data whose byte values
+are spread evenly but follow each other predictably (0..255 ramps,
+lookup tables, counters) out of the raw path; the per-segment samples
+keep a compressible region of a 4 MB chunk from falling between them.
+On gear chunks of random data and H.264 video this skips 99% of chunks
+and sealing at zstd -9 runs at 730 MB/s instead of 41; on `.gz`, `.xz`
+and `.zst` files it skips 77% and loses 0.03% of the input in size; on
+text, code, a tar of `/usr/lib`, ramps and raw RGB test images it skips
+nothing and costs about 1% of seal speed. The `.pz` pipeline does not use it. Tried there (4 MB
+chunks, one thread), it made zstd:3 output of `.gz`/`.xz`/`.zst` files
+0.7% larger, since those chunks still hold headers and padding worth
+compressing, and changed neither size nor time at lzma:6 or adapt2:6
+(those runs take the preprocessing path, which it did not cover).
+
+**Dictionaries** (`pc_set_dict`, 4.5). With flag 4 the payload is a zstd
+frame compressed with a dictionary, and bytes 40-71 name it: BLAKE2b-256
+of the dictionary bytes (`pc_dict_id`). The tag covers the id, so it
+cannot be swapped. The flag needs algorithm 1 (zstd) and is never set
+with flag 2: an object stored raw needs no dictionary. Open compares the
+id with the context's dictionary after the tag check and fails with
+`PC_ERR_DICT` when they differ or none is set, so a wrong dictionary is
+an error, not garbage. zstd's own 4-byte dictionary id is left out of
+the frame (`ZSTD_c_dictIDFlag` 0): the object's id already says which
+one, with no chance of collision between repositories. The id costs 32
+bytes, so seal keeps the dictionary frame only when it is at least 33
+bytes smaller than the input, and `pc_chunk_seal_bound()` is unchanged.
+Seal uses the dictionary only for chunks under 128 KB; larger ones are
+plain zstd objects. zstd compresses with the match-finder tables of the
+digested dictionary, sized for small inputs, and on 1 to 4 MB chunks
+those cost up to 8% in size (`PCK_DICT_CHUNK` in chunk.c has the
+numbers). Objects without a dictionary are byte-for-byte what 4.4 writes;
+4.4 and older refuse flag 4 (an unknown flag) as corrupt.
+
 **Key files** (`pc_keyfile_create`/`open`, 128 bytes): magic `PCKEY1`,
-KDF id (1 = scrypt), log2 N, r, p, a 16-byte salt and a 24-byte nonce,
+KDF id and its cost in bytes 6-15, a 16-byte salt and a 24-byte nonce,
 8 reserved bytes, the 32-byte key XSalsa20-encrypted, and a BLAKE2b-256
-tag over everything before it. scrypt yields 64 bytes: 32 to encrypt, 32
-for the tag. New files use N=2^17, r=8, p=1; open refuses log2 N outside
-10-22, r outside 1-32 and p outside 1-16, so a crafted file cannot make
-it allocate more than 512 MB.
+tag over everything before it. The KDF yields 64 bytes: 32 to encrypt,
+32 for the tag. KDF 1 is scrypt (byte 7 log2 N, then r and p as 32-bit
+words), written up to 4.4; open refuses log2 N outside 10-22, r outside
+1-32 and p outside 1-16, so a crafted file cannot make it allocate more
+than 512 MB. KDF 2 is Argon2id (byte 7 lanes, then memory in KiB and
+passes), written since 4.5 with 128 MiB, 4 passes and 4 lanes (0.29 s
+on a Xeon 8488C); open refuses more than 1 GiB, 16 passes, 16 lanes or
+4 GiB of memory traffic, before any work. 4.4 refuses KDF 2 files.
 
 **Chunk index** (`pc_index_*`): the file is `PCIDX1`, two zero bytes,
 then 32-byte ids in the order they were added. It is only appended to
@@ -241,6 +603,14 @@ id's hash and its record number, not the id: a match is confirmed by
 reading the record back, so memory is 11 to 21 bytes per id. The `.pz` global-dedupe index
 (`rabin/global/index.c`) is separate and still per file: making it
 persistent would make one `.pz` depend on others.
+
+**Id filter** (`pc_idfilter_*`): an in-memory Binary Fuse filter (Graf
+and Lemire 2022, FastFilter's `binaryfusefilter.h`, 8-bit fingerprints)
+over the first 8 bytes of each id, built once from a list of ids. It
+answers "certainly absent" or "maybe", with about 9 bits per id and 0.4%
+false positives; a "maybe" is confirmed in an exact table. It has no
+on-disk form: a caller rebuilds it from its own table at start-up (2 s
+for 10M ids).
 
 **Manifests** (`pc_manifest_*`): `PCMF2`, three zero bytes, a u64 entry
 count, then the entries sorted by path bytes, each: u16 path length and
@@ -299,19 +669,242 @@ pcompress carries a small patch to libarchive
 - two xattr helpers used to tag filtered entries.
 
 On extraction, filters are reversed per entry; if a filter cannot decode
-an entry the stored bytes are written unchanged and the path is listed in
-`filter_failures.txt`.
+an entry the stored bytes are written unchanged, the path is listed in
+`filter_failures.txt`, and the extraction fails (exit status 1,
+`PC_ERR_CORRUPT`) once every entry is written.
+
+## Reflate
+
+`-Z` (archive mode only, off by default) stores the deflate streams of
+zip containers (zip, jar, odt and the other OpenDocument types, docx,
+xlsx, apk), gzip files and PNG images inflated, so the compressor and
+dedupe see the data inside them, and re-deflates them on extraction
+(`filters/reflate/`). It is the precomp approach: a stream is kept only
+if deflating its inflated bytes again reproduces it bit for bit with
+one of a few zlib parameter sets. preflate (Apache-2.0), which records
+a deflater's decisions so any stream can be rebuilt, was the other
+option; it is C++, unmaintained since 2018, and much larger.
+
+**Reproducing deflate forever.** zlib's output for given parameters is
+not promised across versions, and zlib-ng's differs from zlib's, so
+re-deflating with the system library could fail years later. The filter
+deflates with its own copy of zlib 1.3.1 (`filters/reflate/zlib`: the
+deflate half only, portable C, every symbol prefixed `pcz_` so it never
+meets the system's), and inflates with the system zlib. That copy must
+never change; a newer deflate would go beside it, chosen by a new value
+in the record. Each record is decoded again at compress time and the
+member is stored as is unless the result is identical, so what is
+written always extracts; on extraction a record that does not rebuild
+(or fails its checksum) is written as stored, listed in
+`filter_failures.txt`, and fails the extraction, as for the other
+filters.
+
+Each stream is inflated into a budget of `RF_MAX_OUT` (256 MB) per
+member, spent whether the stream is kept or not, so a zip of many
+deflate bombs costs one bomb's worth of work.
+
+**Finding streams.** By structure only: gzip members from the start of
+the file; zip local file entries walked from the start (method 8, sizes
+from the header or, with a data descriptor, from where inflate ends;
+encrypted and zip64 entries are skipped or end the walk); a PNG's IDAT
+data when it is one chunk holding one zlib stream. A container is
+recognised by extension or, under `-Z`, by its magic bytes. Streams
+under 256 bytes are left alone. The parameter sets tried are
+(level, memLevel) = (6, 8), (9, 8), (1, 8), (6, 9), (9, 9), (1, 9),
+(4, 8), and (6, 8) with the filtered strategy, window from the
+container: every set that matched a stream of the measured corpus, the
+one that matched the member's previous stream first. A wrong set is
+rejected within its first output block (`rf_deflate_match()` compares
+as it deflates).
+
+**The record** (little-endian) replaces the member's data, behind the
+8-byte length the filters share:
+
+| field | size |
+|-------|------|
+| magic `PCRF`, version 1, zero | 4 + 1 + 1 |
+| stream count | 2 |
+| original length | 8 |
+| check of the original (FNV-1a over 8-byte words, xor length) | 8 |
+| per stream: offset in the original, deflated length, inflated length, level, memLevel, window bits, strategy | 28 |
+| the original with each stream replaced by its inflated bytes | rest |
+
+Members are at most 64 MB and records at most 256 MB. The record is
+usually larger than the member, so the entry is stored with the
+record's size and the member's size goes in a second private xattr
+(`_._pc_filter_size`), which extraction and listing use. The decoder
+treats the record as hostile: it checks the magic, version, counts,
+every offset against the original length and the ones before it,
+every parameter's range, and that the body is exactly the gaps plus
+the inflated lengths, before allocating; a failed re-deflate or
+checksum yields no output (`test_reflate`, `fuzz_reflate`).
+
+**Old readers.** An archive with `-Z` sets `FLAG_REFLATE` and is format
+version 13, so 4.4 refuses it as newer and a version 13 reader without
+the filter would refuse the flag. Without the flag, readers before
+this one would extract a record as the member's bytes.
+
+**What it buys.** Measured on a c7i.4xlarge (adapt2, 16 threads, best
+of three; every archive extracted and compared):
+
+| corpus | size | -l6 | -l6 -Z | -l9 | -l9 -Z | -l6 time, -Z time |
+|--------|------|-----|--------|-----|--------|-------|
+| 10 jars (Maven Central, Ubuntu) | 8.1 MB | 7.21 | 4.46 (-38%) | 7.21 | 4.37 (-39%) | 0.10 s, 1.08 s |
+| 10 versions of 3 jars (guava, commons-lang3, pgjdbc) | 17.2 MB | 10.29 | 6.08 (-41%) | 10.98 | 5.51 (-50%) | 0.10 s, 2.04 s |
+| 80 LibreOffice templates (ott, ots, otp) | 8.1 MB | 7.91 | 7.53 (-4.8%) | 7.91 | 7.52 (-5.0%) | 0.08 s, 0.65 s |
+| 123 docx/xlsx (Apache POI test data) | 24.2 MB | 18.42 | 17.16 (-6.9%) | 17.83 | 17.20 (-3.6%) | 0.25 s, 4.55 s |
+| 203 gzip files (`/usr/share/doc`, 3 tarballs) | 13.3 MB | 12.47 | 12.45 (-0.2%) | 12.44 | 12.35 (-0.8%) | 0.07 s, 2.77 s |
+| 23 PNG (`/usr/share`) | 0.5 MB | 0.480 | 0.465 (-3.2%) | 0.478 | 0.461 (-3.6%) | 0.02 s, 1.28 s |
+| `/usr/share/doc` | 39.2 MB | 14.93 | 14.06 (-5.9%) | 14.89 | 13.90 (-6.7%) | 0.80 s, 6.70 s |
+
+Sizes in MB. Extraction took 0.2 to 1.5 s in place of 0.01 to 0.8 s.
+Java tools and LibreOffice use zlib at its default, so nearly all their
+streams are kept (98 to 99% of their deflated bytes). Most Office files
+are written by other deflaters, and only 17 of the 123 had a stream
+kept. Debian's `.gz` files come from GNU gzip, whose deflate is not
+zlib's: none of the 124 made with `gzip -9` matched, while the 78 made
+with zlib did; release tarballs did not match either. The time goes to
+the search: on streams no set reproduces, `longest_match` of each
+failed attempt (87% of the profile), so it is slowest where it helps
+least.
+
+**BCJ filters.** With the executable filter on (`-x`, or level 9 and
+above), members that are little-endian ARM64 or RISC-V code (ELF by
+`e_machine` 183 or 243, ARM64 PE by machine 0xaa64, ARM64 Mach-O) go
+through the branch filters of XZ Utils 5.8.1 (`filters/bcj/bcj.c`, 0BSD):
+call targets and address computations become absolute, so repeated calls
+to a function become repeated bytes. A member of 4 KB to 256 MB is
+converted in place as one stream starting at offset 0, and tagged
+`BCJ-ARM64` or `BCJ-RISCV` like the other filters; extraction runs the
+inverse, which accepts any bytes. The coders are xz's, unchanged, and must
+stay byte-identical forever: a changed coder would extract old archives
+wrongly. The x86 E8E9 pass skips chunks of these types. Filtered members
+are bytes 4.4 would extract unconverted, so the archive takes header flag
+`FLAG_BCJ_ARM` and version 13. The header is written before any member
+is read, so the scan that lists the members also reads the first 512
+bytes of each candidate until one matches; with none, the flag is not
+set and the filter is switched off for the run, and the archive stays
+version 10 (12 encrypted).
 
 ## Encryption
 
-A key is derived from the password and a random salt with scrypt, at
-N = 2^17, r = 8, p = 1 (128 MB, about 0.3 s) since 4.3; the header
-records the cost, and the reader checks its bounds before any work.
-Files up to format version 10 used a fixed N = 2^11 and did not record
-it. Chunks are encrypted in place with AES-CTR or XSalsa20, using the chunk
-number in the nonce, and authenticated with HMAC over the header and
-ciphertext. The HMAC is checked before decryption. Passwords and key
-material are zeroed after use.
+**Format version 12 (since 4.5).** One key per file: Argon2id (RFC 9106)
+of the password and a random 256-bit salt, at 128 MiB, 4 passes and 4
+lanes (0.29 s on a Xeon 8488C). The header records the salt and cost;
+the reader refuses more than 1 GiB, 16 passes, 16 lanes or 4 GiB of
+memory traffic before any work. `-e SALSA20` selects XChaCha20-Poly1305
+(OpenSSL's ChaCha20-Poly1305 behind HChaCha20, draft-irtf-cfrg-xchacha)
+and `-e AES` AES-256-GCM (OpenSSL); 16-byte keys (`-k 16`) are not used
+any more, the AEAD key is always 32 bytes.
+
+Every authenticated piece of the file belongs to a *stream* and has an
+*ordinal* in it (`pz_crypt.h`):
+
+| stream | id | ordinal | sealed |
+|--------|----|---------|--------|
+| header | 0 | 0 | nothing; associated data: every header byte before the tag |
+| data chunks | 1 | chunk number from 0 | payload; AD: `len_cmp`, flags, original size |
+| metadata chunks | 2 | metadata chunk number from 0 | payload; AD: the 25 header bytes (indicator, lengths, flags) |
+| end record | 3 | 0 | nothing; AD: data chunk count, metadata chunk count (u64 BE each) |
+| seek index | 4 | 0 | the index body; AD: its length (u64 LE), `PCSEEK01`, the end record |
+| repair header | 5 | 0 | nothing; AD: the header's first 48 bytes, the end record (see "Repair data") |
+
+The nonce of a piece is its stream id (u32 BE) and ordinal (u64 BE),
+zero-padded to the AEAD's length (12 bytes for GCM, 24 for XChaCha), and
+its associated data starts with the same 12 bytes. Nonce uniqueness: a
+key belongs to one file, since the salt is 256 random bits from the
+system generator (no fallback: no random bytes, no file), and within a
+file each (stream, ordinal) pair is sealed once, because data and
+metadata chunks are numbered by the single thread that hands them out,
+and the header and end record are written once. Ordinals and the
+counters behind them are 64 bits end to end, so they do not wrap: 4.4
+held the chunk number in 32 bits, and chunk 2^32 would have reused
+chunk 0's nonce. Encrypted version 11 and earlier files are read only up
+to chunk 2^32 - 1 (metadata chunk 2^31 - 1): past that their writer had
+wrapped, and the reader refuses the file. So no nonce repeats
+under a key, with either AEAD, and a deterministic nonce avoids GCM's
+96-bit random-nonce limit. In 4.4 (version 11) data chunk *k* and
+metadata chunk *k* used the same key and CTR nonce, a two-time pad; here
+they are different streams.
+
+What the tags bind: a chunk opens only at its own position in its own
+stream, so reordering, repeating, or moving a chunk between streams
+fails (the nonce differs and so does the AD). The chunk's length field,
+flags and original size are AD, so none can change. The end record,
+after the zero length that ends the chunks, holds both chunk counts; the
+reader checks it after the last chunk (the data reader counts the
+metadata chunks it skips; the metadata thread checks its own count when
+it reaches the end), so dropping chunks off the end, or the end record
+itself, fails. Decompressed output is written as chunks verify, so a
+file truncated after chunk *k* has written *k* chunks when the error is
+reported; pcompress then exits non-zero and removes the output file if
+it created it (not a caller's descriptor, standard output, or files an
+archive extraction already wrote). The same holds for any chunk that
+fails. A reader given a password refuses a file that is not
+encrypted, since a plain file put in place of an encrypted one would be
+authenticated by nothing. Chunks keep the version 10 layout with the 16-byte tag in
+the `mac` field and no digest: the AEAD tag is the integrity check.
+
+The seek index (`-X`, see "Seek index") is sealed as stream 4, ordinal
+0, with the end record in its associated data; the per-chunk tags it
+lists are inside the sealed body. After the end record the reader
+accepts the end of the file, or a region whose last 8 bytes are the
+index trailer magic `PCSEEK01` (it does not parse the region; the
+index reader authenticates it), or a repair region sealed for this file
+(see "Repair data"), and refuses anything else as corrupt, so data
+appended to a file is not silently ignored.
+
+**Version 11 and earlier** (read only). scrypt derives the key, at
+N = 2^17, r = 8, p = 1 for version 11 (the header records the cost, and
+the reader checks its bounds before any work), and a fixed N = 2^11 for
+version 10 and earlier. Chunks are encrypted in place with AES-CTR or
+XSalsa20, using the chunk number in the nonce, and authenticated with
+HMAC over the header and ciphertext, checked before decryption. These
+files have the weaknesses above, which is why new files are version 12.
+
+Passwords and key material are zeroed after use, with pcmono_wipe()
+(Monocypher's volatile store, which the compiler cannot drop as a dead
+store): password buffers once the key is derived, the version 12 file
+key when the job returns (compress or decompress, the end record
+written or checked), and the chunk-object subkeys after each call.
+Decrypted chunk buffers are not wiped before they are freed: on enwik8
+(8 MB chunks, 16 threads, x86-64) that cost 45 ms on a 385 ms
+decompression, 11%.
+
+## Page cache
+
+A file pcompress reads or writes is used once, front to back, and
+would otherwise fill the page cache and push out what the rest of the
+machine had cached (`utils/pc_cache.c`). For regular files only (never
+pipes): the input is opened with `POSIX_FADV_SEQUENTIAL`, and every
+32 MB consumed is dropped with `POSIX_FADV_DONTNEED`; an archive member
+is dropped one 1 MB map at a time as it is copied. Output pages are
+dirty, and `DONTNEED` ignores dirty pages, so on Linux the writer hands
+each 32 MB window to writeback with `sync_file_range()` and drops it one
+window later, by which time most of it is written. It does so only past
+a tenth of RAM (the kernel's default background writeback threshold): a
+smaller output stays cached, since starting writeback earlier made a
+1.5 GB job wait for the disk (8.2 s against 0.4 s). Elsewhere (FreeBSD,
+illumos) only input is dropped; macOS and Windows have no
+`posix_fadvise()` and get no hints. The output of a global-dedupe
+restore stays cached, since later chunks map it to copy references.
+The hints are always on: they cost no throughput (see the Changelog).
+They apply only to files the library opens: descriptors a caller hands
+to `pc_compress_fd()` or `pc_decompress_fd()` are the caller's to
+manage (`own_fd()`).
+
+Archive extraction with a metadata stream reads the file through two
+descriptors: the main reader, which drops pages behind it, and the
+metadata thread's. Pages the main reader drops are not read again from
+disk. The main reader seeks over metadata chunks without reading them,
+and the metadata thread seeks over data chunks, so the only pages both
+read are those holding chunk length fields, at most one per chunk.
+Measured cold-cache extractions on a c7i.4xlarge (lz4 archives of
+/usr/lib at 1.3 GB, of /usr/share and /usr/include, of 100000 files of
+200 B to 3 KB, and of a mix of those with 60 MB files; chunks from
+64 KB to 64 MB) read 0.5 to 0.7% more from disk than the file's size,
+the same as a build without the hints, while adding half as much to
+the page cache (569 MB against 1049 MB for the 520 MB mixed archive).
 
 ## Portability
 

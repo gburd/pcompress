@@ -25,12 +25,22 @@
 .Nm pc_chunker_finish ,
 .Nm pc_chunker_free ,
 .Nm pc_chunk_id ,
+.Nm pc_chunk_id2 ,
 .Nm pc_set_key ,
 .Nm pc_chunk_seal ,
 .Nm pc_chunk_open ,
+.Nm pc_dict_train ,
+.Nm pc_set_dict ,
+.Nm pc_dict_id ,
 .Nm pc_keyfile_create ,
 .Nm pc_keyfile_open ,
-.Nm pc_version
+.Nm pc_idfilter_new ,
+.Nm pc_idfilter_maybe ,
+.Nm pc_version ,
+.Nm pc_set_allocator ,
+.Nm pc_set_default_log ,
+.Nm pc_set_thread_hooks ,
+.Nm pc_set_progress
 .Nd parallel compression, deduplication and encryption library
 .Sh LIBRARY
 libpcompress
@@ -62,6 +72,8 @@ libpcompress
 .Ft int
 .Fn pc_decompress_fd "pc_ctx_t *ctx" "int in_fd" "int out_fd"
 .Ft void
+.Fn pc_set_progress "pc_ctx_t *ctx" "pc_progress_fn fn" "void *arg"
+.Ft void
 .Fn pc_set_log "pc_ctx_t *ctx" "pc_log_fn fn" "void *arg" "int level"
 .Ft const char *
 .Fn pc_last_error "pc_ctx_t *ctx"
@@ -73,6 +85,12 @@ libpcompress
 .Fn pc_cleanup_tempfiles "void"
 .Ft const char *
 .Fn pc_version "void"
+.Ft int
+.Fn pc_set_allocator "const pc_allocator_t *a"
+.Ft void
+.Fn pc_set_default_log "pc_log_fn fn" "void *arg" "int level"
+.Ft int
+.Fn pc_set_thread_hooks "const pc_thread_hooks_t *h"
 .Ft pc_chunker_t *
 .Fn pc_chunker_new "size_t avg" "size_t min" "size_t max"
 .Ft pc_chunker_t *
@@ -86,6 +104,8 @@ libpcompress
 .Ft int
 .Fn pc_chunk_id "const void *buf" "size_t len" "const void *key" "size_t keylen" "uint8_t id[32]"
 .Ft int
+.Fn pc_chunk_id2 "int algorithm" "const void *buf" "size_t len" "const void *key" "size_t keylen" "uint8_t id[32]"
+.Ft int
 .Fn pc_set_key "pc_ctx_t *ctx" "const void *key" "size_t keylen"
 .Ft int
 .Fn pc_derive_key "const uint8_t master[32]" "const char *purpose" "uint8_t out[32]"
@@ -97,6 +117,12 @@ libpcompress
 .Fn pc_chunk_open "pc_ctx_t *ctx" "const void *in" "size_t len" "void *out" "size_t *outlen"
 .Ft size_t
 .Fn pc_chunk_open_size "const void *obj" "size_t len"
+.Ft int
+.Fn pc_dict_train "const void *samples" "const size_t *sizes" "unsigned n" "void *dict" "size_t *dictlen"
+.Ft int
+.Fn pc_set_dict "pc_ctx_t *ctx" "const void *dict" "size_t len"
+.Ft int
+.Fn pc_dict_id "const void *dict" "size_t len" "uint8_t id[32]"
 .Ft size_t
 .Fn pc_keyfile_size "void"
 .Ft int
@@ -115,6 +141,14 @@ libpcompress
 .Fn pc_index_sync "pc_index_t *idx"
 .Ft int
 .Fn pc_index_close "pc_index_t *idx"
+.Ft pc_idfilter_t *
+.Fn pc_idfilter_new "const void *ids" "size_t n"
+.Ft int
+.Fn pc_idfilter_maybe "const pc_idfilter_t *f" "const uint8_t id[32]"
+.Ft size_t
+.Fn pc_idfilter_size "const pc_idfilter_t *f"
+.Ft void
+.Fn pc_idfilter_free "pc_idfilter_t *f"
 .Ft pc_manifest_t *
 .Fn pc_manifest_new "void"
 .Ft int
@@ -216,17 +250,26 @@ Global deduplication needs a seekable output and is refused by
 .Fn pc_compress_fd .
 .It Fn pc_set_encryption
 .Qq AES
-or
+(AES-256-GCM) or
 .Qq SALSA20
-in CTR mode with an HMAC per chunk;
+(XChaCha20-Poly1305), authenticated encryption with every chunk bound to
+its position and an authenticated chunk count at the end (format
+version 12; see
+.Xr pcompress 1 ) ;
 .Dv NULL
 turns encryption off.
 .Fa keylen
-is 16 or 32 bytes, 0 for 32.
+is 16 or 32 bytes, 0 for 32; it is checked but the key is always 32
+bytes.
 .It Fn pc_set_password
 The password, used by the next job; all of it feeds the key derivation
-(scrypt).
+(Argon2id for new files, scrypt for files from 4.4 and earlier).
 It is copied; the caller's buffer is not changed.
+Decompressing a file that is not encrypted with a password set fails
+with
+.Dv PC_ERR_CRYPTO :
+a plain file in place of the expected encrypted one would be
+authenticated by nothing.
 .El
 .Ss Jobs
 .Fn pc_compress_fd
@@ -239,7 +282,13 @@ stream to
 .Fn pc_decompress_fd
 does the reverse and checks every chunk's checksum, or its HMAC if the
 stream is encrypted.
-Neither function closes its descriptors.
+Neither function closes its descriptors, and neither gives the system
+page-cache hints for them
+.Po
+.Fn posix_fadvise ,
+.Fn sync_file_range
+.Pc ;
+it does for files it opens itself.
 Both return 0 on success and \-1 on failure.
 The output of a failed job is incomplete and must not be used.
 .Pp
@@ -251,6 +300,30 @@ Archives
 and files written with global deduplication need
 .Xr pcompress 1
 or the command-line style API.
+.Ss Progress
+.Fn pc_set_progress
+has
+.Fn pc_compress_fd ,
+.Fn pc_decompress_fd
+and
+.Fn start_pcompress
+call
+.Fn fn arg in out
+from the calling thread each time they hand a chunk to a worker.
+.Fa in
+is the input consumed so far and
+.Fa out
+the chunk bytes written so far, without the stream header.
+If
+.Fa fn
+returns non-zero, the job stops: its threads are joined, what it
+allocated is freed, an output file it created is removed (a caller's
+descriptor is left alone, and an archive extraction keeps the files it
+has written), and the call fails with
+.Dv PC_ERR_CANCELLED .
+A NULL
+.Fa fn
+removes the callback.
 .Ss Diagnostics
 Messages from all threads working for a context go to stderr, or to
 .Fa fn
@@ -294,9 +367,18 @@ damaged data
 .It Dv PC_ERR_VERIFY
 a checksum, CRC or HMAC did not match, or the password is wrong
 .It Dv PC_ERR_CRYPTO
-key setup failed or no password was given
+key setup failed, no password was given, or one was given for a file
+that is not encrypted
 .It Dv PC_ERR_INTERNAL
 anything else
+.It Dv PC_ERR_CANCELLED
+the
+.Fn pc_set_progress
+callback stopped the job
+.It Dv PC_ERR_DICT
+the chunk object needs a dictionary the context does not have, or
+.Fn pc_set_dict
+was given one zstd cannot use
 .El
 .Fn pc_strerror
 names a class.
@@ -345,6 +427,18 @@ returns the last chunk.
 BLAKE2b-256 of a chunk, keyed when
 .Fa key
 is given, so that object names do not reveal content hashes.
+.It Fn pc_chunk_id2
+The same with a choice of hash, fixed per repository:
+.Dv PC_ID_BLAKE2B
+is
+.Fn pc_chunk_id ;
+.Dv PC_ID_BLAKE3
+is BLAKE3-256, keyed only with a key of exactly 32 bytes.
+BLAKE3 ran 5.4 times as fast as keyed BLAKE2b on 64 KB chunks of one
+x86-64 core with AVX-512.
+Sealed object tags and
+.Fn pc_derive_key
+stay BLAKE2b.
 .It Fn pc_set_key
 A raw 32-byte key for sealed objects.
 .It Fn pc_derive_key
@@ -357,9 +451,17 @@ instead of using the master key for both; the names are the caller's to
 choose and keep stable.
 .It Fn pc_chunk_seal
 Compresses one chunk with the context's algorithm and level, stores it
-raw if it does not shrink, and with a key encrypts it (XSalsa20, random
-nonce) and authenticates header and payload (keyed BLAKE2b-256).
-Without a key the object has an unkeyed BLAKE2b-256 checksum.
+raw if it does not shrink (or, from 16 KB, if a sampled byte histogram
+says it cannot: compressed, encrypted or random data skips the codec),
+and with a key encrypts and authenticates it with XChaCha20-Poly1305
+(random 192-bit nonce, the header as associated data; object version 2,
+magic
+.Qq PCK2 ,
+which 4.4 and earlier cannot open).
+Without a key the object has an unkeyed BLAKE2b-256 checksum (version 1).
+.Fn pc_chunk_open
+opens both versions, including keyed version 1 objects sealed by 4.4
+(XSalsa20 and a keyed BLAKE2b-256 tag).
 The output buffer needs
 .Fn pc_chunk_seal_bound len
 bytes.
@@ -383,18 +485,51 @@ After opening, compare
 of the result with the name the object was fetched by.
 .Fn pc_chunk_open_size
 reads the plaintext size from the header (unverified) to size the buffer.
+.It Fn pc_dict_train
+Trains a zstd dictionary of at most
+.Fa *dictlen
+bytes (about 110 KB is usual) from
+.Fa n
+samples laid end to end, and sets
+.Fa *dictlen
+to its size.
+The caller stores it, typically as an object of its own.
+Training is deterministic; its working memory comes from the C library.
+.It Fn pc_set_dict
+Copies a dictionary into the context, or removes it (NULL, 0).
+It fails with
+.Dv PC_ERR_DICT
+if zstd cannot use it, and the context then keeps the dictionary it had.
+While one is set,
+.Fn pc_chunk_seal
+needs the zstd algorithm, and the objects under 128 KB it compresses
+record the dictionary's id; pieces under about 8 KB shrink 1.4 to 1.8
+times more, 64 KB chunks barely.
+Larger chunks are sealed without it.
+.Fn pc_chunk_open
+of such an object fails with
+.Dv PC_ERR_DICT
+unless the context holds that same dictionary.
+Raw objects and objects sealed without a dictionary need none.
+Versions before 4.5 refuse dictionary objects.
+.It Fn pc_dict_id
+BLAKE2b-256 of the dictionary bytes: the id objects carry.
 .It Fn pc_keyfile_create
 Makes a random 256-bit key and writes it, wrapped with a password of any
 length, to
 .Fn pc_keyfile_size
 bytes at
 .Fa out
-(scrypt N=2^17 r=8 p=1, then XSalsa20 and a BLAKE2b-256 tag).
+(Argon2id with 128 MiB, 4 passes and 4 lanes, then XSalsa20 and a
+BLAKE2b-256 tag).
+Key files made with scrypt by 4.4 and earlier still open; 4.4 and
+earlier cannot open the Argon2id ones.
 .Fn pc_keyfile_open
 recovers the key; a wrong password or any change to the file fails.
 The KDF and its parameters are stored in the file, and
 .Fn pc_keyfile_open
-refuses parameters beyond 512 MB or unreasonable work.
+refuses parameters beyond 512 MB (scrypt) or 1 GiB (Argon2id) or
+unreasonable work before doing any.
 .It Fn pc_index_open
 Opens or creates a persistent set of 32-byte chunk ids, kept in an
 append-only file, so a backup tool can skip chunks it already stored
@@ -418,6 +553,24 @@ make the tool store a chunk twice, never skip one.
 Use one thread at a time per index.
 Several processes may append to one file; each sees the others' ids at its
 next open.
+.It Fn pc_idfilter_new
+Builds a static Binary Fuse filter, about 9 bits per id, from
+.Fa n
+32-byte ids stored back to back (any order; repeats are allowed).
+It returns NULL on bad arguments or when out of memory.
+.Fn pc_idfilter_maybe
+returns 0 when the id is certainly not in the set and 1 when it may be:
+always for an id the filter was built from, and for about 0.4% of other
+ids.
+It returns \-1 on bad arguments.
+Confirm a 1 in an exact table, such as a
+.Fn pc_index_has
+lookup or a sorted id file.
+The filter cannot grow; rebuild it, and check ids added since then some
+other way.
+.Fn pc_idfilter_size
+returns its memory in bytes.
+Several threads may query one filter at once.
 Only a hash table is held in memory, 11 to 21 bytes per id; the ids stay
 in the file, and a lookup that matches reads its id back to confirm it.
 Callers with their own catalogue need not use it: look ids up there
@@ -496,6 +649,120 @@ is a small deduplicating store built on these calls;
 .Pa examples/backup/pcbackup.c
 a snapshot backup tool (backup, list, restore of everything or one file,
 forget, prune).
+.Ss Embedding
+These set process-wide behaviour for a program that hosts the library.
+Call them before anything else in the library, and before other threads
+use it.
+.Pp
+.Fn pc_set_allocator
+gives the library the host's memory functions:
+.Bd -literal -offset indent
+typedef struct {
+	size_t size;	/* sizeof (pc_allocator_t) */
+	void *(*malloc)(void *ud, size_t n);
+	void *(*realloc)(void *ud, void *p, size_t n);
+	void (*free)(void *ud, void *p);
+	void *ud;
+} pc_allocator_t;
+.Ed
+.Pp
+All three functions are required; library threads call them, so they
+must be thread-safe.
+.Fa realloc
+and
+.Fa free
+are never passed NULL, and
+.Fa realloc
+never a size of 0 (the library frees the block instead).
+A NULL return means out of memory.
+A NULL
+.Fa a
+restores the C library's functions.
+On Linux the library asks for transparent huge pages
+.Pq Fn madvise "MADV_HUGEPAGE"
+on blocks of 4 MB or more from the C library's allocator, never on
+memory from the host's functions.
+Once the library has allocated anything (the first
+.Fn pc_new ,
+.Fn create_pc_context ,
+.Fn pc_chunker_new ,
+.Fn pc_index_open ,
+.Fn pc_manifest_new ,
+.Fn pc_manifest_decode ,
+.Fn pc_keyfile_create ,
+.Fn pc_chunk_seal ,
+and so on), while another thread is inside it, or for a struct whose
+.Fa size
+is too small or that lacks a function, it returns \-1 and changes
+nothing.
+A call that races the first allocation takes effect before it or is
+refused.
+.Pp
+Both structs only ever grow at the end.
+.Fa size
+may be anything from the first version's (the fields up to and
+including
+.Fa ud )
+up: fields the library does not know are ignored, and fields a shorter
+struct lacks count as zero.
+The library's own code, the bundled zstd, lz4 and libbsc, and the
+allocation hooks of lzma, PPMd, zlib and bzip2 use these functions.
+libarchive (archive mode), OpenSSL (see
+.Xr CRYPTO_set_mem_functions 3 ) ,
+the C++ filters (packJPG, packPNM, dispack and the dictionary filter)
+and the OpenMP runtime allocate on their own.
+.Pp
+.Fn pc_set_default_log
+sets the process's default sink: messages from contexts without their
+own
+.Fn pc_set_log
+sink, and messages logged outside any context (for example by
+.Fn pc_set_allocator ) ,
+go to
+.Fn fn arg level msg
+instead of stderr.
+A NULL
+.Fa fn
+restores stderr.
+.Fa level
+is the highest level delivered to it, also for contexts whose own level
+is \-1;
+.Dv PC_LOG_NONE
+delivers nothing and \-1 keeps the current level
+.Pq Dv PC_LOG_INFO at start .
+.Fa fn
+is called from library threads, at the same time for different
+contexts.
+.Pp
+.Fn pc_set_thread_hooks
+runs host code in every thread the library creates:
+.Bd -literal -offset indent
+typedef struct {
+	size_t size;	/* sizeof (pc_thread_hooks_t) */
+	void (*start)(void *ud, const char *name);
+	void (*stop)(void *ud);
+	void *ud;
+} pc_thread_hooks_t;
+.Ed
+.Pp
+.Fa start
+is the first thing a new thread runs, with its name:
+.Ql pc-compress ,
+.Ql pc-decompress ,
+.Ql pc-writer ,
+.Ql pc-meta ,
+.Ql pc-archive
+or
+.Ql pc-extract .
+.Fa stop
+is the last thing it runs before it exits; the thread calls the
+allocator only between the two.
+Either may be NULL, not both; a NULL
+.Fa h
+removes the hooks.
+It returns 0, or \-1 for a struct that is too small or has no function.
+Threads that OpenMP, zstd's worker pool, lzmaMt or libbsc start are not
+covered.
 .Ss Command-line style API
 .Fn create_pc_context ,
 .Fn init_pc_context "ctx" "argc" "argv" ,
@@ -547,6 +814,12 @@ a snapshot backup tool.
 The descriptor API, per-context logging and error classes appeared in
 pcompress 4.1; chunks, key files, the chunk index and manifests in 4.2.
 The command-line style API dates from 2.x.
+.Fn pc_set_allocator ,
+.Fn pc_set_default_log ,
+.Fn pc_set_thread_hooks
+and
+.Fn pc_set_progress
+appeared after 4.4.
 .Sh CAVEATS
 Only the symbols declared in
 .In pcompress/pcompress.h

@@ -31,6 +31,7 @@
 #include <libgen.h>
 #include <termios.h>
 #include <unistd.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -59,6 +60,9 @@ processor_cap_t proc_info;
 pthread_mutex_t f_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int cur_log_level = LOG_INFO;
 static log_dest_t ldest = {LOG_OUTPUT, LOG_INFO, NULL};
+/* pc_set_default_log(): the process sink, if set, ahead of ldest. */
+static pc_log_fn def_fn;
+static void *def_arg;
 
 struct RiffHdr {
     char ckID [4];
@@ -267,6 +271,7 @@ init_algo_props(algo_props_t *props)
 	props->c_max_threads = 1;
 	props->d_max_threads = 1;
 	props->delta2_span = 0;
+	props->deltac_min_distance = 0;
 }
 
 /*
@@ -489,7 +494,104 @@ set_log_level(int level)
 		cur_log_level = level;
 }
 
+/*
+ * The process default sink and level: for every context without its own
+ * pc_set_log() sink or level, and for messages logged with no context
+ * bound. fn == NULL restores stderr. level is the highest level
+ * delivered, PC_LOG_NONE delivers nothing, and -1 keeps the current
+ * level (PC_LOG_INFO until changed). Plain globals: a host sets them
+ * before its threads use the library.
+ */
+void DLL_EXPORT
+pc_set_default_log(pc_log_fn fn, void *arg, int level)
+{
+	def_fn = fn;
+	def_arg = arg;
+	if (level == PC_LOG_NONE || (level >= PC_LOG_ERR && level <= PC_LOG_VERBOSE))
+		cur_log_level = level;
+}
+
 static __thread log_state_t *bound_log;
+
+/* pc_set_thread_hooks(): start/stop are NULL when none are installed. */
+static pc_thread_hooks_t thr_hooks;
+#define	THREAD_HOOKS_V1_SIZE	(offsetof(pc_thread_hooks_t, ud) + sizeof (void *))
+
+/*
+ * Run start() and stop() of h around every thread the library creates
+ * from now on; NULL removes them. -1 (nothing changed) for a struct
+ * smaller than the first version's or that has neither function. Plain globals: a host
+ * sets them before its threads use the library.
+ */
+int DLL_EXPORT
+pc_set_thread_hooks(const pc_thread_hooks_t *h)
+{
+	if (h != NULL && (h->size < THREAD_HOOKS_V1_SIZE ||
+	    (h->start == NULL && h->stop == NULL))) {
+		log_msg(LOG_ERR, 0, "pc_set_thread_hooks: size too small or no function");
+		return (-1);
+	}
+	memset(&thr_hooks, 0, sizeof (thr_hooks));
+	if (h != NULL) {
+		/* Longer (newer) structs: our fields; shorter: the rest stay zero. */
+		memcpy(&thr_hooks, h, h->size < sizeof (thr_hooks) ? h->size : sizeof (thr_hooks));
+		thr_hooks.size = sizeof (thr_hooks);
+	}
+	return (0);
+}
+
+/* What pc_thread_create() hands its new thread. */
+struct thr_start {
+	void *(*fn)(void *);
+	void *arg;
+	const char *name;
+	pc_thread_hooks_t hooks;	/* as they were at creation */
+};
+
+/* The new thread: the start hook, the thread function, the stop hook. */
+static void *
+thr_main(void *p)
+{
+	struct thr_start t = *(struct thr_start *)p;
+	void *rv;
+
+	/* start() comes before anything else touches the host, the free too. */
+	if (t.hooks.start != NULL)
+		t.hooks.start(t.hooks.ud, t.name);
+	pc_mfree(p);
+	rv = t.fn(t.arg);
+	if (t.hooks.stop != NULL)
+		t.hooks.stop(t.hooks.ud);
+	return (rv);
+}
+
+/*
+ * pthread_create() for every thread the library makes: a joinable thread
+ * running fn(arg), with the pc_set_thread_hooks() hooks around it. name
+ * (a string constant) is what the start hook sees. NB: fn must return,
+ * not call pthread_exit(), or the stop hook is skipped. Returns
+ * pthread_create()'s result.
+ */
+int
+pc_thread_create(pthread_t *thr, const char *name, void *(*fn)(void *), void *arg)
+{
+	struct thr_start *t;
+	int rv;
+
+	if (thr_hooks.start == NULL && thr_hooks.stop == NULL)
+		return (pthread_create(thr, NULL, fn, arg));
+	if ((t = pc_malloc(sizeof (*t))) == NULL) {
+		errno = ENOMEM;
+		return (ENOMEM);
+	}
+	t->fn = fn;
+	t->arg = arg;
+	t->name = name;
+	t->hooks = thr_hooks;
+	if ((rv = pthread_create(thr, NULL, thr_main, t)) != 0)
+		pc_mfree(t);
+	return (rv);
+}
 
 void
 log_bind(log_state_t *ls)
@@ -525,7 +627,8 @@ pc_strerror(pc_error_t code)
 	static const char *s[] = { "no error", "invalid argument", "I/O error",
 	    "out of memory", "not a pcompress file or unsupported version",
 	    "corrupt data", "verification failed (checksum, HMAC or password)",
-	    "encryption setup failed", "internal error" };
+	    "encryption setup failed", "internal error", "cancelled",
+	    "dictionary missing, different or unusable" };
 
 	return ((unsigned)code < sizeof (s) / sizeof (s[0]) ? s[code] : "unknown error");
 }
@@ -576,7 +679,9 @@ log_msg(log_level_t log_level, int show_errno, const char *format, ...)
 		}
 	}
 
-	if (ldest.type == LOG_OUTPUT) {
+	if (def_fn != NULL) {
+		def_fn(def_arg, log_level, msg);
+	} else if (ldest.type == LOG_OUTPUT) {
 		fputs(msg, stderr);
 
 	} else if (ldest.type == LOG_FILE) {
@@ -607,7 +712,7 @@ get_temp_dir(void)
 			}
 		}
 	}
-	return (strdup(tmp));
+	return (pc_strdup(tmp));
 }
 
 /*
@@ -642,7 +747,7 @@ pc_cleanup_tempfiles(void)
 void
 add_fname(char *fn)
 {
-	char *c = strdup(fn);
+	char *c = pc_strdup(fn);
 	int i;
 
 	if (c == NULL)
@@ -656,7 +761,7 @@ add_fname(char *fn)
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
-	free(c);	/* list full: not registered */
+	pc_mfree(c);	/* list full: not registered */
 }
 
 /* Was: overwrote the first used slot with fn instead of clearing fn's. */
@@ -675,7 +780,7 @@ rm_fname(char *fn)
 		}
 	}
 	pthread_mutex_unlock(&f_mutex);
-	free(c);
+	pc_mfree(c);
 }
 
 int

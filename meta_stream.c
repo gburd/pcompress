@@ -41,8 +41,6 @@
 #include "allocator.h"
 #include "meta_stream.h"
 
-#define	METADATA_CHUNK_SIZE	(3 * 1024 * 1024)
-
 extern int bzip2_compress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
                int level, uchar_t chdr, int btype, void *data);
 extern int bzip2_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
@@ -62,8 +60,10 @@ struct _meta_ctx {
 	uint64_t frompos, topos, tosize;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	void *bzip2_dat;
-	int comp_level, id;
+	int comp_level;
+	int64_t id;	/* metadata chunk number, -1 before the first: the v12 ordinal */
 	int comp_fd;
+	uint64_t chunksize;	/* decompress: largest data chunk */
 	int running;
 	int delta2_nstrides;
 	int do_compress;
@@ -136,7 +136,10 @@ compress_and_write(meta_ctx_t *mctx)
 	}
 
 	if (pctx->encrypt_type) {
-		rv = crypto_buf(&(pctx->crypto_ctx), comp_chunk, comp_chunk, dstlen, mctx->id);
+		/* Version 12: sealed below, once the header is complete. */
+		rv = 0;
+		if (!pctx->pz_v12)
+			rv = crypto_buf(&(pctx->crypto_ctx), comp_chunk, comp_chunk, dstlen, mctx->id);
 		if (rv == -1) {
 			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -155,7 +158,22 @@ compress_and_write(meta_ctx_t *mctx)
 	if (!pctx->encrypt_type)
 		serialize_checksum(mctx->checksum, tobuf + 25, pctx->cksum_bytes);
 
-	if (pctx->encrypt_type) {
+	if (pctx->pz_v12) {
+		/*
+		 * Metadata chunk mctx->id of the metadata stream: its own nonce
+		 * domain, apart from the data chunks. The tag goes where the
+		 * checksum was and covers the length fields and flags.
+		 */
+		memset(tobuf + 25, 0, CKSUM_MAX + CRC32_SIZE);
+		if (pc_pz_seal(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, tobuf, 25,
+		    comp_chunk, dstlen, tobuf + 25) != 0) {
+			__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
+			log_msg(LOG_ERR, 0, "Metadata Encrypion failed");
+			return (0);
+		}
+		pctx->pz_nmeta++;
+	} else if (pctx->encrypt_type) {
 		uchar_t chash[pctx->mac_bytes];
 		unsigned int hlen;
 		uchar_t *mac_ptr;
@@ -297,12 +315,40 @@ decompress_data(meta_ctx_t *mctx)
 	type = *(cbuf + 24);
 	cseg = cbuf + METADATA_HDR_SZ;
 	dstlen = origlen;
+	/* A CRC can be recomputed: bound what sizes the output buffer. */
+	if (origlen > METADATA_CHUNK_SIZE) {
+		log_error_code(PC_ERR_CORRUPT);
+		log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", invalid length. File corrupt ?",
+		    mctx->id);
+		return (0);
+	}
 
-	/*
-	 * If this was encrypted:
-	 * Verify HMAC first before anything else and then decrypt compressed data.
-	 */
-	if (pctx->encrypt_type) {
+	/* Version 12: open as metadata chunk mctx->id (see compress_and_write()). */
+	if (pctx->pz_v12) {
+		int i;
+
+		/* The tag's slot is 68 bytes: the rest is zeros, unused. */
+		for (i = 25 + AEAD_TAGLEN; i < METADATA_HDR_SZ; i++) {
+			if (cbuf[i] != 0) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", bad header",
+				    mctx->id);
+				return (0);
+			}
+		}
+		memcpy(checksum, cbuf + 25, AEAD_TAGLEN);
+		if (pc_pz_open(&pctx->pz_aead, PZ_STREAM_META, (uint64_t)mctx->id, cbuf, 25, cseg,
+		    len_cmp, checksum) != 0) {
+			log_error_code(PC_ERR_VERIFY);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", authentication failed",
+			    mctx->id);
+			return (0);
+		}
+	} else if (pctx->encrypt_type) {
+		/*
+		 * If this was encrypted:
+		 * Verify HMAC first before anything else and then decrypt compressed data.
+		 */
 		unsigned int len;
 
 		len = pctx->mac_bytes;
@@ -312,7 +358,7 @@ decompress_data(meta_ctx_t *mctx)
 		hmac_update(&mctx->chunk_hmac, cbuf, len_cmp + METADATA_HDR_SZ);
 		hmac_final(&mctx->chunk_hmac, mctx->checksum, &len);
 		if (memcmp(checksum, mctx->checksum, len) != 0) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, HMAC verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", HMAC verification failed",
 			    mctx->id);
 			return (0);
 		}
@@ -321,7 +367,7 @@ decompress_data(meta_ctx_t *mctx)
 			/*
 			 * Decryption failure is fatal.
 			 */
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Decryption failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", Decryption failed",
 			    mctx->id);
 			return (0);
 		}
@@ -340,7 +386,8 @@ decompress_data(meta_ctx_t *mctx)
 			/*
 			 * Header CRC32 verification failure is fatal.
 			 */
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Header CRC verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64
+			    ", Header CRC verification failed",
 			    mctx->id);
 			return (0);
 		}
@@ -350,7 +397,8 @@ decompress_data(meta_ctx_t *mctx)
 		rv = bzip2_decompress(cseg, len_cmp, ubuf, &dstlen, mctx->comp_level,
 		    0, TYPE_BINARY, mctx->bzip2_dat);
 		if (rv == -1) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, decompression failed.", mctx->id);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", decompression failed.",
+			    mctx->id);
 			return (0);
 		}
 	} else {
@@ -361,7 +409,8 @@ decompress_data(meta_ctx_t *mctx)
 		uint64_t _dstlen = origlen;
 		rv = delta2_decode(ubuf, dstlen, cseg, &_dstlen);
 		if (rv == -1) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Delta2 decoding failed.", mctx->id);
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", Delta2 decoding failed.",
+			    mctx->id);
 			return (0);
 		}
 		memcpy(ubuf, cseg, _dstlen);
@@ -374,7 +423,8 @@ decompress_data(meta_ctx_t *mctx)
 	if (!pctx->encrypt_type) {
 		compute_checksum(mctx->checksum, pctx->cksum, ubuf, dstlen, 0, 1);
 		if (memcmp(checksum, mctx->checksum, pctx->cksum_bytes) != 0) {
-			log_msg(LOG_ERR, 0, "Metadata chunk %d, Checksum verification failed",
+			log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64
+			    ", Checksum verification failed",
 				mctx->id);
 			return (0);
 		}
@@ -382,6 +432,24 @@ decompress_data(meta_ctx_t *mctx)
 	mctx->topos = 0;
 	mctx->tosize = dstlen;
 	return (1);
+}
+
+/* Version 12: check the end record at comp_fd against the chunks decoded. */
+static int
+meta_check_end(meta_ctx_t *mctx)
+{
+	uchar_t end[PZ_END_LEN];
+	uint64_t nd, nm;
+
+	if (Read(mctx->comp_fd, end, sizeof (end)) != sizeof (end) ||
+	    pc_pz_end_check(&mctx->pctx->pz_aead, end, &nd, &nm) != 0 ||
+	    nm != (uint64_t)mctx->id) {
+		log_error_code(PC_ERR_VERIFY);
+		log_msg(LOG_ERR, 0, "Metadata stream: end record missing, forged or "
+		    "with another count: file truncated or tampered.");
+		return (-1);
+	}
+	return (0);
 }
 
 static void *
@@ -409,7 +477,15 @@ metadata_decompress(void *dat)
 		if (mctx->topos == mctx->tosize) {
 			uchar_t *frombuf = mctx->frombuf;
 
-			mctx->id++;
+			/* Version 11 and earlier: a 32-bit int keyed CTR (see dec_feed()). */
+			if (++mctx->id > INT32_MAX && pctx->encrypt_type && !pctx->pz_v12) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "More than 2^31 metadata chunks in an "
+				    "encrypted file before version 12: its nonces repeat.");
+				ack = 0;
+				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+				return (NULL);
+			}
 			while ((rb = Read(mctx->comp_fd, &len_cmp, sizeof (len_cmp))
 			    == sizeof(len_cmp))) {
 				len_cmp = ntohll(len_cmp);
@@ -418,11 +494,30 @@ metadata_decompress(void *dat)
 
 					if (len_cmp == 0) {
 						/*
-						 * We have reached the end of the file.
+						 * We have reached the end of the file. Version 12:
+						 * the end record must count the metadata chunks
+						 * read (truncation, e.g. when only listing).
 						 */
+						if (pctx->pz_v12 && meta_check_end(mctx) != 0) {
+							ack = 0;
+							Write(mctx->meta_pipes[SINK_CHANNEL], &ack,
+							    sizeof (ack));
+							return (NULL);
+						}
 						msgp->len = 0;
 						ack = 1;
 						Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+						return (NULL);
+					}
+					/* As the main reader bounds it: no wrap below. */
+					if (len_cmp > mctx->chunksize + 256) {
+						log_error_code(PC_ERR_CORRUPT);
+						log_msg(LOG_ERR, 0, "Data chunk length too big "
+						    "before metadata chunk %" PRId64 ". File corrupt ?",
+						    mctx->id);
+						ack = 0;
+						Write(mctx->meta_pipes[SINK_CHANNEL], &ack,
+						    sizeof (ack));
 						return (NULL);
 					}
 					skiplen = len_cmp + pctx->cksum_bytes + pctx->mac_bytes
@@ -446,8 +541,17 @@ metadata_decompress(void *dat)
 
 			} else if (rb == 0) {
 				/*
-				 * We have reached the end of the file.
+				 * We have reached the end of the file. Version 12 files
+				 * end with a marker and the end record: without them it
+				 * was cut short.
 				 */
+				if (pctx->pz_v12) {
+					log_error_code(PC_ERR_VERIFY);
+					log_msg(LOG_ERR, 0, "Metadata stream: file truncated.");
+					ack = 0;
+					Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+					return (NULL);
+				}
 				msgp->len = 0;
 				ack = 1;
 				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
@@ -469,6 +573,15 @@ metadata_decompress(void *dat)
 			U64_P(frombuf) = len_cmp;
 			frombuf += 8;
 			len_cmp = LE64(len_cmp);
+			/* Untrusted: read before the CRC/HMAC is checked. */
+			if (len_cmp > METADATA_CHUNK_SIZE) {
+				log_error_code(PC_ERR_CORRUPT);
+				log_msg(LOG_ERR, 0, "Metadata chunk %" PRId64 ", invalid length. "
+				    "File corrupt ?", mctx->id);
+				ack = 0;
+				Write(mctx->meta_pipes[SINK_CHANNEL], &ack, sizeof (ack));
+				return (NULL);
+			}
 
 			/*
 			 * Now read the rest of the chunk. This is rest of the header plus the
@@ -523,7 +636,7 @@ meta_ctx_free(meta_ctx_t *mctx)
 }
 
 meta_ctx_t *
-meta_ctx_create(void *pc, int file_version, int comp_fd)
+meta_ctx_create(void *pc, int file_version, int comp_fd, uint64_t chunksize)
 {
 	pc_ctx_t *pctx = (pc_ctx_t *)pc;
 	meta_ctx_t *mctx;
@@ -538,7 +651,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 	memset(mctx, 0, sizeof (*mctx));
 
-	if (pctx->encrypt_type) {
+	if (pctx->encrypt_type && !pctx->pz_v12) {
 		if (hmac_init(&mctx->chunk_hmac, pctx->cksum,
 		    &(pctx->crypto_ctx)) == -1) {
 			meta_ctx_free(mctx);
@@ -549,6 +662,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 
 	mctx->comp_fd = comp_fd;
+	mctx->chunksize = chunksize;
 	mctx->frombuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	mctx->tobuf = slab_alloc(NULL, METADATA_CHUNK_SIZE + METADATA_HDR_SZ);
 	if (!mctx->frombuf || !mctx->tobuf) {
@@ -586,7 +700,7 @@ meta_ctx_create(void *pc, int file_version, int comp_fd)
 	}
 	if (rv != 0) {
 		log_msg(LOG_ERR, 0, "Metadata compressor init failed.");
-	} else if (pthread_create(&(mctx->meta_thread), NULL,
+	} else if (pc_thread_create(&(mctx->meta_thread), "pc-meta",
 	    pctx->do_compress ? metadata_compress : metadata_decompress,
 	    (void *)mctx) != 0) {
 		log_msg(LOG_ERR, 1, "Unable to create metadata thread.");

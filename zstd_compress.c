@@ -31,8 +31,11 @@
 #include <utils.h>
 #include <pcompress.h>
 #include <allocator.h>
+/* ZSTD_customMem and the _advanced constructors: zstd is linked statically. */
+#define	ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <zstd_errors.h>
+#include <zdict.h>
 
 /*
  * Maximum chunk size for Zstandard.  ZSTD itself can handle very large
@@ -40,6 +43,8 @@
  * algorithms.
  */
 #define	ZSTD_MAX_CHUNK	2147450621ULL
+#define	LDM_MAX_LEVEL	3
+#define	LDM_MIN_CHUNK	(128ULL * 1024 * 1024)
 
 /*
  * Map pcompress levels 1-14 to Zstandard compression levels 1-22.
@@ -75,6 +80,34 @@ window_log_for_chunksize(uint64_t chunksize)
 		wlog++;
 	return (wlog);
 }
+
+/*
+ * Set when one of this thread's zstd allocations fails, so a zstd call
+ * that returns only NULL can be told apart from one that refused its
+ * input (zstd_dict_new()).
+ */
+static __thread int zstd_nomem;
+
+/* zstd's allocations (contexts, worker pool, buffers) go through pc_malloc(). */
+static void *
+zstd_alloc(void *opaque, size_t n)
+{
+	void *p = pc_malloc(n);
+
+	(void) opaque;
+	if (p == NULL)
+		zstd_nomem = 1;
+	return (p);
+}
+
+static void
+zstd_free(void *opaque, void *p)
+{
+	(void) opaque;
+	pc_mfree(p);
+}
+
+static const ZSTD_customMem zstd_mem = { zstd_alloc, zstd_free, NULL };
 
 struct zstd_params {
 	ZSTD_CCtx *cctx;
@@ -137,7 +170,7 @@ zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
 	zdat->window_log = window_log_for_chunksize(chunksize);
 
 	if (op == COMPRESS) {
-		zdat->cctx = ZSTD_createCCtx();
+		zdat->cctx = ZSTD_createCCtx_advanced(zstd_mem);
 		if (!zdat->cctx) {
 			log_msg(LOG_ERR, 0, "ZSTD: Failed to create compression context\n");
 			slab_free(NULL, zdat);
@@ -155,8 +188,22 @@ zstd_init(void **data, int *level, int nthreads, uint64_t chunksize,
 			    nthreads);
 		ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_windowLog,
 		    zdat->window_log);
+
+		/*
+		 * Long-distance matching finds repeats a chunk-sized window
+		 * holds but the fast levels' match finders miss. It pays at
+		 * levels 1 to 3 (no dedupe by default) with chunks of 128 MB
+		 * and up: 1.5 to 10% smaller on tars, far more on repeated
+		 * data, at the same speed or better. With smaller chunks it
+		 * slows level 1 for little gain; from level 4 dedupe has
+		 * removed the repeats; from level 10 zstd enables it itself.
+		 * The frame format is unchanged.
+		 */
+		if (*level <= LDM_MAX_LEVEL && chunksize >= LDM_MIN_CHUNK)
+			ZSTD_CCtx_setParameter(zdat->cctx,
+			    ZSTD_c_enableLongDistanceMatching, ZSTD_ps_enable);
 	} else {
-		zdat->dctx = ZSTD_createDCtx();
+		zdat->dctx = ZSTD_createDCtx_advanced(zstd_mem);
 		if (!zdat->dctx) {
 			log_msg(LOG_ERR, 0, "ZSTD: Failed to create decompression context\n");
 			slab_free(NULL, zdat);
@@ -238,5 +285,117 @@ zstd_decompress(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
 	}
 
 	*dstlen = rv;
+	return (0);
+}
+
+/*
+ * Dictionaries for sealed chunk objects (chunk.c). A digested dictionary
+ * for compressing is made for one pcompress level; one for decompressing
+ * serves every level. Both copy the dictionary bytes, so the caller's
+ * buffer need not outlive them.
+ */
+void *
+zstd_cdict_new(const void *dict, size_t len, int level)
+{
+	ZSTD_compressionParameters cp = ZSTD_getCParams(map_level(level), 0, len);
+
+	return (ZSTD_createCDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
+	    cp, zstd_mem));
+}
+
+/*
+ * Digest dict both ways: for compressing at pcompress level, and for
+ * decompressing. 0 with *cdict and *ddict set; PC_ERR_NOMEM; or
+ * PC_ERR_DICT when zstd refuses the bytes, which happens only to a
+ * zstd-format dictionary (it starts with zstd's dictionary magic) whose
+ * entropy tables do not parse. Bytes without the magic are taken as raw
+ * content and always work. Neither half of a failure is kept.
+ */
+int
+zstd_dict_new(const void *dict, size_t len, int level, void **cdict, void **ddict)
+{
+	zstd_nomem = 0;
+	*ddict = ZSTD_createDDict_advanced(dict, len, ZSTD_dlm_byCopy, ZSTD_dct_auto,
+	    zstd_mem);
+	*cdict = *ddict == NULL ? NULL : zstd_cdict_new(dict, len, level);
+	if (*cdict != NULL)
+		return (0);
+	ZSTD_freeDDict((ZSTD_DDict *)*ddict);
+	*ddict = NULL;
+	return (zstd_nomem ? PC_ERR_NOMEM : PC_ERR_DICT);
+}
+
+void
+zstd_cdict_free(void *cdict)
+{
+	ZSTD_freeCDict((ZSTD_CDict *)cdict);
+}
+
+void
+zstd_ddict_free(void *ddict)
+{
+	ZSTD_freeDDict((ZSTD_DDict *)ddict);
+}
+
+/*
+ * zstd_compress() with a digested dictionary made for the same level;
+ * data is a COMPRESS state from zstd_init(). The frame does not record
+ * zstd's dictionary id (4 bytes saved): the chunk object names its
+ * dictionary itself. The dictionary is dropped from the context again
+ * before returning, so a later zstd_compress() on it does not use one.
+ */
+int
+zstd_compress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    int level, void *cdict, void *data)
+{
+	struct zstd_params *zdat = (struct zstd_params *)data;
+	size_t rv;
+
+	ZSTD_CCtx_reset(zdat->cctx, ZSTD_reset_session_only);
+	ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_compressionLevel, map_level(level));
+	ZSTD_CCtx_setParameter(zdat->cctx, ZSTD_c_dictIDFlag, 0);
+	ZSTD_CCtx_refCDict(zdat->cctx, (const ZSTD_CDict *)cdict);
+	rv = ZSTD_compress2(zdat->cctx, dst, (size_t)*dstlen, src, (size_t)srclen);
+	ZSTD_CCtx_refCDict(zdat->cctx, NULL);
+	if (ZSTD_isError(rv))
+		return (-1);	/* as in zstd_compress(): the caller stores it raw */
+	*dstlen = rv;
+	return (0);
+}
+
+/* zstd_decompress() with a digested dictionary; data is a DECOMPRESS state. */
+int
+zstd_decompress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    void *ddict, void *data)
+{
+	struct zstd_params *zdat = (struct zstd_params *)data;
+	size_t rv;
+
+	rv = ZSTD_decompress_usingDDict(zdat->dctx, dst, (size_t)*dstlen, src,
+	    (size_t)srclen, (const ZSTD_DDict *)ddict);
+	if (ZSTD_isError(rv)) {
+		log_msg(LOG_ERR, 0, "ZSTD decompress error: %s\n", ZSTD_getErrorName(rv));
+		return (-1);
+	}
+	*dstlen = rv;
+	return (0);
+}
+
+/*
+ * Train a dictionary of at most *len bytes into dict from n samples laid
+ * end to end in samples, sizes[i] bytes each; *len is set to its size.
+ * 0, or -1 if zstd cannot make one (too few or too small samples).
+ * NB: the trainer's working memory comes from the C library, not
+ * pc_set_allocator()'s functions: zstd's dictBuilder calls malloc().
+ */
+int
+zstd_train_dict(void *dict, size_t *len, const void *samples, const size_t *sizes,
+    unsigned n)
+{
+	size_t rv = ZDICT_trainFromBuffer(dict, *len, samples, sizes, n);
+
+	if (ZDICT_isError(rv))
+		return (-1);
+	*len = rv;
 	return (0);
 }

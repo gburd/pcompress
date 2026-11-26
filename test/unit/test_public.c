@@ -10,6 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
+#ifndef _WIN32
+#include <pwd.h>
+#include <grp.h>
+#endif
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 #include <pcompress/pcompress.h>
 #include "minunit.h"
 
@@ -164,6 +172,27 @@ MU_TEST(test_pub_long_password)
 	pc_free(c);
 }
 
+/* A password given for a plain file is refused, not ignored. */
+MU_TEST(test_pub_password_plain_file)
+{
+	pc_ctx_t *c;
+	int in, o, rv;
+
+	mu_assert_int_eq(0, roundtrip("zstd", 3, PC_DEDUPE_NONE, NULL, NULL));
+	c = pc_new();
+	pc_set_log(c, NULL, NULL, PC_LOG_NONE);
+	pc_set_password(c, "pw", 2);
+	in = open(cmp_, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	rv = pc_decompress_fd(c, in, o);
+	close(in);
+	close(o);
+	mu_assert(rv != 0, "password with a plain file accepted");
+	mu_assert_int_eq(PC_ERR_CRYPTO, pc_last_error_code(c));
+	mu_assert(strstr(pc_last_error(c), "not encrypted") != NULL, "message");
+	pc_free(c);
+}
+
 MU_TEST(test_pub_password_not_wiped)
 {
 	char pw[] = "caller's buffer";
@@ -243,6 +272,66 @@ MU_TEST(test_pub_fds_left_open)
 	pc_free(c);
 }
 
+#ifdef __linux__
+/* Pages of the file at path that are in the page cache, or -1. */
+static long
+cached_pages(const char *path)
+{
+	long pg = sysconf(_SC_PAGESIZE), n = 0, i;
+	int fd = open(path, O_RDONLY);
+	struct stat sb;
+	unsigned char *v;
+	void *m;
+
+	if (fd < 0 || fstat(fd, &sb) != 0)
+		return (-1);
+	m = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+	v = malloc(sb.st_size / pg + 1);
+	if (m == MAP_FAILED || v == NULL || mincore(m, sb.st_size, v) != 0)
+		return (-1);
+	for (i = 0; i < (sb.st_size + pg - 1) / pg; i++)
+		n += v[i] & 1;
+	munmap(m, sb.st_size);
+	free(v);
+	close(fd);
+	return (n);
+}
+
+/*
+ * The library leaves the page cache of a caller's descriptors alone: no
+ * POSIX_FADV_DONTNEED behind a 40 MB input it reads (it drops each
+ * 32 MB window of files it opens itself).
+ */
+MU_TEST(test_pub_fd_cache_untouched)
+{
+	char big[320];
+	pc_ctx_t *c = pc_new();
+	long before, after;
+	int in, o;
+	FILE *f;
+	size_t i;
+
+	snprintf(big, sizeof (big), "%s/big", dir);
+	f = fopen(big, "wb");
+	mu_assert(f != NULL, "create");
+	for (i = 0; i < 40u * 1024 * 1024 / 8; i++)
+		fwrite("pcompr\n\n", 1, 8, f);
+	mu_assert(fflush(f) == 0 && fsync(fileno(f)) == 0 && fclose(f) == 0, "write");
+	before = cached_pages(big);
+	in = open(big, O_RDONLY);
+	o = open(cmp_, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	pc_set_algorithm(c, "lz4");
+	mu_assert_int_eq(0, pc_compress_fd(c, in, o));
+	close(in);
+	close(o);
+	pc_free(c);
+	after = cached_pages(big);
+	unlink(big);
+	mu_assert(before > 0, "input not cached to begin with");
+	mu_assert(after >= before, "pages of the caller's input were dropped");
+}
+#endif
+
 static int ncalls;
 
 static void
@@ -270,17 +359,376 @@ MU_TEST(test_pub_garbage_input)
 	pc_free(c);
 }
 
+struct deflog {
+	int n, errs, infos;
+	char first_err[256];
+};
+
+static void
+deflog_cb(void *a, int l, const char *m)
+{
+	struct deflog *d = (struct deflog *)a;
+
+	d->n++;
+	if (l == PC_LOG_INFO)
+		d->infos++;
+	if (l == PC_LOG_ERR && d->errs++ == 0)
+		snprintf(d->first_err, sizeof (d->first_err), "%s", m);
+}
+
+/*
+ * pc_set_default_log(): a context without its own sink, and a message
+ * logged outside any context, reach the process sink at their level; a
+ * context with its own sink does not. Runs last: the sink is process-wide.
+ */
+MU_TEST(test_pub_default_log)
+{
+	struct deflog d;
+	pc_ctx_t *c;
+	int in, o;
+
+	memset(&d, 0, sizeof (d));
+	pc_set_default_log(deflog_cb, &d, PC_LOG_INFO);
+	c = pc_new();
+	in = open(src, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert(pc_decompress_fd(c, in, o) != 0, "plain file decompressed");
+	close(in);
+	close(o);
+	mu_assert(d.errs >= 1, "context error not delivered");
+	mu_assert(strstr(d.first_err, pc_last_error(c)) != NULL, d.first_err);
+
+	/* A context's own sink takes its messages. */
+	memset(&d, 0, sizeof (d));
+	pc_set_log(c, quiet, NULL, PC_LOG_VERBOSE);
+	in = open(src, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert(pc_decompress_fd(c, in, o) != 0, "plain file decompressed");
+	close(in);
+	close(o);
+	mu_assert_int_eq(0, d.n);
+	pc_free(c);
+
+	/* No context: the allocator is already in use, which is logged. */
+	memset(&d, 0, sizeof (d));
+	mu_assert_int_eq(-1, pc_set_allocator(NULL));
+	mu_assert_int_eq(1, d.errs);
+	mu_assert(strstr(d.first_err, "pc_set_allocator") != NULL, d.first_err);
+
+	/* The level: PC_LOG_NONE delivers nothing; -1 keeps it. */
+	memset(&d, 0, sizeof (d));
+	pc_set_default_log(deflog_cb, &d, PC_LOG_NONE);
+	pc_set_default_log(deflog_cb, &d, -1);
+	mu_assert_int_eq(-1, pc_set_allocator(NULL));
+	mu_assert_int_eq(0, d.n);
+	pc_set_default_log(NULL, NULL, PC_LOG_INFO);
+}
+
+static int th_start, th_stop, th_badname, th_onmain;
+static pthread_t th_main;
+
+static void
+th_start_cb(void *ud, const char *name)
+{
+	static const char *names[] = { "pc-compress", "pc-decompress", "pc-writer",
+	    "pc-meta", "pc-archive", "pc-extract", NULL };
+	int i;
+
+	(void) ud;
+	for (i = 0; names[i] != NULL && strcmp(names[i], name) != 0; i++)
+		;
+	if (names[i] == NULL)
+		__atomic_add_fetch(&th_badname, 1, __ATOMIC_RELAXED);
+	if (pthread_equal(pthread_self(), th_main))
+		__atomic_add_fetch(&th_onmain, 1, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&th_start, 1, __ATOMIC_RELAXED);
+}
+
+static void
+th_stop_cb(void *ud)
+{
+	(void) ud;
+	__atomic_add_fetch(&th_stop, 1, __ATOMIC_RELAXED);
+}
+
+/*
+ * pc_set_thread_hooks(): a compress and a decompress with 4 threads start
+ * workers and a writer each; every one runs start() in the new thread
+ * with a known name, and stop() before the call returns.
+ */
+MU_TEST(test_pub_thread_hooks)
+{
+	pc_thread_hooks_t h = { sizeof (h), th_start_cb, th_stop_cb, NULL };
+	pc_thread_hooks_t bad = { sizeof (h) - 1, th_start_cb, th_stop_cb, NULL };
+	pc_ctx_t *c;
+	int in, o;
+
+	th_main = pthread_self();
+	pc_set_default_log(quiet, NULL, -1);
+	mu_assert_int_eq(-1, pc_set_thread_hooks(&bad));
+	pc_set_default_log(NULL, NULL, -1);
+	mu_assert_int_eq(0, pc_set_thread_hooks(&h));
+	c = pc_new();
+	/* lz4 is not multithreaded itself: 4 threads are 4 workers. */
+	pc_set_algorithm(c, "lz4");
+	pc_set_threads(c, 4);
+	pc_set_chunk_size(c, 256 * 1024);
+	in = open(src, O_RDONLY);
+	o = open(cmp_, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert_int_eq(0, pc_compress_fd(c, in, o));
+	close(in);
+	close(o);
+	/* The workers (4, or fewer on a smaller machine) and the writer. */
+	{
+#ifdef _WIN32
+		long ncpu = 4;	/* no sysconf(_SC_NPROCESSORS_ONLN); CI has 4 or more */
+#else
+		long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+
+		mu_assert_int_eq((ncpu > 0 && ncpu < 4 ? (int)ncpu : 4) + 1, th_start);
+	}
+	mu_assert_int_eq(th_start, th_stop);
+	in = open(cmp_, O_RDONLY);
+	o = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	mu_assert_int_eq(0, pc_decompress_fd(c, in, o));
+	close(in);
+	close(o);
+	pc_free(c);
+	mu_assert(same(src, out), "round trip");
+	mu_assert(th_start > 5, "decompress threads not hooked");
+	mu_assert_int_eq(th_start, th_stop);
+	mu_assert_int_eq(0, th_badname);
+	mu_assert_int_eq(0, th_onmain);
+
+	/* Removed: no more calls. */
+	mu_assert_int_eq(0, pc_set_thread_hooks(NULL));
+	th_start = 0;
+	mu_assert_int_eq(0, roundtrip("lz4", 1, PC_DEDUPE_NONE, NULL, NULL));
+	mu_assert_int_eq(0, th_start);
+}
+
+struct prog {
+	int calls, stop_at;
+	uint64_t last_in, last_out, backwards;
+};
+
+static int
+prog_cb(void *a, uint64_t in, uint64_t out)
+{
+	struct prog *p = (struct prog *)a;
+
+	if (in < p->last_in || out < p->last_out)
+		p->backwards++;
+	p->last_in = in;
+	p->last_out = out;
+	return (++p->calls == p->stop_at);
+}
+
+/* Descriptors above stderr that are open (fcntl() fails on a closed one). */
+static int
+open_fds(void)
+{
+	int n = 0, fd;
+
+#ifndef _WIN32
+	for (fd = 3; fd < 1024; fd++)
+		if (fcntl(fd, F_GETFD) != -1)
+			n++;
+#else
+	(void) fd;	/* no fcntl(): the check counts nothing */
+#endif
+	return (n);
+}
+
+/* One descriptor job on c, src to cmp_ or cmp_ to out. */
+static int
+fd_job(pc_ctx_t *c, int compress)
+{
+	int in = open(compress ? src : cmp_, O_RDONLY);
+	int o = open(compress ? cmp_ : out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	int rv = compress ? pc_compress_fd(c, in, o) : pc_decompress_fd(c, in, o);
+
+	close(in);
+	close(o);
+	return (rv);
+}
+
+/*
+ * pc_set_progress(): progress is reported per chunk and never goes back;
+ * a callback that returns non-zero on its 3rd call stops a multi-chunk
+ * job with 4 threads in either direction, cleanly: -1, PC_ERR_CANCELLED,
+ * no descriptor left open, and the context can run the next job.
+ */
+MU_TEST(test_pub_progress_cancel)
+{
+	struct prog p;
+	pc_ctx_t *c = pc_new();
+	int fds = open_fds(), dir_;
+
+	pc_set_algorithm(c, "lz4");
+	pc_set_threads(c, 4);
+	pc_set_chunk_size(c, 128 * 1024);	/* src is 17 chunks */
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+
+	/* Not cancelled: every chunk reported, in last = the input size. */
+	memset(&p, 0, sizeof (p));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert_int_eq(0, fd_job(c, 1));
+	mu_assert(p.calls >= 17 && p.last_in == src_len && p.backwards == 0, "compress progress");
+	memset(&p, 0, sizeof (p));
+	mu_assert_int_eq(0, fd_job(c, 0));
+	mu_assert(same(src, out), "round trip with progress");
+	mu_assert(p.calls >= 17 && p.backwards == 0, "decompress progress");
+
+	for (dir_ = 1; dir_ >= 0; dir_--) {
+		memset(&p, 0, sizeof (p));
+		p.stop_at = 3;
+		mu_assert_int_eq(-1, fd_job(c, dir_));
+		mu_assert_int_eq(3, p.calls);
+		mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+		mu_assert(strcmp(pc_strerror(PC_ERR_CANCELLED), "cancelled") == 0, "strerror");
+		mu_assert_int_eq(fds, open_fds());
+		if (dir_) {
+			/* The cancelled compress left a partial stream: make a full one. */
+			pc_set_progress(c, NULL, NULL);
+			mu_assert_int_eq(0, fd_job(c, 1));
+			pc_set_progress(c, prog_cb, &p);
+		}
+	}
+	pc_free(c);
+}
+
+/*
+ * The command-line style API: a cancelled compress removes the .pz it
+ * was writing, and a cancelled decompress the file it was writing.
+ */
+MU_TEST(test_pub_progress_cancel_files)
+{
+	char args[1024], pz[330], target[320];
+	struct prog p;
+	pc_ctx_t *c;
+
+	snprintf(target, sizeof (target), "%s/cancelled", dir);
+	snprintf(pz, sizeof (pz), "%s.pz", target);
+	unlink(pz);
+	memset(&p, 0, sizeof (p));
+	p.stop_at = 3;
+	c = create_pc_context();
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l1 -s 128k -t 4 %s %s", src, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert(start_pcompress(c) != 0, "cancelled compress succeeded");
+	mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+	destroy_pc_context(c);
+	mu_assert(access(pz, F_OK) != 0, "partial .pz left behind");
+
+	/* A whole one to decompress (the args string was split in place). */
+	c = create_pc_context();
+	snprintf(args, sizeof (args), "pcompress -c lz4 -l1 -s 128k -t 4 %s %s", src, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	mu_assert_int_eq(0, start_pcompress(c));
+	destroy_pc_context(c);
+	memset(&p, 0, sizeof (p));
+	p.stop_at = 3;
+	c = create_pc_context();
+	pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+	snprintf(args, sizeof (args), "pcompress -d -t 4 %s %s", pz, target);
+	mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+	pc_set_progress(c, prog_cb, &p);
+	mu_assert(start_pcompress(c) != 0, "cancelled decompress succeeded");
+	mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+	destroy_pc_context(c);
+	mu_assert(access(target, F_OK) != 0, "partial output left behind");
+	unlink(pz);
+}
+
+#ifndef _WIN32
+/*
+ * Cancelling an archive compression, with the metadata stream and
+ * without it (-T): the archiver thread is released and joined, the call
+ * fails with PC_ERR_CANCELLED, and neither a descriptor nor the partial
+ * .pz is left behind.
+ */
+MU_TEST(test_pub_progress_cancel_archive)
+{
+	static const char *opts[] = { "", "-T" };
+	char args[1024], tree[260], f[300], target[320], pz[330];
+	struct prog p;
+	pc_ctx_t *c;
+	int i, fds;
+
+	/*
+	 * Archive mode looks up each file's owner, and the C library may keep
+	 * a descriptor once it has (illumos: a door to nscd): look up first.
+	 */
+	(void) getpwuid(getuid());
+	(void) getgrgid(getgid());
+	fds = open_fds();
+
+	/* Four 2 MB files: 32 chunks of 256k. */
+	snprintf(tree, sizeof (tree), "%s/tree", dir);
+	mkdir(tree, 0700);
+	for (i = 0; i < 4; i++) {
+		FILE *fp;
+		size_t j;
+
+		snprintf(f, sizeof (f), "%s/f%d", tree, i);
+		mu_assert((fp = fopen(f, "wb")) != NULL, f);
+		for (j = 0; j < 2 * 1024 * 1024; j++)
+			fputc((j / 777) % 3 ? (int)("pcompress "[j % 10]) : (int)((j * 131 >> 3) + i), fp);
+		fclose(fp);
+	}
+	snprintf(target, sizeof (target), "%s/arc", dir);
+	snprintf(pz, sizeof (pz), "%s.pz", target);
+	for (i = 0; i < 2; i++) {
+		unlink(pz);
+		memset(&p, 0, sizeof (p));
+		p.stop_at = 2;
+		c = create_pc_context();
+		pc_set_log(c, quiet, NULL, PC_LOG_ERR);
+		snprintf(args, sizeof (args), "pcompress -a %s -c lz4 -l1 -s 256k -t 4 %s %s",
+		    opts[i], tree, target);
+		mu_assert_int_eq(0, init_pc_context_argstr(c, args));
+		pc_set_progress(c, prog_cb, &p);
+		mu_assert(start_pcompress(c) != 0, "cancelled archive succeeded");
+		mu_assert_int_eq(2, p.calls);
+		mu_assert_int_eq(PC_ERR_CANCELLED, pc_last_error_code(c));
+		destroy_pc_context(c);
+		mu_assert(access(pz, F_OK) != 0, "partial archive left behind");
+		mu_assert_int_eq(fds, open_fds());
+	}
+	for (i = 0; i < 4; i++) {
+		snprintf(f, sizeof (f), "%s/f%d", tree, i);
+		unlink(f);
+	}
+	rmdir(tree);
+}
+#endif
+
 MU_TEST_SUITE(suite_public)
 {
 	MU_RUN_TEST(test_pub_version);
 	MU_RUN_TEST(test_pub_roundtrips);
 	MU_RUN_TEST(test_pub_algorithm_name_copied);
+	MU_RUN_TEST(test_pub_password_plain_file);
 	MU_RUN_TEST(test_pub_password_not_wiped);
 	MU_RUN_TEST(test_pub_long_password);
 	MU_RUN_TEST(test_pub_wrong_password);
 	MU_RUN_TEST(test_pub_bad_settings);
 	MU_RUN_TEST(test_pub_fds_left_open);
+#ifdef __linux__
+	MU_RUN_TEST(test_pub_fd_cache_untouched);
+#endif
 	MU_RUN_TEST(test_pub_garbage_input);
+	MU_RUN_TEST(test_pub_progress_cancel);
+	MU_RUN_TEST(test_pub_progress_cancel_files);
+#ifndef _WIN32
+	MU_RUN_TEST(test_pub_progress_cancel_archive);
+#endif
+	MU_RUN_TEST(test_pub_thread_hooks);
+	MU_RUN_TEST(test_pub_default_log);
 }
 
 int

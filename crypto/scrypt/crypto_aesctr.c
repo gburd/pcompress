@@ -92,7 +92,7 @@ crypto_aesctr_init(AES_KEY * key, uint64_t nonce)
 	struct crypto_aesctr * stream;
 
 	/* Allocate memory. */
-	if ((stream = (struct crypto_aesctr *)malloc(sizeof(struct crypto_aesctr))) == NULL)
+	if ((stream = (struct crypto_aesctr *)pc_malloc(sizeof(struct crypto_aesctr))) == NULL)
 		goto err0;
 
 	/* Initialize values. */
@@ -185,7 +185,7 @@ crypto_aesctr_free(struct crypto_aesctr * stream)
 	stream->bytectr = stream->nonce = 0;
 
 	/* Free the stream. */
-	free(stream);
+	pc_mfree(stream);
 }
 
 /* Restore warnings after OpenSSL 3.x deprecated API usage */

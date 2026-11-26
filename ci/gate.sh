@@ -109,7 +109,13 @@ elif san_ok thread; then
 		CC=clang CXX=clang++ CFLAGS="-fsanitize=thread -g -O1" LDFLAGS="-fsanitize=thread" \
 		    ./config $CFG && $MAKE -j"$JOBS" && $MAKE test-unit-build buildtmp/test_public buildtmp/test_chunk || return 1
 		OMP_TOOL_LIBRARIES=$archer; export OMP_TOOL_LIBRARIES
-		TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1"; export TSAN_OPTIONS
+		TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 suppressions=$d/ci/tsan.supp"
+		export TSAN_OPTIONS
+		# As the ASan step: the archive tests need a writable TMPDIR, and
+		# PCOMPRESS_SANITIZE stops the fd-leak check from counting the
+		# symbolizer's pipes (ci/build-test.sh sets both for ASan).
+		mkdir -p "$d/tsantmp"; TMPDIR="$d/tsantmp"; export TMPDIR
+		PCOMPRESS_SANITIZE=1; export PCOMPRESS_SANITIZE
 		for t in test_reentrant test_api test_public test_chunk test_sem; do
 			echo "== $t"; buildtmp/$t || return 1
 		done
@@ -119,11 +125,21 @@ else
 	skip tsan "no clang with TSan and OpenMP here"
 fi
 
-# 4. ABI.
+# 4. ABI. abi/libpcompress.abi is in libabigail's own format, which a
+# newer libabigail may not read ("incompatible format version"); then
+# compare with the previous release's library, built with -g, instead.
 if command -v abidw > /dev/null 2>&1 && command -v abidiff > /dev/null 2>&1; then
 	abi() {
 		d=$(unpack "$TB" "$W/abi") && cd "$d" &&
-		CFLAGS=-g ./config $CFG && $MAKE -j"$JOBS" && $MAKE abi-check
+		CFLAGS=-g ./config $CFG && $MAKE -j"$JOBS" || return 1
+		$MAKE abi-check > abi-check.out 2>&1 && { cat abi-check.out; return 0; }
+		cat abi-check.out
+		grep -q 'incompatible format version' abi-check.out && [ -n "$PREV" ] || return 1
+		echo "abi: the stored corpus is unreadable here: comparing with $(basename "$PREV")"
+		p=$(unpack "$PREV" "$W/abiprev") && (cd "$p" && CFLAGS=-g ./config $CFG && $MAKE -j"$JOBS") &&
+		abidiff --no-added-syms --drop-private-types --suppressions abi/suppressions.ini \
+		    --hd1 "$p/include/pcompress" --hd2 include/pcompress \
+		    "$p/libpcompress.so.1" libpcompress.so.1
 	}
 	step abi abi.log abi
 else

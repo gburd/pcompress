@@ -56,6 +56,8 @@ extern "C" {
 #include <crypto_utils.h>
 #include <filters/analyzer/analyzer.h>
 #include <meta_stream.h>
+#include <pz_crypt.h>
+#include <seek_index.h>
 
 /** @name File Format Constants */
 /**@{*/
@@ -70,15 +72,50 @@ extern "C" {
  * so releases before 4.3 read them.
  */
 #define	VERSION_KDF	11
-#define	VERSION_MAX	VERSION_KDF	/**< Newest version this build reads. */
+/**
+ * Encrypted files are written as version 12 since 4.5: an AEAD per chunk
+ * bound to its stream and ordinal, an Argon2id key, an authenticated end
+ * record (pz_crypt.h, DESIGN.md). Readers before 4.5 refuse it as newer.
+ */
+#define	VERSION_AEAD	12
+/**
+ * Version 13 is version 10 (version 12 when encrypted) plus one rule: a
+ * reader refuses a header flag bit it does not know. Older versions left
+ * unknown bits alone, so a feature that changes how data must be decoded
+ * takes a new flag bit and writes version 13; releases before 4.5 refuse
+ * the file as newer, and later ones that lack the feature refuse the bit.
+ * Files that use no such feature are still written as 10 or 12.
+ */
+#define	VERSION_FLAGS	13
+#define	VERSION_MAX	VERSION_FLAGS	/**< Newest version this build reads. */
 #define	KDF_SCRYPT	1	/**< KDF id in a version 11 header. */
 #define	FLAG_DEDUP	1       /**< File flag: Rabin deduplication enabled. */
 #define	FLAG_DEDUP_FIXED	2 /**< File flag: fixed-block deduplication enabled. */
 #define	FLAG_SINGLE_CHUNK	4 /**< File flag: entire file in one chunk. */
 #define FLAG_META_STREAM	4096 /**< File flag: metadata streams present. */
 #define	FLAG_ARCHIVE	2048    /**< File flag: archive mode (PAX). */
-#define	UTILITY_VERSION	"4.4.0"   /**< Human-readable utility version string. */
+#define	UTILITY_VERSION	"4.5.0"   /**< Human-readable utility version string. */
 #define	MASK_CRYPTO_ALG	0x30    /**< Bitmask for crypto algorithm in flags. */
+/**
+ * The header flag bits of versions 10 to 12 (0x700 is the checksum id,
+ * CKSUM_MASK). A file whose flags have any other bit is written as
+ * version 13. Free bits: 0x8, 0x80, 0x4000, 0x8000.
+ */
+#define	FLAG_V12	(FLAG_DEDUP | FLAG_DEDUP_FIXED | FLAG_SINGLE_CHUNK | \
+	MASK_CRYPTO_ALG | 0x700 | FLAG_ARCHIVE | FLAG_META_STREAM)
+/**
+ * Version 13 file flag: archive members may be stored by the reflate
+ * filter (-Z), whose records a reader without it would extract as is.
+ */
+#define	FLAG_REFLATE	0x40
+/**
+ * Version 13 file flag: archive members may be stored through the ARM64
+ * or RISC-V branch filter (filters/bcj/, member tag "BCJ-ARM64" or
+ * "BCJ-RISCV"), which older readers would extract unconverted.
+ */
+#define	FLAG_BCJ_ARM	0x2000
+/** Every header flag bit this build understands. */
+#define	FLAG_KNOWN	(FLAG_V12 | FLAG_REFLATE | FLAG_BCJ_ARM)
 #define	MAX_LEVEL	14      /**< Maximum compression level. */
 /**@}*/
 
@@ -310,6 +347,23 @@ extern void zstd_stats(int show);
 #endif
 /**@}*/
 
+#ifdef ENABLE_PC_ZSTD
+/** @name zstd dictionaries for sealed chunk objects (zstd_compress.c) */
+/**@{*/
+extern void *zstd_cdict_new(const void *dict, size_t len, int level);
+extern int zstd_dict_new(const void *dict, size_t len, int level, void **cdict,
+    void **ddict);
+extern void zstd_cdict_free(void *cdict);
+extern void zstd_ddict_free(void *ddict);
+extern int zstd_compress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    int level, void *cdict, void *data);
+extern int zstd_decompress_dict(void *src, uint64_t srclen, void *dst, uint64_t *dstlen,
+    void *ddict, void *data);
+extern int zstd_train_dict(void *dict, size_t *len, const void *samples,
+    const size_t *sizes, unsigned n);
+#endif
+/**@}*/
+
 #ifdef ENABLE_PC_LIBBSC
 extern int libbsc_compress(void *src, uint64_t srclen, void *dst,
 	uint64_t *dstlen, int level, uchar_t chdr, int btype, void *data);
@@ -357,6 +411,7 @@ struct pc_ctx {
 	int preprocess_mode;
 	int lzp_preprocess;
 	int exe_preprocess;
+	int bcj_used;		/* archive has BCJ members: FLAG_BCJ_ARM */
 	int encrypt_type;
 	int archive_mode;
 	int enable_archive_sort;
@@ -387,17 +442,19 @@ struct pc_ctx {
 	uchar_t *arc_buf;
 	uint64_t arc_buf_size, arc_buf_pos;
 	int arc_closed, arc_writing;
+	int arc_eof;		/* the extractor reached the end-of-archive blocks */
 	int btype, ctype;
 	int interesting;
 	int min_chunk;
 	int enable_packjpg;
 	int enable_wavpack;
+	int enable_reflate;	/* -Z */
 	void *filter_table;	/* struct type_data[NUM_SUB_TYPES+1], archive filters */
 	int list_mode;
 	FILE *err_paths_fd;
 	uint32_t errored_count;
 
-	unsigned int chunk_num;
+	uint64_t chunk_num;	/* data chunks handed out: the v12 ordinal */
 	uint64_t largest_chunk, smallest_chunk, avg_chunk;
 	uint64_t chunksize;
 	const char *algo, *filename;
@@ -420,8 +477,37 @@ struct pc_ctx {
 	unsigned char chunk_key[32];	/* pc_set_key(): raw key for chunk objects */
 	int chunk_key_set;
 	void *chunk_codec[2];	/* chunk.c: codec state reused by seal/open */
+	void *chunk_dict;	/* chunk.c: pc_set_dict() dictionary; NULL: none */
 	char algo_name[ALGO_SZ + 1];	/* pc_set_algorithm() copy; algo points here */
+	pc_progress_fn progress_fn;	/* pc_set_progress(); NULL: none */
+	void *progress_arg;
+	int cancelled;		/* progress_fn asked to stop this job */
+	uint64_t prog_out;	/* chunk bytes the writer wrote (atomic) */
+	int pz_v12;		/* encrypting or decrypting format version 12 */
+	pz_aead_t pz_aead;	/* its file key */
+	uchar_t pz_hdr[PZ_HDR_CRYPTO];	/* its salt and KDF cost, as stored */
+	uint64_t pz_nmeta;	/* metadata chunks written or skipped so far */
+
+	/* Seek index, compression (-X): pcompress.c, archive/pc_archive.c. */
+	int sx_write;		/* -X given */
+	sx_writer_t *sx_w;	/* this job's index; NULL: none */
+	uint64_t sx_wpos;	/* bytes of the .pz written: header and chunks */
+	uint64_t arc_spos;	/* archive mode: bytes of PAX stream produced */
+
+	/* Seek index, decompression (-r, -R). */
+	int sx_mode;		/* 0 off, SX_MODE_RANGE, SX_MODE_MEMBER */
+	const char *sx_member;	/* -R */
+	uint64_t sx_off, sx_len;	/* -r, then the stream range to write */
+	sx_index_t sx_idx;	/* parsed index; sx_body owns its bytes */
+	unsigned char *sx_body;
+	uint64_t sx_first, sx_last;	/* chunks that hold the range */
+
+	/* Repair data (repair.c). */
+	int rp_pct;		/* -Y: parity percent; 0 none */
+	int do_repair;		/* -y: check and repair a file */
 };
+#define	SX_MODE_RANGE	1
+#define	SX_MODE_MEMBER	2
 
 /**
  * @brief Per-thread data structure for compression and decompression.
@@ -442,7 +528,7 @@ struct cmp_data {
 	uint64_t len_cmp, len_cmp_be;
 	uchar_t checksum[CKSUM_MAX_BYTES];
 	int level, cksum_mt, out_fd;
-	unsigned int id;
+	uint64_t id;		/* chunk number: the v12 data ordinal */
 	compress_func_ptr compress;
 	compress_func_ptr decompress;
 	int cancel;
@@ -454,6 +540,7 @@ struct cmp_data {
 	void *data;
 	pthread_t thr;
 	mac_ctx_t chunk_hmac;
+	uint64_t ulen;		/* compress: bytes of input in this chunk */
 	algo_props_t *props;
 	int decompressing;
 	int btype;
@@ -475,7 +562,7 @@ int start_compress(pc_ctx_t *pctx, const char *filename, uint64_t chunksize, int
 /** Decompress filename to to_filename (NULL: the job's streams). */
 int start_decompress(pc_ctx_t *pctx, const char *filename, char *to_filename);
 
-/** Free the codec state pc_chunk_seal()/pc_chunk_open() kept (chunk.c). */
+/** Free the codec state and dictionary pc_chunk_seal()/pc_chunk_open() kept (chunk.c). */
 void chunk_codecs_free(pc_ctx_t *pctx);
 
 #ifdef	__cplusplus

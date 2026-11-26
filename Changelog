@@ -1,3 +1,242 @@
+== 4.5.0 Release ==
+Change: extracting an archive exits with status 1 (PC_ERR_CORRUPT) if
+  a filter (packJPG, packPNM, Dispack, WavPack, -Z) could not decode a
+  member. Such a member is still written as stored and listed in
+  filter_failures.txt, as before; the extraction used to exit 0 with a
+  warning whose count was printed from a missing argument.
+Fix: rename() on Windows replaces an existing file, as on POSIX
+  (MoveFileExW with MOVEFILE_REPLACE_EXISTING), where _wrename()
+  refused: in-place repair (-y) failed there, and so did the pcbackup
+  example's index and object rewrites.
+New: -Z (archive mode) stores the deflate streams of zip containers
+  (jar, odt, docx, xlsx, apk ...), gzip files and PNG images inflated,
+  when pcompress's bundled zlib 1.3.1 deflate reproduces them bit for
+  bit, and rebuilds them on extraction. Archives of jars shrink by 38
+  to 50%, of OpenDocument and Office files by 4 to 7%, of
+  /usr/share/doc by 6%; compressing /usr/share/doc took 6.7 s in place
+  of 0.8 s, and gzip files, which rarely match, 2.8 s for 13 MB. Off by
+  default. Such archives are format version 13 with flag 0x40 (4.4
+  refuses them).
+Fix: -E and -EE with -c none found similar blocks on some platforms
+  and not others: the minimum distance between a block and its delta
+  base was never set for "none" and read from uninitialized stack
+  memory. It is now 0 for "none" (and by default for any algorithm).
+Security: a corrupt or hostile deduplicated chunk (-D, -F, -G, -E)
+  could make the reader write past its block array and read or write
+  past its chunk buffers: the block count, a block's index entry, a
+  literal's length, a bsdiff patch's sizes and a global index's entry
+  count were used without being checked against the chunk (all found
+  with ASan by the new fuzz_dedupe target, which ran 10 minutes clean on
+  the fix). Every one is now checked before use, and the chunk is
+  refused as corrupt. Old files decode as before.
+Change: on Linux, blocks of 4 MB or more (chunk buffers, codec match
+  tables) get madvise(MADV_HUGEPAGE) when the C library's allocator is
+  in use (not with pc_set_allocator()). With 64 MB chunks compression
+  is 4 to 16% faster (lz4 22 to 30%) on x86-64 and arm64, and dTLB
+  misses drop from hundreds of millions to under one million; lz4
+  decompression is 2 to 7% slower, the other codecs 1 to 18% faster.
+New: ARM64 and RISC-V branch (BCJ) filters for archive members, from
+  XZ Utils 5.8.1 (0BSD), applied with -x (and from level 9) to ELF,
+  PE and Mach-O members of those architectures. An archive that holds
+  such members takes header flag 0x2000 and format version 13, so 4.4
+  refuses it; other archives are unchanged. Archives of riscv64
+  libraries are 8 to 11% smaller, of aarch64 /usr/lib 5%.
+Fix: archive extraction filters bound each data block of a member by
+  the member's buffer, rather than writing where the archive's block
+  offset said.
+Change: zstd at levels 1 to 3 with chunks of 128 MB or more (-s 128m)
+  turns on zstd's long-distance matching: 1.5 to 10% smaller on tars
+  of /usr/lib and /usr/share, half the size on enwik8 repeated, and as
+  fast or faster. The output is ordinary zstd frames that 4.4 reads.
+Format: version 13, for features that change how data is decoded: the
+  version 10 layout (version 12 when encrypted), and a reader refuses
+  any header flag bit it does not know, where 10 to 12 ignored them.
+  Only files that use such a feature are written as 13 (4.4 refuses
+  them as newer); all others are still 10 or 12.
+New: repair data. -Y <percent> appends Reed-Solomon parity (GF(2^8),
+  Cauchy, 4 KB blocks interleaved 64 stripes deep) after everything
+  else in the file, and "pcompress -y file.pz [out.pz]" rebuilds
+  damaged blocks from it, found by a CRC-32 per block, without the
+  password. At -Y 10 a run of 1 MB of damage is repaired anywhere.
+  A 1.3 GB tar of /usr/lib (zstd -l6, 424 MB) grows by the percent
+  given plus 0.2%, and takes 0.4 to 0.5 s longer to compress, at any
+  percent (c7i.4xlarge). 4.4 reads unencrypted -Y files and ignores the
+  region; in version 12 files the region header is sealed as AEAD
+  stream 5 with the end record, and the reader accepts it after the
+  end record and any seek index, and nothing else.
+Fix: -E and -EE saved almost nothing. When a bsdiff patch had no extra
+  data, bsdiff() recorded the extra block as the whole space left in the
+  block, so most patches were exactly as long as the block they stood
+  for, and carried stale buffer bytes. Patches are now 2 to 3% of the
+  block (EC2 c7i, tars of Go toolchains and /usr/lib, an edited 32 MB
+  copy). 4.4 and earlier read the new patches.
+Change: -D and -G find block boundaries with the gear hash of the
+  library chunker instead of a Rabin hash: 18 to 30% less CPU at -D,
+  4 to 7% at -G (one thread, c7i), output within 0.5% at -D and 1.2%
+  at -G. No format change: 4.4 reads the new files, and the new
+  reader reads old ones.
+Test: ci/difffuzz.sh, a seeded differential fuzzer: files from this
+  build and from the previous release must read back with the other,
+  over random inputs and option sets, and the chunker, ids, manifest
+  and index formats must match an independent Python model
+  (test/tools/xver_model.py). Nightly runs 300 seeds against 4.4.0.
+Library: pc_idfilter_new(), pc_idfilter_maybe(), pc_idfilter_size()
+  and pc_idfilter_free(), a static Binary Fuse filter over chunk ids
+  (9 bits per id, 0.4% false positives), to put in front of an exact
+  id table. With 10M ids on a Xeon 8488C, looking up absent ids ran at
+  59M/s through the filter and 10M/s through pc_index_has(). A filter
+  plus a sorted id file and a sparse fence (docs/BACKUP.md) took 1.2
+  bytes of memory per id, where pc_index takes 13.4. No format.
+Change: a version 12 file with bytes after its end record is refused
+  as corrupt, unless they end in the seek index trailer "PCSEEK01".
+Security: the version 12 file key is wiped when each job returns, not
+  only when the context is destroyed, and passwords, file keys and
+  chunk-object subkeys are wiped with a store the compiler cannot
+  remove (memset of a buffer about to go out of scope may be dropped).
+Change: a decompression that fails (a bad tag or checksum, a missing
+  end record, a truncated file) removes the output file it created, as
+  a cancelled one did; output to a caller's descriptor or to standard
+  output, and archive extraction, are left as they are.
+Security: decompressing with a password (-w, pc_set_password()) refuses
+  a file that is not encrypted ("the file is not encrypted",
+  PC_ERR_CRYPTO), where it decompressed it: anyone can substitute a
+  plain file for an encrypted one, and nothing would authenticate it.
+Fix: files with a 64-byte chunk checksum (-S SHA512, KECCAK512,
+  BLAKE512) whose chunks are small did not decompress: the reader
+  sized its buffers for a 32-byte checksum, before it read the file's.
+  In 4.4.0 and earlier this broke small -L (LZP) chunks ("Chunk length
+  exceeds buffer"), and with the read bound below any chunk under 32
+  bytes ("Compressed length too big for chunk"). Such files written
+  by 4.4.0 now read back.
+Fix: a data chunk whose stored length was at most 256 bytes over the
+  chunk size, which the reader accepted, was read into a buffer with
+  less slack than that (about 50 bytes for zstd at 64 KB chunks): a
+  heap overflow found with ASan, in every format version. The read is
+  now bounded by the buffer and such a length is refused as corrupt.
+Security: the version 12 chunk ordinal, and the chunk counters behind
+  it, are 64 bits end to end; the chunk number was 32 bits, so data
+  chunk 2^32 would have reused chunk 0's key and nonce, and the end
+  record's count would have wrapped. Encrypted version 11 and earlier
+  files with more chunks than their 32-bit counters held are refused.
+Library: chunk objects sealed with a key are object version 2 (magic
+  PCK2): XChaCha20-Poly1305 with a random 192-bit nonce and the whole
+  header as associated data, 16-byte tag, in place of XSalsa20 and a
+  keyed BLAKE2b-256 tag. Sealing zstd:3 with a key ran at 468 MB/s and
+  opening at 681 MB/s; now 897 and 2226 MB/s (bench_chunk, Xeon 8488C).
+  Objects are 16 bytes smaller. Keyed version 1 objects still open;
+  4.4 and earlier cannot open version 2 objects. Unkeyed objects are
+  unchanged (PCK1). The dictionary flag works as before in both.
+Security: encrypted .pz files are format version 12, with authenticated
+  encryption. 4.4 and earlier encrypted data chunk k and metadata chunk k
+  of an archive with the same key and CTR nonce (the XOR of the two
+  ciphertexts is the XOR of the plaintexts; with -c none and a known
+  file this decrypts the metadata), and authenticated each chunk alone,
+  so chunks could be reordered or the last ones cut off (keeping the end
+  marker) and the file still decompressed without an error. Version 12
+  seals every chunk with an AEAD, under a nonce of its stream (data,
+  metadata) and position, with its length and flags as associated data,
+  and ends with an authenticated count of both kinds of chunks: a
+  reordered, repeated, moved, cut or changed chunk fails. -e SALSA20 is
+  now XChaCha20-Poly1305 and -e AES AES-256-GCM (OpenSSL), keyed with
+  Argon2id (128 MiB, 4 passes, 4 lanes). enwik8 at zstd -l3 on a 16-vCPU
+  Xeon 8488C: 0.62 s with either cipher, 0.64 s with 4.4's AES-CTR and
+  HMAC, 0.34 s unencrypted; the key derivation is 0.29 s of it. Files
+  written by 4.4 and earlier (version 11 and below) still decompress;
+  4.4 and earlier refuse version 12 ("Cannot handle newer archive
+  version 12"). Unencrypted files are unchanged (version 10).
+Fix: compressing a 1- or 2-byte file with -e wrote past a heap buffer
+  (the header was built in the chunk buffer, which a tiny input makes
+  smaller than an encrypted header); glibc then aborted.
+Library: key files (pc_keyfile_create()) use Argon2id (RFC 9106, KDF
+  id 2) with 128 MiB, 4 passes and 4 lanes in place of scrypt: 0.29 s on
+  a Xeon 8488C, 0.36 s on Graviton. pc_keyfile_open() still opens scrypt
+  key files; 4.4 and earlier cannot open the new ones. Argon2id is the
+  bundled Monocypher 4.0.2 (OpenSSL has it only from 3.2), pinned to
+  the RFC 9106 vectors, and costs over 1 GiB, 16 passes, 16 lanes or
+  4 GiB of memory traffic are refused before any work.
+Library: pc_set_allocator() gives the library a host program's memory
+  functions (malloc, realloc, free and a user pointer), process-wide,
+  before its first allocation. The library's own code, the bundled zstd,
+  lz4 and libbsc, and the lzma, PPMd, zlib and bzip2 allocation hooks use
+  them; libarchive, OpenSSL, the C++ filters and OpenMP do not. Archive
+  jobs no longer leave their temporary file names registered for
+  pc_cleanup_tempfiles() after they end.
+Library: pc_set_default_log(fn, arg, level) sends the messages of
+  contexts without their own pc_set_log() sink, and messages logged
+  outside any context, to a callback instead of stderr.
+Library: pc_set_thread_hooks() runs a host program's start(name) and
+  stop() hooks in every thread the library creates (workers, writer,
+  archive, extract and metadata threads), so a host can register them
+  with its runtime.
+Library: pc_set_progress(ctx, fn, arg) reports input consumed and output
+  written after each chunk of pc_compress_fd(), pc_decompress_fd() and
+  start_pcompress(); a non-zero return cancels the job cleanly, with
+  the new error class PC_ERR_CANCELLED.
+Library: zstd dictionaries for sealed chunk objects. pc_dict_train()
+  trains one from samples, pc_set_dict() makes a context seal and open
+  with it, and pc_dict_id() names it. Objects sealed with a dictionary
+  carry its id (flag 4 in the PCK1 header, 32 more bytes) and open only
+  with that dictionary set: otherwise pc_chunk_open() fails with the new
+  error class PC_ERR_DICT. On pieces under 8 KB it shrinks stored size
+  by 30 to 40% (small /usr/share/doc files at zstd:3: ratio 1.89 to 2.96;
+  per-directory manifests of /usr: 1.75 to 2.46); 64 KB chunks gain
+  almost nothing; chunks of 128 KB and more are sealed without the
+  dictionary, where it would cost up to 8%. Objects sealed without a
+  dictionary are unchanged; versions before this one refuse dictionary
+  objects.
+Library: pc_chunk_seal() stores incompressible chunks raw without
+  running the codec: sampled histograms of the bytes and of the
+  differences between neighbouring bytes (2 KB, then 8 KB per 256 KB, of
+  chunks from 16 KB) that are both close to uniform skip it. Sealing
+  random data or video runs at 700-750 MB/s with any algorithm (zstd:9
+  was 41 MB/s, lzma:6 13 MB/s); compressed .gz/.xz/.zst files lose 0.03%
+  in size; text, binaries, byte ramps and tables keep their size and
+  lose about 1% in seal speed. No format change.
+Library: pc_chunk_id2(algorithm, ...) names chunks with BLAKE2b
+  (PC_ID_BLAKE2B, as pc_chunk_id) or BLAKE3 (PC_ID_BLAKE3, keyed with a
+  32-byte key): keyed BLAKE3 ids of 64 KB chunks ran at 4420 MB/s
+  against 820 MB/s for BLAKE2b on one core of an EC2 Xeon 8488C. The
+  official BLAKE3 C code 1.8.7 is bundled in crypto/blake3 (CC0 or
+  Apache-2.0), with its run-time dispatch; tests pin the official
+  vectors. Sealed objects keep their BLAKE2b tags.
+Fix: a failed compress to a named output (pcompress file target, or the
+  command-line style API with a target name) left the partial .pz file
+  behind; it is removed now, as the temporary file is otherwise.
+Fix: archive compression with -T (no metadata stream) hung for good
+  when a worker or the writer failed, or when the job was cancelled:
+  the archiver thread was never released.
+Performance: compressing or decompressing a regular file no longer
+  fills the page cache: input is read with POSIX_FADV_SEQUENTIAL and
+  dropped every 32 MB, archive members as they are copied, and on Linux
+  output past a tenth of RAM is handed to writeback and dropped. On a
+  c7i.4xlarge (32 GB) compressing a 20 GB file with lz4 used to add
+  28 GB to the page cache and leave 0 to 10 MB of a 1.9 GB file that was
+  cached before; now it adds 70 MB and that file stays cached. Time is
+  unchanged (288 s each way, bound by the gp3 volume). Descriptors
+  passed to pc_compress_fd() and pc_decompress_fd() get no hints: how
+  the caller's files stay cached is the caller's business.
+Fix: a metadata chunk (archive mode) whose stored length exceeded the
+  3 MB metadata buffer overflowed the heap while it was read, before any
+  check (found with ASan); its original length was not bounded either.
+  Both are refused now as corrupt.  So are lengths that wrapped the
+  seek past a chunk back onto itself, where extraction looped for good:
+  a metadata chunk's length as the main reader skips it, and a data
+  chunk's length as the metadata thread skips it.
+CLI: -X appends a seek index to a .pz file, and -d -r offset:length
+  (single file) and -d -R member (archive) then decode only the chunks
+  they need. On a c7i.4xlarge, one 20 KB member at the end of a 1.3 GB
+  archive of /usr/lib comes out in 0.08 s instead of 3.0 s. The index
+  costs 0.47% in size and no measurable time; -X turns off the metadata
+  stream and the automatic global dedupe, and refuses -G. Readers before
+  4.5 read -X files unchanged (the index follows the end-of-stream
+  marker). A random read checks the index's tag and that each chunk it
+  decodes is the one the index names. Encrypted (format version 12):
+  the index is sealed with the file's AEAD (stream 4) and bound to the
+  end record, and the chunk tags it lists are the chunks' AEAD tags.
+Tests: test_alloc installs an allocator that tags every block and checks
+  each free, so a block freed by the wrong allocator fails, and checks
+  that no block is left once everything is freed.
+
 == 4.4.0 Release ==
 Library: pc_derive_key(master, purpose, out) derives one 256-bit key per
   named purpose from a master key, so a backup tool can name objects

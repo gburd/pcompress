@@ -9,7 +9,10 @@
  * <dir>/manifest/ (an empty manifest, one with a file, a directory and
  * a symlink, and one with every kind of metadata record). A fuzzer that starts from valid inputs reaches the
  * decoders' inner paths far sooner than one that must find the magic
- * bytes first. Run by "make fuzz-build".
+ * bytes first. <dir>/seek_index/ holds seek index bodies for
+ * fuzz_seek_index, built byte by byte (the index has no public API), and
+ * <dir>/dedupe/ deduplicated chunks for fuzz_dedupe, also byte by byte.
+ * Run by "make fuzz-build".
  */
 
 #include <stdio.h>
@@ -45,8 +48,10 @@ quiet(void *a, int l, const char *m)
 
 /*
  * fuzz_chunk's first byte picks the mode: 0 builds a forged object from
- * (algorithm id, level, 20-bit length, payload); 2 opens the rest as is,
- * with a key when bit 2 is set (6); 3 opens a key file.
+ * (algorithm id, level, 20-bit length, payload), 8 the same as a
+ * dictionary object (zstd with fuzz_chunk's dictionary); 2 opens the rest as is,
+ * with a key when bit 2 is set (6); 3 opens a key file, 19 sets the rest
+ * as a dictionary.
  */
 static void
 chunk_seeds(const char *dir)
@@ -97,6 +102,43 @@ chunk_seeds(const char *dir)
 		if (pc_chunk_seal(c, in, sizeof (in), obj, &ol) == 0)
 			put(dir, "object-encrypted", 6, obj, ol);
 		pc_free(c);
+	}
+	/* Forged dictionary mode (8): fuzz_chunk's dictionary, as raw content. */
+	{
+		static uint8_t dict[4096];
+		pc_ctx_t *c = pc_new();
+
+		for (i = 0; i < sizeof (dict); i++)
+			dict[i] = (uint8_t)("the quick brown fox jumps "[i % 26] + (i % 97 == 0));
+		pc_set_log(c, quiet, NULL, PC_LOG_NONE);
+		ol = sizeof (obj);
+		if (pc_set_dict(c, dict, sizeof (dict)) == 0 &&
+		    pc_chunk_seal(c, in, sizeof (in), obj, &ol) == 0 && (obj[5] & 0x04)) {
+			uint8_t f[4096];
+
+			f[0] = 1;
+			f[1] = obj[7];
+			f[2] = obj[8];
+			f[3] = obj[9];
+			f[4] = obj[10];
+			memcpy(f + 5, obj + 72, ol - 104);
+			put(dir, "forged-zstd-dict", 8, f, 5 + ol - 104);
+		}
+		pc_free(c);
+	}
+	/* Dictionary mode (19): a trained zstd dictionary, entropy tables and all. */
+	{
+		static char samples[400 * 64];
+		static uint8_t dict[2048];
+		size_t sizes[400], dl = sizeof (dict), sn = 0;
+
+		for (i = 0; i < 400; i++) {
+			sizes[i] = (size_t)snprintf(samples + sn, 64, "{\"id\": %u, \"name\": \"user%u\"}\n",
+			    (unsigned)i, (unsigned)(i * 7919 % 10007));
+			sn += sizes[i];
+		}
+		if (pc_dict_train(samples, sizes, 400, dict, &dl) == 0)
+			put(dir, "dict-trained", 19, dict, dl);
 	}
 	if (pc_keyfile_size() <= sizeof (kf) && pc_keyfile_create("pw", 2, k, kf) == 0)
 		put(dir, "keyfile", 3, kf, pc_keyfile_size());
@@ -196,6 +238,116 @@ manifest_seeds(const char *dir)
 	}
 }
 
+static void
+le64(uint8_t *p, uint64_t v)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+/*
+ * Seek index bodies (DESIGN.md) that fuzz_seek_index's limits accept:
+ * end marker at 2^20, two chunks with 4-byte tags, one member. Then the
+ * same body with chunk 0 at 2^64 - 4, where an "off + 8" bound wraps.
+ */
+static void
+seek_seeds(const char *dir)
+{
+	uint8_t b[40 + 2 * 20 + 18 + 5];
+
+	memset(b, 0, sizeof (b));
+	memcpy(b, "PCSXIDX1", 8);
+	b[8] = 4;
+	le64(b + 16, 1 << 20);
+	le64(b + 24, 2);
+	le64(b + 32, 1);
+	le64(b + 40, 30);		/* chunk 0: file offset, length, tag */
+	le64(b + 48, 600);
+	memcpy(b + 56, "\x01\x02\x03\x04", 4);
+	le64(b + 60, 500);		/* chunk 1 */
+	le64(b + 68, 400);
+	memcpy(b + 76, "\x05\x06\x07\x08", 4);
+	le64(b + 80, 512);		/* member: offset, length, name */
+	le64(b + 88, 300);
+	b[96] = 5;
+	memcpy(b + 98, "a/b.c", 5);
+	put(dir, "two-chunks", -1, b, sizeof (b));
+	le64(b + 40, UINT64_MAX - 3);
+	put(dir, "chunk-offset-wraps", -1, b, sizeof (b));
+}
+
+static void
+be32(uint8_t *p, uint32_t v)
+{
+	int i;
+
+	for (i = 0; i < 4; i++)
+		p[i] = (uint8_t)(v >> (24 - 8 * i));
+}
+
+static void
+be64(uint8_t *p, uint64_t v)
+{
+	be32(p, (uint32_t)(v >> 32));
+	be32(p + 4, (uint32_t)v);
+}
+
+/*
+ * Deduplicated chunks (rabin/rabin_dedup.c) for fuzz_dedupe, each after
+ * its context byte: a per-segment chunk with a literal, an exact
+ * reference to it, a delta (bsdiff patch) against it and a second
+ * literal; and a global chunk with a literal and a reference to earlier
+ * output (offset 4096 of fuzz_dedupe's output file).
+ */
+static void
+dedupe_seeds(const char *dir)
+{
+	uint8_t b[36 + 16 + 64 + 42 + 32];
+	uint8_t g[36 + 24 + 100];
+	uint64_t i;
+
+	/* Header: block count, restored size, index size, data size. */
+	memset(b, 0, sizeof (b));
+	be32(b, 4);
+	be64(b + 4, 64 + 64 + 64 + 32);
+	be64(b + 12, 16);
+	be64(b + 20, 64 + 42 + 32);
+	be64(b + 28, 64 + 42 + 32);
+	be32(b + 36, 64);			/* literal, 64 bytes */
+	be32(b + 40, 0x80000000U);		/* exact copy of block 0 */
+	be32(b + 44, 0xC0000000U);		/* delta against block 0 */
+	be32(b + 48, 32);			/* literal, 32 bytes */
+	for (i = 0; i < 64; i++)
+		b[52 + i] = (uint8_t)(i * 3 + 1);
+	/* bsdiff header: ctrl 12/12, diff 2/64, extra 0/0, new size 64. */
+	be32(b + 116, 12);
+	be32(b + 120, 12);
+	be32(b + 124, 2);
+	be32(b + 128, 64);
+	be32(b + 140, 64);
+	be32(b + 144, 64);			/* ctrl: add 64, copy 0, seek 0 */
+	b[156] = 0x80;				/* diff: a run of 64 zeroes */
+	b[157] = 64;
+	memset(b + 158, 0x5a, 32);
+	put(dir, "segment", 0, b, sizeof (b));
+
+	memset(g, 0, sizeof (g));
+	be32(g, 0x80000000U | 6);
+	be64(g + 4, 100 + 200);
+	be64(g + 12, 24);
+	be64(g + 20, 100);
+	be64(g + 28, 100);
+	le64(g + 36, 300000);			/* this segment's file offset */
+	g[44] = 100;				/* literal, LE32 */
+	g[48] = 200;				/* reference: 200 bytes at 4096 */
+	g[51] = 0x80;
+	le64(g + 52, 4096);
+	memset(g + 60, 0xa5, 100);
+	put(dir, "global", 2, g, sizeof (g));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -209,5 +361,9 @@ main(int argc, char **argv)
 	chunk_seeds(d);
 	snprintf(d, sizeof (d), "%s/manifest", argv[1]);
 	manifest_seeds(d);
+	snprintf(d, sizeof (d), "%s/seek_index", argv[1]);
+	seek_seeds(d);
+	snprintf(d, sizeof (d), "%s/dedupe", argv[1]);
+	dedupe_seeds(d);
 	return (0);
 }

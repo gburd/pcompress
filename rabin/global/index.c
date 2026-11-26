@@ -68,16 +68,16 @@ static cleanup_indx(gdd_index_t *indx)
 						he = indx->list[i].tab[j];
 						while (he) {
 							nxt = he->next;
-							free(he);
+							pc_mfree(he);
 							he = nxt;
 						}
 					}
-					free(indx->list[i].tab);
+					pc_mfree(indx->list[i].tab);
 				}
 			}
-			free(indx->list);
+			pc_mfree(indx->list);
 		}
-		free(indx);
+		pc_mfree(indx);
 	}
 }
 
@@ -200,7 +200,7 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 		log_msg(LOG_WARN, 0, "Disk based index not yet implemented.\n");
 		return (NULL);
 	}
-	cfg = calloc(1, sizeof (archive_config_t));
+	cfg = pc_calloc(1, sizeof (archive_config_t));
 
 	rv = setup_db_config_s(cfg, chunksize, &user_chunk_sz, &pct_interval, algo, ck, ck_sim,
 		 file_sz, &hash_slots, &hash_entry_size, &memreqd, memlimit, tmppath);
@@ -216,9 +216,9 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 	/*
 	 * Now initialize the hashtable[s] to setup the index. 
 	 */
-	indx = calloc(1, sizeof (gdd_index_t));
+	indx = pc_calloc(1, sizeof (gdd_index_t));
 	if (!indx) {
-		free(cfg);
+		pc_mfree(cfg);
 		return (NULL);
 	}
 
@@ -228,16 +228,16 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 	else
 		intervals = cfg->sub_intervals;
 	indx->memlimit = memlimit - (hash_entry_size << 2);
-	indx->list = (htab_t *)calloc(intervals, sizeof (htab_t));
+	indx->list = (htab_t *)pc_calloc(intervals, sizeof (htab_t));
 	indx->hash_entry_size = hash_entry_size;
 	indx->intervals = intervals;
 	indx->hash_slots = hash_slots / intervals;
 
 	for (i = 0; i < intervals; i++) {
-		indx->list[i].tab = (hash_entry_t **)calloc(indx->hash_slots, sizeof (hash_entry_t *));
+		indx->list[i].tab = (hash_entry_t **)pc_calloc(indx->hash_slots, sizeof (hash_entry_t *));
 		if (!(indx->list[i].tab)) {
 			cleanup_indx(indx);
-			free(cfg);
+			pc_mfree(cfg);
 			return (NULL);
 		}
 		indx->memused += ((indx->hash_slots) * (sizeof (hash_entry_t *)));
@@ -254,12 +254,12 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 		strcpy(cfg->rootdir, tmppath);
 		strcat(cfg->rootdir, "/.segXXXXXX");
 		cfg->seg_fd_w = mkstemp(cfg->rootdir);
-		cfg->seg_fd_r = (struct seg_map_fd *)malloc(sizeof (struct seg_map_fd) * nthreads);
+		cfg->seg_fd_r = (struct seg_map_fd *)pc_malloc(sizeof (struct seg_map_fd) * nthreads);
 		if (cfg->seg_fd_w == -1 || cfg->seg_fd_r == NULL) {
 			cleanup_indx(indx);
 			if (cfg->seg_fd_r)
-				free(cfg->seg_fd_r);
-			free(cfg);
+				pc_mfree(cfg->seg_fd_r);
+			pc_mfree(cfg);
 			return (NULL);
 		}
 
@@ -283,8 +283,8 @@ init_global_db_s(char *path, char *tmppath, uint32_t chunksize, uint64_t user_ch
 		if (errored) {
 			cleanup_indx(indx);
 			if (cfg->seg_fd_r)
-				free(cfg->seg_fd_r);
-			free(cfg);
+				pc_mfree(cfg->seg_fd_r);
+			pc_mfree(cfg);
 			return (NULL);
 		}
 	}
@@ -515,7 +515,7 @@ db_lookup_insert_s(archive_config_t *cfg, uchar_t *sim_cksum, int interval,
 			ent = htab[htab_entry];
 			htab[htab_entry] = htab[htab_entry]->next;
 		} else {
-			ent = (hash_entry_t *)malloc(indx->hash_entry_size);
+			ent = (hash_entry_t *)pc_malloc(indx->hash_entry_size);
 			indx->memused += indx->hash_entry_size;
 		}
 		ent->item_offset = item_offset;
@@ -538,9 +538,9 @@ destroy_global_db_s(archive_config_t *cfg)
 		for (i = 0; i < cfg->nthreads; i++) {
 			close(cfg->seg_fd_r[i].fd);
 		}
-		free(cfg->seg_fd_r);
+		pc_mfree(cfg->seg_fd_r);
 		close(cfg->seg_fd_w);
 	}
-	free(cfg);	/* calloc()ed by init_global_db_s() */
+	pc_mfree(cfg);	/* pc_calloc()ed by init_global_db_s() */
 }
 

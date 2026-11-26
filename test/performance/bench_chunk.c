@@ -1,14 +1,16 @@
 /*
  * Throughput of the chunk-store pipeline a backup tool runs, through the
- * public API only: the content-defined chunkers, the keyed chunk id, and
- * sealing and opening each chunk (compress, encrypt, authenticate, and
- * back). Prints MB/s of plaintext per stage, one thread.
+ * public API only: the content-defined chunkers, the keyed chunk ids
+ * (BLAKE2b and BLAKE3), and sealing and opening each chunk (compress,
+ * encrypt, authenticate, and back). Prints MB/s of plaintext per stage,
+ * one thread.
  *
  *   bench_chunk [MB] [algorithm[:level] ...]
  *
  * The input is half text-like (repetitive, compressible) and half random,
  * so codecs do real work and some chunks are stored raw. Default 256 MB,
- * algorithms zstd:3 lz4:1 lzma:6.
+ * algorithms zstd:3 lz4:1 lzma:6. A last section seals 2 KB pieces of
+ * the text half with zstd:3, without and with a trained dictionary.
  */
 
 #include <sys/types.h>
@@ -54,6 +56,64 @@ static void
 report(const char *what, size_t bytes, double t)
 {
 	printf("  %-28s %8.1f MB/s\n", what, bytes / 1e6 / (t > 0 ? t : 1e-9));
+}
+
+/*
+ * zstd:3 on 2 KB pieces of the first len bytes of buf (text), without and
+ * with a 64 KB dictionary trained on every other piece; the pieces sealed
+ * are the ones in between.
+ */
+static void
+bench_dict(const unsigned char *buf, size_t len)
+{
+	size_t piece = 2048, np = len / piece / 2, *sizes = malloc(np * sizeof (*sizes)), i;
+	size_t dl = 64 * 1024, ol, pl;
+	unsigned char *samples = malloc(np * piece), *dict = malloc(dl);
+	unsigned char obj[4096], back[2048];
+	int d;
+
+	if (np > 20000)
+		np = 20000;
+	for (i = 0; i < np; i++) {
+		memcpy(samples + i * piece, buf + 2 * i * piece, piece);
+		sizes[i] = piece;
+	}
+	if (pc_dict_train(samples, sizes, (unsigned)np, dict, &dl) != 0) {
+		printf("  dictionary: training failed\n");
+		return;
+	}
+	for (d = 0; d < 2; d++) {
+		pc_ctx_t *c = pc_new();
+		size_t sealed = 0;
+		double ts = 0, to = 0, t0;
+
+		pc_set_log(c, NULL, NULL, PC_LOG_NONE);
+		pc_set_level(c, 3);
+		if (d)
+			pc_set_dict(c, dict, dl);
+		for (i = 0; i < np; i++) {
+			const unsigned char *p = buf + (2 * i + 1) * piece;
+
+			ol = sizeof (obj);
+			t0 = now();
+			if (pc_chunk_seal(c, p, piece, obj, &ol) != 0)
+				exit(6);
+			ts += now() - t0;
+			sealed += ol;
+			pl = sizeof (back);
+			t0 = now();
+			if (pc_chunk_open(c, obj, ol, back, &pl) != 0 || pl != piece)
+				exit(7);
+			to += now() - t0;
+		}
+		report(d ? "seal 2 KB zstd:3 +dict" : "seal 2 KB zstd:3", np * piece, ts);
+		report(d ? "open 2 KB zstd:3 +dict" : "open 2 KB zstd:3", np * piece, to);
+		printf("  %-28s %8.1f %%\n", "  stored size", 100.0 * sealed / (np * piece));
+		pc_free(c);
+	}
+	free(sizes);
+	free(samples);
+	free(dict);
 }
 
 int
@@ -102,6 +162,10 @@ main(int argc, char **argv)
 	for (off = 0, k = 0; k < nc; off += lens[k++])
 		pc_chunk_id(buf + off, lens[k], key, 32, id);
 	report("chunk id (keyed BLAKE2b)", n, now() - t);
+	t = now();
+	for (off = 0, k = 0; k < nc; off += lens[k++])
+		pc_chunk_id2(PC_ID_BLAKE3, buf + off, lens[k], key, 32, id);
+	report("chunk id (keyed BLAKE3)", n, now() - t);
 
 	for (a = 0; a < nalgos; a++) {
 		char name[32], *colon;
@@ -148,6 +212,7 @@ main(int argc, char **argv)
 			pc_free(c);
 		}
 	}
+	bench_dict(buf, n / 2);
 	pc_chunker_free(ch);
 	free(buf); free(obj); free(back); free(lens);
 	return (0);

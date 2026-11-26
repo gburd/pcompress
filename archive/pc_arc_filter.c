@@ -40,6 +40,8 @@
 #include <ctype.h>
 #include "pc_arc_filter.h"
 #include "pc_archive.h"
+#include "filters/reflate/reflate.h"
+#include "filters/bcj/bcj.h"
 
 struct scratch_buffer {
 	uchar_t *in_buff;
@@ -61,6 +63,9 @@ extern size_t wavpack_filter_decode(uchar_t *in_buf, size_t len, uchar_t **out_b
     ssize_t out_len);
 ssize_t wavpack_filter(struct filter_info *fi, void *filter_private);
 #endif
+
+ssize_t reflate_filter(struct filter_info *fi, void *filter_private);
+ssize_t bcj_filter(struct filter_info *fi, void *filter_private);
 
 size_t dispack_filter_encode(uchar_t *inData, size_t len, uchar_t **out_buf);
 size_t dispack_filter_decode(uchar_t *inData, size_t len, uchar_t **out_buf);
@@ -103,6 +108,33 @@ add_filters_by_type(struct type_data *typetab, struct filter_flags *ff)
 		typetab[slot].filter_func = dispack_filter;
 		typetab[slot].filter_name = "Dispack";
 		typetab[slot].result_type = 0;
+
+		slot = TYPE_EXE_ARM64 >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_ARM64_NAME;
+		typetab[slot].result_type = -1;
+
+		slot = TYPE_EXE_RISCV >> 3;
+		typetab[slot].filter_private = NULL;
+		typetab[slot].filter_func = bcj_filter;
+		typetab[slot].filter_name = BCJ_RISCV_NAME;
+		typetab[slot].result_type = -1;
+	}
+
+	/*
+	 * Gzip and zip containers (jar, odt, docx ...) and PNG, by extension
+	 * or magic bytes. The output is the containers' inflated data, of
+	 * any kind: left to the analyzer (TYPE_UNKNOWN), like a plain file.
+	 */
+	if (ff->enable_reflate) {
+		slot = TYPE_COMPRESSED_GZ >> 3;
+		typetab[slot].filter_private = sdat;
+		typetab[slot].filter_func = reflate_filter;
+		typetab[slot].filter_name = "Reflate";
+		typetab[slot].result_type = TYPE_UNKNOWN;
+		slot = TYPE_COMPRESSED_ZIP >> 3;
+		typetab[slot] = typetab[TYPE_COMPRESSED_GZ >> 3];
 	}
 
 #ifdef _ENABLE_WAVPACK_
@@ -135,38 +167,31 @@ type_tag_from_filter_name(struct type_data *typetab, const char *fname, size_t l
  * The filter table is shared by every context in the process, so its
  * scratch_buffer cannot hold per-call data. Each thread (an archiver or
  * extractor thread runs one entry at a time) gets its own buffer instead;
- * the table's sdat argument is ignored.
+ * the table's sdat argument is ignored. Filters run only in those two
+ * threads, and each releases its buffer with arc_filter_thread_done()
+ * before it exits. A thread-local pointer, not a pthread key: a key's
+ * destructor would run after the pc_set_thread_hooks() stop hook, and
+ * winpthreads crashed when the key was cleared before thread exit.
  */
-static pthread_key_t scratch_key;
-static pthread_once_t scratch_once = PTHREAD_ONCE_INIT;
-
-static void
-scratch_free(void *p)
-{
-	struct scratch_buffer *b = (struct scratch_buffer *)p;
-
-	free(b->in_buff);
-	free(b);
-}
-
-static void
-scratch_key_init(void)
-{
-	(void) pthread_key_create(&scratch_key, scratch_free);
-}
+static __thread struct scratch_buffer *scratch;
 
 static struct scratch_buffer *
 thread_scratch(void)
 {
-	struct scratch_buffer *b;
+	if (scratch == NULL)
+		scratch = pc_calloc(1, sizeof (*scratch));
+	return (scratch);
+}
 
-	pthread_once(&scratch_once, scratch_key_init);
-	if ((b = pthread_getspecific(scratch_key)) == NULL) {
-		if ((b = calloc(1, sizeof (*b))) == NULL)
-			return (NULL);
-		(void) pthread_setspecific(scratch_key, b);
+/* Release the calling thread's scratch buffer, if it has one. */
+void
+arc_filter_thread_done(void)
+{
+	if (scratch != NULL) {
+		pc_mfree(scratch->in_buff);
+		pc_mfree(scratch);
+		scratch = NULL;
 	}
-	return (b);
 }
 
 /* Returns this thread's scratch buffer with room for len bytes, or NULL. */
@@ -179,9 +204,9 @@ ensure_buffer(struct scratch_buffer *unused, uint64_t len)
 	if (sdat == NULL)
 		return (NULL);
 	if (sdat->in_buff == NULL || sdat->in_bufflen < len) {
-		free(sdat->in_buff);
+		pc_mfree(sdat->in_buff);
 		sdat->in_bufflen = len;
-		sdat->in_buff = malloc(sdat->in_bufflen);
+		sdat->in_buff = pc_malloc(sdat->in_bufflen);
 		if (sdat->in_buff == NULL)
 			sdat->in_bufflen = 0;
 	}
@@ -189,10 +214,12 @@ ensure_buffer(struct scratch_buffer *unused, uint64_t len)
 }
 
 /*
- * Copy current entry data from the archive being extracted into the given buffer.
+ * Copy current entry data from the archive being extracted into out_buf,
+ * which holds cap bytes. The block offsets come from the archive, so a
+ * block that would land past cap fails the copy (returns 0).
  */
 static ssize_t
-copy_archive_data(struct archive *ar, uchar_t *out_buf)
+copy_archive_data(struct archive *ar, uchar_t *out_buf, uint64_t cap)
 {
 	int64_t offset;
 	const void *buff;
@@ -205,6 +232,13 @@ copy_archive_data(struct archive *ar, uchar_t *out_buf)
 		if (r == ARCHIVE_EOF)
 			break;
 		if (r != ARCHIVE_OK)
+			return (0);
+		/*
+		 * Filtered members are written contiguously. A block anywhere
+		 * else (a hostile sparse map with overlapping blocks) would
+		 * leave part of the buffer unwritten while tot still adds up.
+		 */
+		if (offset < 0 || (uint64_t)offset != tot || size > cap - tot)
 			return (0);
 		memcpy(out_buf + offset, buff, size);
 		tot += size;
@@ -261,7 +295,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -281,7 +315,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * version number. We also check if it is supported.
 		 */
 		if (mapbuf[0] != 'J' || mapbuf[1] != 'S' || !pjg_version_supported(mapbuf[2])) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -299,7 +333,7 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		len = packjpg_filter_process(mapbuf, len, &out);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -325,9 +359,9 @@ packjpg_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -381,7 +415,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -400,7 +434,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * Write the raw data and skip.
 		 */
 		if (identify_pnm_type(mapbuf, len - 8) != 2) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -418,7 +452,7 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		len = packpnm_filter_process(mapbuf, len, &out);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -444,9 +478,9 @@ packpnm_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -504,7 +538,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -524,7 +558,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 */
 		wpkstr = (char *)mapbuf;
 		if (strncmp(wpkstr, "wvpk", 4) != 0) {
-			uint8_t *out = malloc(len);
+			uint8_t *out = pc_malloc(len);
 
 			memcpy(out, sdat->in_buff, len);
 			fi->fout->output_type = FILTER_OUTPUT_MEM;
@@ -542,7 +576,7 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		len = wavpack_filter_encode(mapbuf, len, &out, fi->cmp_level);
 		if (len == 0 || len >= (len1 - 8)) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -568,9 +602,9 @@ wavpack_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -622,7 +656,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 			return (FILTER_RETURN_ERROR);
 		}
 
-		in_size = copy_archive_data(fi->source_arc, sdat->in_buff);
+		in_size = copy_archive_data(fi->source_arc, sdat->in_buff, len);
 		if (in_size != len) {
 			log_msg(LOG_ERR, 0, "Failed to read archive data.");
 			return (FILTER_RETURN_ERROR);
@@ -644,7 +678,7 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		len = dispack_filter_encode(mapbuf, len, &out);
 		if (len == 0) {
 			munmap(mapbuf, len1);
-			free(out);
+			pc_mfree(out);
 			return (FILTER_RETURN_SKIP);
 		}
 		munmap(mapbuf, len1);
@@ -670,9 +704,9 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 		 * silently written empty. Emit the stored data as-is, like
 		 * the not-our-format path above, and flag a soft error.
 		 */
-		free(out);
+		pc_mfree(out);
 		len = archive_entry_size(fi->entry);
-		out = malloc(len);
+		out = pc_malloc(len);
 		if (out == NULL)
 			return (FILTER_RETURN_ERROR);
 		memcpy(out, sdat->in_buff, len);
@@ -689,3 +723,131 @@ dispack_filter(struct filter_info *fi, void *filter_private)
 	return (ARCHIVE_OK);
 }
 
+
+/*
+ * Reflate (-Z, filters/reflate/). Compressing: the member's record, or
+ * SKIP when it has no deflate stream the pinned deflate reproduces (the
+ * member is then stored as it is). Extracting: the original bytes from
+ * the record; a record that does not rebuild is a soft error, and the
+ * stored bytes are written as they are, as the other filters do.
+ *
+ * The member's stored data is the 8-byte record length, then the
+ * record, zero-padded to the member's size in the archive (as packJPG).
+ * Zip members are matched by name, so the one zip slot also catches
+ * odt and the like; and the type table has a slot per type, so a member
+ * reaching this filter may be anything: rf_encode() checks the magic.
+ */
+ssize_t
+reflate_filter(struct filter_info *fi, void *filter_private)
+{
+	struct scratch_buffer *sdat = (struct scratch_buffer *)filter_private;
+	uchar_t *mapbuf, *out = NULL;
+	uint64_t len = archive_entry_size(fi->entry), in_size;
+
+	if (fi->compressing) {
+		size_t olen;
+
+		if (len < 64 || len > RF_MAX_IN)
+			return (FILTER_RETURN_SKIP);
+		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
+		if (mapbuf == MAP_FAILED) {
+			log_msg(LOG_ERR, 1, "Mmap failed in Reflate filter.");
+			return (FILTER_RETURN_ERROR);
+		}
+		olen = rf_encode(mapbuf, len, &out);
+		munmap(mapbuf, len);
+		if (olen == 0)
+			return (FILTER_RETURN_SKIP);
+		fi->fout->output_type = FILTER_OUTPUT_MEM;
+		fi->fout->out = out;
+		fi->fout->out_size = olen;
+		fi->fout->hdr.in_size = LE64(olen);
+		fi->fout->grown = 1;
+		return (ARCHIVE_OK);
+	}
+
+	/* The member's stored size is the record plus its length field. */
+	sdat = ensure_buffer(sdat, len);
+	if (sdat == NULL || sdat->in_buff == NULL) {
+		log_msg(LOG_ERR, 1, "Out of memory.");
+		return (FILTER_RETURN_ERROR);
+	}
+	if (copy_archive_data(fi->source_arc, sdat->in_buff, len) != (ssize_t)len) {
+		log_msg(LOG_ERR, 0, "Failed to read archive data.");
+		return (FILTER_RETURN_ERROR);
+	}
+	in_size = len >= 8 ? LE64(U64_P(sdat->in_buff)) : 0;
+	if (in_size == 0 || in_size > len - 8 ||
+	    (len = rf_decode(sdat->in_buff + 8, in_size, &out)) == 0) {
+		len = archive_entry_size(fi->entry);
+		if ((out = pc_malloc(len)) == NULL)
+			return (FILTER_RETURN_ERROR);
+		memcpy(out, sdat->in_buff, len);
+		fi->fout->output_type = FILTER_OUTPUT_MEM;
+		fi->fout->out = out;
+		fi->fout->out_size = len;
+		return (FILTER_RETURN_SOFT_ERROR);
+	}
+	fi->fout->output_type = FILTER_OUTPUT_MEM;
+	fi->fout->out = out;
+	fi->fout->out_size = len;
+	return (ARCHIVE_OK);
+}
+
+/*
+ * The ARM64 and RISC-V branch filter (filters/bcj/): the member is
+ * converted in place, so its size does not change and no header is
+ * needed. Only members of at most BCJ_FILE_SIZE_LIMIT bytes are
+ * filtered, one copy in memory each way. Every byte string decodes, so
+ * extraction cannot fail here beyond reading the member or allocating.
+ */
+ssize_t
+bcj_filter(struct filter_info *fi, void *filter_private)
+{
+	uint64_t len = archive_entry_size(fi->entry);
+	int arm64 = (*fi->type_ptr & PC_SUBTYPE_MASK) == TYPE_EXE_ARM64;
+	uchar_t *out, *mapbuf;
+
+	(void) filter_private;
+	if (fi->compressing && (len < BCJ_FILE_SIZE_MIN || len > BCJ_FILE_SIZE_LIMIT))
+		return (FILTER_RETURN_SKIP);
+	/* Extracting: no filtered member is larger; the size is untrusted. */
+	if (len > BCJ_FILE_SIZE_LIMIT) {
+		log_msg(LOG_ERR, 0, "BCJ member size %" PRIu64 " too large.", len);
+		return (FILTER_RETURN_ERROR);
+	}
+	if ((out = pc_malloc(len > 0 ? len : 1)) == NULL) {
+		log_msg(LOG_ERR, 0, "Out of memory.");
+		return (FILTER_RETURN_ERROR);
+	}
+
+	if (fi->compressing) {
+		mapbuf = mmap(NULL, len, PROT_READ, MAP_SHARED, fi->fd, 0);
+		if (mapbuf == MAP_FAILED) {
+			log_msg(LOG_ERR, 1, "Mmap failed in BCJ filter.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		memcpy(out, mapbuf, len);
+		munmap(mapbuf, len);
+		if (arm64)
+			bcj_arm64_encode(out, len);
+		else
+			bcj_riscv_encode(out, len);
+		fi->fout->hdr_valid = 0;
+	} else {
+		if (copy_archive_data(fi->source_arc, out, len) != (ssize_t)len) {
+			log_msg(LOG_ERR, 0, "Failed to read archive data.");
+			pc_mfree(out);
+			return (FILTER_RETURN_ERROR);
+		}
+		if (arm64)
+			bcj_arm64_decode(out, len);
+		else
+			bcj_riscv_decode(out, len);
+	}
+	fi->fout->output_type = FILTER_OUTPUT_MEM;
+	fi->fout->out = out;
+	fi->fout->out_size = len;
+	return (ARCHIVE_OK);
+}

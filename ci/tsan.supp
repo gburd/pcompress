@@ -1,0 +1,7 @@
+# ThreadSanitizer suppressions for the release gate (ci/gate.sh).
+# libomp is not built with TSan: a worker's nested parallel region has
+# libomp initialise and lock its own mutexes on threads it starts, which
+# TSan reports as races inside libomp (pthread_mutex_init against
+# pthread_mutex_lock, both called from libomp.so). 4.4.0 reports the same
+# two. Only races whose stack is inside libomp are suppressed.
+race:libomp.so

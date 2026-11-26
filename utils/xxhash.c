@@ -82,6 +82,7 @@
 #include <stdlib.h>    // for malloc(), free()
 #include <string.h>    // for memcpy()
 #include "xxhash.h"
+#include "pc_alloc.h"
 
 
 
@@ -316,7 +317,7 @@ struct XXH_state32_t
 
 void* CPUCAP_NM(XXH32_init) (unsigned int seed)
 {
-	struct XXH_state32_t * state = (struct XXH_state32_t *) malloc ( sizeof(struct XXH_state32_t));
+	struct XXH_state32_t * state = (struct XXH_state32_t *) pc_malloc( sizeof(struct XXH_state32_t));
 	state->seed = seed;
 	state->v1 = seed + PRIME32_1 + PRIME32_2;
 	state->v2 = seed + PRIME32_2;
@@ -523,7 +524,7 @@ unsigned int CPUCAP_NM(XXH32_result) (void* state_in)
 {
     unsigned int h32 = CPUCAP_NM(XXH32_getIntermediateResult)(state_in);
 
-	free(state_in);
+	pc_mfree(state_in);
 
 	return h32;
 }

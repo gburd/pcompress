@@ -70,7 +70,9 @@ typedef enum {
 	PC_ERR_CORRUPT = 5,	/**< damaged data: bad length, header, dedupe index */
 	PC_ERR_VERIFY = 6,	/**< checksum, CRC or HMAC mismatch; wrong password */
 	PC_ERR_CRYPTO = 7,	/**< key setup or password problem */
-	PC_ERR_INTERNAL = 8	/**< anything else */
+	PC_ERR_INTERNAL = 8,	/**< anything else */
+	PC_ERR_CANCELLED = 9,	/**< the pc_set_progress() callback stopped the job */
+	PC_ERR_DICT = 10	/**< the object needs a pc_set_dict() dictionary not set, or a bad one */
 } pc_error_t;
 
 /** Log levels for pc_set_log(). */
@@ -84,6 +86,89 @@ enum {
 
 /** Log callback: called from library threads, never concurrently for one context. */
 typedef void (*pc_log_fn)(void *arg, int level, const char *msg);
+
+/* --- Embedding: process-wide hooks, set before any other call --------- */
+
+/**
+ * Memory functions for the library's allocations. size is
+ * sizeof (pc_allocator_t), set by the caller; all three functions are
+ * required, and ud is passed to each. The library calls them from its own
+ * threads, so they must be thread-safe. realloc and free are never given
+ * NULL, and realloc never a size of 0 (the library frees instead);
+ * calloc is malloc plus memset. A NULL return is out of memory.
+ *
+ * Struct growth: fields are only ever appended. The library accepts any
+ * size from the first version's (the fields up to and including ud) up:
+ * fields it does not know are ignored, and fields a shorter (older)
+ * struct lacks count as zero.
+ */
+typedef struct {
+	size_t size;
+	void *(*malloc)(void *ud, size_t n);
+	void *(*realloc)(void *ud, void *p, size_t n);
+	void (*free)(void *ud, void *p);
+	void *ud;
+} pc_allocator_t;
+
+/**
+ * Use a for the library's memory, for the whole process; NULL restores the
+ * C library's. Call it before anything that allocates (pc_new(),
+ * create_pc_context(), pc_chunker_new(), pc_index_open(), pc_manifest_*,
+ * pc_keyfile_*, pc_chunk_*): once the library has allocated anything it
+ * returns -1 and changes nothing, as it does for a struct smaller than
+ * the first version's or that lacks a function, and while another thread
+ * is inside pc_set_allocator(). 0 on success. A call that races the
+ * library's first allocation either takes effect before it or is refused,
+ * never half applied.
+ *
+ * Not covered: libarchive (archive mode) and OpenSSL allocate on their own
+ * (OpenSSL's CRYPTO_set_mem_functions() covers it), as do the C++ filters
+ * (packJPG, packPNM, dispack, the dictionary filter), the OpenMP runtime,
+ * and the internals of the system zlib and bzip2 beyond the allocation
+ * hooks the library gives them, which they honour.
+ */
+int pc_set_allocator(const pc_allocator_t *a);
+
+/**
+ * The process's default log sink: messages from contexts without their
+ * own pc_set_log() sink, and messages logged outside any context, go to
+ * fn(arg, level, msg) instead of stderr. fn NULL restores stderr. level
+ * is the highest level delivered to the default sink, for contexts whose
+ * pc_set_log() level is -1 too; PC_LOG_NONE delivers nothing, and -1
+ * keeps the current level (PC_LOG_INFO at start). Set it before other
+ * threads use the library. fn may be called from library threads, and
+ * from several at once for different contexts.
+ */
+void pc_set_default_log(pc_log_fn fn, void *arg, int level);
+
+/**
+ * Hooks around the threads the library creates (the compress and
+ * decompress workers, the writer, and the archive, extract and metadata
+ * threads). size is sizeof (pc_thread_hooks_t), set by the caller.
+ * start(ud, name) is the first thing a new thread runs, with a short
+ * name: "pc-compress", "pc-decompress", "pc-writer", "pc-meta",
+ * "pc-archive" or "pc-extract". stop(ud) is the last thing it runs
+ * before it exits: the thread calls the pc_set_allocator() functions
+ * only between the two. Either may be NULL, not both. Struct growth is
+ * as for pc_allocator_t: any size from the first version's (up to and
+ * including ud) is accepted.
+ */
+typedef struct {
+	size_t size;
+	void (*start)(void *ud, const char *name);
+	void (*stop)(void *ud);
+	void *ud;
+} pc_thread_hooks_t;
+
+/**
+ * Install h for the whole process; NULL removes the hooks. -1 (nothing
+ * changed) for a struct smaller than the first version's or with neither
+ * function.
+ * Set them before other threads use the library: a thread runs the hooks
+ * that were installed when it was created. Threads that OpenMP, zstd's
+ * worker pool, lzmaMt or libbsc start are not covered.
+ */
+int pc_set_thread_hooks(const pc_thread_hooks_t *h);
 
 /** Library version string, e.g. "4.1.0". */
 const char *pc_version(void);
@@ -207,10 +292,26 @@ int pc_chunker_finish(pc_chunker_t *c, size_t *lens, int nlens);
 int pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t id[32]);
 
 /**
+ * Chunk identity with a choice of hash, fixed per repository (ids name
+ * objects, so changing it means storing everything again).
+ * PC_ID_BLAKE2B is pc_chunk_id(). PC_ID_BLAKE3 is BLAKE3-256: keyed mode
+ * with key != NULL, which must then be exactly 32 bytes, plain BLAKE3
+ * with key NULL and keylen 0. Keyed BLAKE3 of 64 KB chunks ran 5.4 times
+ * as fast as keyed BLAKE2b on one x86-64 core with AVX-512. Sealed
+ * objects are tagged with BLAKE2b either way.
+ * 0, or -1 for an unknown algorithm or bad arguments.
+ */
+#define	PC_ID_BLAKE2B	1
+#define	PC_ID_BLAKE3	2
+int pc_chunk_id2(int algorithm, const void *buf, size_t len, const void *key,
+    size_t keylen, uint8_t id[32]);
+
+/**
  * Raw 256-bit key for pc_chunk_seal()/pc_chunk_open(); NULL, 0 clears it.
- * With a key, objects are encrypted (XSalsa20) and authenticated (keyed
- * BLAKE2b over header and payload); without one they carry a plain
- * BLAKE2b checksum. -1 unless keylen is 32.
+ * With a key, objects are encrypted and authenticated with
+ * XChaCha20-Poly1305 (object version 2; version 1 keyed objects of 4.4
+ * still open); without one they carry a plain BLAKE2b checksum. -1
+ * unless keylen is 32.
  */
 int pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen);
 
@@ -224,7 +325,8 @@ int pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32]
 
 /**
  * Key files: a random 256-bit key wrapped with a password of any length
- * (scrypt, then XSalsa20 and a BLAKE2b-256 tag). pc_keyfile_create()
+ * (Argon2id, then XSalsa20 and a BLAKE2b-256 tag; files made with scrypt
+ * by 4.4 and earlier still open). pc_keyfile_create()
  * writes pc_keyfile_size() bytes to out and returns the new key in key;
  * pc_keyfile_open() recovers the key, failing on a wrong password or any
  * change to the file. The KDF and its parameters are stored in the file.
@@ -251,6 +353,25 @@ int pc_index_add(pc_index_t *idx, const uint8_t id[32]);
 size_t pc_index_count(pc_index_t *idx);
 int pc_index_sync(pc_index_t *idx);
 int pc_index_close(pc_index_t *idx);
+
+/**
+ * A static filter over a set of chunk ids (a Binary Fuse filter, about
+ * 9 bits per id), to put in front of an exact id table so that looking
+ * up an id that is not stored, the common case, costs no table probe or
+ * read. pc_idfilter_new() builds it from n ids (32 bytes each, back to
+ * back, any order, repeats allowed; NULL on error or out of memory).
+ * pc_idfilter_maybe() returns 0 if the id is certainly not in the set,
+ * 1 if it may be (always 1 for an id the filter was built from, and for
+ * about 0.4% of others), -1 on bad arguments: confirm a 1 in the exact
+ * table. The filter cannot grow: rebuild it, and check ids added since
+ * the build some other way. pc_idfilter_size() is its memory in bytes.
+ * A built filter may be read from several threads at once.
+ */
+typedef struct pc_idfilter pc_idfilter_t;
+pc_idfilter_t *pc_idfilter_new(const void *ids, size_t n);
+int pc_idfilter_maybe(const pc_idfilter_t *f, const uint8_t id[32]);
+size_t pc_idfilter_size(const pc_idfilter_t *f);
+void pc_idfilter_free(pc_idfilter_t *f);
 
 /**
  * An object does not say which chunk it is: whoever controls the storage
@@ -401,7 +522,10 @@ size_t pc_chunk_seal_bound(size_t len);
  * Compress (with the context's algorithm and level) and, if a key is set,
  * encrypt one chunk into a self-describing object at out. *outlen is the
  * buffer size on entry (at least pc_chunk_seal_bound(len)) and the object
- * size on return. Incompressible data is stored raw. 0 or -1.
+ * size on return. Incompressible data is stored raw: a chunk of 16 KB or
+ * more whose sampled histograms of bytes and of byte-to-byte differences
+ * are close to uniform (compressed, encrypted or random data) skips the
+ * codec entirely. 0 or -1.
  */
 int pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
 
@@ -414,11 +538,66 @@ int pc_chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *
 int pc_chunk_open(pc_ctx_t *ctx, const void *in, size_t len, void *out, size_t *outlen);
 
 /**
+ * zstd dictionaries for small chunks: a backup tool trains one on samples
+ * of a repository's data, stores it as an object of its own, and sets it
+ * on every context that seals or opens that repository's chunks. Pieces
+ * under about 8 KB (small files, per-directory manifests) then compress
+ * 1.4 to 1.8 times better; 64 KB chunks gain almost nothing.
+ *
+ * pc_dict_train() writes a dictionary of at most *dictlen bytes (about
+ * 110 KB is usual) to dict from n samples laid end to end in samples,
+ * sizes[i] bytes each, and sets *dictlen to its size. It needs a few
+ * hundred samples, at least about 100 times the dictionary size in all.
+ * 0 or -1. Its working memory comes from the C library, not from
+ * pc_set_allocator()'s functions. Training is deterministic: the same
+ * samples give the same dictionary.
+ *
+ * pc_set_dict() copies dict into the context (NULL, 0 removes it) and
+ * digests it, so it fails here with PC_ERR_DICT if zstd cannot use it (a
+ * zstd-format dictionary whose tables do not parse; other bytes are
+ * taken as raw content). On failure the context keeps the dictionary it
+ * had.
+ * While one is set, pc_chunk_seal() needs the zstd algorithm (else it
+ * fails with PC_ERR_ARGS), and the objects under 128 KB it compresses
+ * name the dictionary by pc_dict_id() and need it to open (larger ones
+ * are sealed without it, where it would cost ratio): pc_chunk_open() fails
+ * with PC_ERR_DICT when the context has no dictionary or another one.
+ * Objects stored raw (incompressible, or under 34 bytes) need none.
+ * Objects sealed without a dictionary open with or without one set.
+ * Versions before 4.5 refuse dictionary objects as corrupt.
+ *
+ * pc_dict_id() is BLAKE2b-256 of the dictionary bytes, unkeyed: the name
+ * objects carry. 0 or -1.
+ */
+int pc_dict_train(const void *samples, const size_t *sizes, unsigned n, void *dict,
+    size_t *dictlen);
+int pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len);
+int pc_dict_id(const void *dict, size_t len, uint8_t id[32]);
+
+/**
  * Plaintext size an object declares, from its header only (not verified),
  * to size the buffer for pc_chunk_open(); (size_t)-1 if it is not a chunk
  * object. 0 is a valid size.
  */
 size_t pc_chunk_open_size(const void *obj, size_t len);
+
+/**
+ * Progress callback: in is the input bytes the job has consumed so far,
+ * out the chunk bytes it has written (the stream header is not counted).
+ * Return 0 to go on, anything else to cancel the job.
+ */
+typedef int (*pc_progress_fn)(void *arg, uint64_t in, uint64_t out);
+
+/**
+ * Call fn(arg, in, out) from the calling thread during pc_compress_fd(),
+ * pc_decompress_fd() and start_pcompress() on ctx, after each chunk is
+ * handed to a worker. A non-zero return cancels the job: the call stops
+ * its threads, frees what it allocated, removes the output file it
+ * created (not a caller's descriptor, nor files an archive extraction
+ * already wrote), and returns -1 (start_pcompress(): non-zero) with
+ * pc_last_error_code() PC_ERR_CANCELLED. fn NULL removes it.
+ */
+void pc_set_progress(pc_ctx_t *ctx, pc_progress_fn fn, void *arg);
 
 /* --- Diagnostics -------------------------------------------------------- */
 

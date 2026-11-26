@@ -105,6 +105,10 @@ zero_rle_decode(const void* ibuf, unsigned int ilen,
 	pos2 = 0;
 	pos1 = 0;
 	for (; pos1<ilen && pos2<*olen;) {
+		if (ilen - pos1 < 2) {
+			log_msg(LOG_ERR, 0, "Input underflow in Zero RLE decode.\n");
+			return (-1);
+		}
 		count = ntohs(U16_P(ib + pos1));
 		pos1 += 2;
 		if (count & ZERO_MASK) {

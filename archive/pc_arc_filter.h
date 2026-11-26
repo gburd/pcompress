@@ -52,12 +52,27 @@ extern "C" {
 #define	FILTER_RETURN_ERROR	(-1)
 #define	FILTER_RETURN_SOFT_ERROR	(-2)
 #define FILTER_XATTR_ENTRY  "_._pc_filter_xattr"
+/*
+ * The member's original size, as 8 little-endian bytes, when a filter
+ * stored more bytes than the member has (filter_output_t.grown).
+ */
+#define FILTER_XATTR_SIZE   "_._pc_filter_size"
 
 #define	FILTER_OUTPUT_MEM	1
 #define	FILTER_OUTPUT_FILE	2
 
 #define HELPER_DEF_BUFSIZ       (512 * 1024)
 #define WVPK_FILE_SIZE_LIMIT    (18 * 1024 * 1024)
+
+/*
+ * The ARM64 and RISC-V branch filter: the names tag filtered members in
+ * the archive (format version 13, FLAG_BCJ_ARM), and members outside
+ * these sizes are stored unfiltered.
+ */
+#define	BCJ_ARM64_NAME		"BCJ-ARM64"
+#define	BCJ_RISCV_NAME		"BCJ-RISCV"
+#define	BCJ_FILE_SIZE_MIN	4096
+#define	BCJ_FILE_SIZE_LIMIT	(256 * 1024 * 1024)
 
 /*
  * The biggest scratch buffer reqd by filter routines.
@@ -84,6 +99,7 @@ typedef struct _filter_output {
 	int out_fd;
 	int hdr_valid;
 	filter_std_hdr_t hdr;
+	int grown;	/* output is larger than the member: store its size */
 } filter_output_t;
 
 struct filter_info {
@@ -103,6 +119,7 @@ struct filter_flags {
 	int enable_packjpg;
 	int enable_wavpack;
 	int exe_preprocess;
+	int enable_reflate;	/* -Z: deflate streams stored inflated */
 };
 
 typedef ssize_t (*filter_func_ptr)(struct filter_info *fi, void *filter_private);
@@ -115,6 +132,8 @@ struct type_data {
 };
 
 void add_filters_by_type(struct type_data *typetab, struct filter_flags *ff);
+/* Free the calling thread's filter scratch buffer: last thing an archive thread does. */
+void arc_filter_thread_done(void);
 int  type_tag_from_filter_name(struct type_data *typetab, const char *fname,
     size_t len);
 

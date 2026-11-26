@@ -11,9 +11,15 @@
  * and computes a valid tag with pc_chunk_id(), as an attacker would.
  * Open must then fail or return exactly the declared length.
  *
+ * A second forged mode sets the dictionary flag and the id of the
+ * dictionary the harness's dictionary context holds, so mutated zstd
+ * frames reach the dictionary decoder too.
+ *
  * The other modes feed the raw input to pc_chunk_open() (with and
- * without a key, so the header and tag checks are fuzzed too) and to
- * pc_keyfile_open(). Uses only the public API. Built by "make fuzz-build"
+ * without a key, so the header and tag checks are fuzzed too), to
+ * pc_keyfile_open(), and to pc_set_dict(): a dictionary is read back
+ * from storage too, and zstd parses its entropy tables. Uses only the
+ * public API. Built by "make fuzz-build"
  * (clang with libFuzzer and ASan); -DFUZZ_AFL builds a stdin driver.
  */
 
@@ -27,13 +33,30 @@
 #define	TAG		32
 #define	OUT_MAX		(1 << 20)	/* declared lengths are capped here */
 
-static pc_ctx_t *plain_ctx, *keyed_ctx;
-static uint8_t *out;
+static pc_ctx_t *plain_ctx, *keyed_ctx, *dict_ctx;
+static uint8_t *out, dict_id[32];
 
 static void
 quiet(void *a, int l, const char *m)
 {
 	(void) a; (void) l; (void) m;
+}
+
+/*
+ * A raw-content dictionary (zstd takes any bytes that lack its magic as
+ * one), so the harness needs no training.
+ */
+static void
+dict_setup(void)
+{
+	static uint8_t dict[4096];
+	size_t i;
+
+	for (i = 0; i < sizeof (dict); i++)
+		dict[i] = (uint8_t)("the quick brown fox jumps "[i % 26] + (i % 97 == 0));
+	if (pc_set_dict(dict_ctx, dict, sizeof (dict)) != 0 ||
+	    pc_dict_id(dict, sizeof (dict), dict_id) != 0)
+		abort();
 }
 
 static void
@@ -45,12 +68,15 @@ setup(void)
 		return;
 	plain_ctx = pc_new();
 	keyed_ctx = pc_new();
+	dict_ctx = pc_new();
 	out = malloc(OUT_MAX);
-	if (plain_ctx == NULL || keyed_ctx == NULL || out == NULL)
+	if (plain_ctx == NULL || keyed_ctx == NULL || dict_ctx == NULL || out == NULL)
 		abort();
 	pc_set_log(plain_ctx, quiet, NULL, PC_LOG_NONE);
 	pc_set_log(keyed_ctx, quiet, NULL, PC_LOG_NONE);
+	pc_set_log(dict_ctx, quiet, NULL, PC_LOG_NONE);
 	pc_set_key(keyed_ctx, key, sizeof (key));
+	dict_setup();
 }
 
 /* Open and check the length contract: fail, or exactly what was declared. */
@@ -71,33 +97,63 @@ open_check(pc_ctx_t *c, const uint8_t *obj, size_t len)
 
 /*
  * Input: algorithm id, level byte, 3-byte declared length, then payload.
- * Builds a version-1 unencrypted object with a valid tag around it.
+ * Builds a version-1 unencrypted object with a valid tag around it; with
+ * dict, a dictionary object (zstd, the harness dictionary's id).
  */
 static void
-forged(const uint8_t *d, size_t n)
+forged(const uint8_t *d, size_t n, int dict)
 {
 	uint8_t *o;
-	size_t plen, i;
+	size_t plen, i, hdr = dict ? HDR + 32 : HDR;
 	uint64_t plain;
 
 	if (n < 5)
 		return;
 	plain = (uint64_t)d[2] | (uint64_t)d[3] << 8 | (uint64_t)(d[4] & 0x0f) << 16;
 	plen = n - 5;
-	if ((o = calloc(1, HDR + plen + TAG)) == NULL)
+	if ((o = calloc(1, hdr + plen + TAG)) == NULL)
 		abort();
 	memcpy(o, "PCK1", 4);
 	o[4] = 1;
 	o[5] = d[0] & 0x80 ? 0x02 : 0;	/* PCK_RAW sometimes */
 	o[6] = d[0] & 0x7f;
 	o[7] = d[1];
+	if (dict) {
+		o[5] = 0x04;	/* PCK_DICT */
+		o[6] = 1;	/* zstd */
+		memcpy(o + HDR, dict_id, 32);
+	}
 	for (i = 0; i < 8; i++)
 		o[8 + i] = (uint8_t)(plain >> (8 * i));
-	memcpy(o + HDR, d + 5, plen);
-	if (pc_chunk_id(o, HDR + plen, NULL, 0, o + HDR + plen) != 0)
+	memcpy(o + hdr, d + 5, plen);
+	if (pc_chunk_id(o, hdr + plen, NULL, 0, o + hdr + plen) != 0)
 		abort();
-	open_check(plain_ctx, o, HDR + plen + TAG);
+	open_check(dict ? dict_ctx : plain_ctx, o, hdr + plen + TAG);
 	free(o);
+}
+
+/*
+ * Set the input as a dictionary on a fresh context; if it is accepted, a
+ * chunk sealed with it must open to the same bytes.
+ */
+static void
+dict_check(const uint8_t *d, size_t n)
+{
+	static const char text[] = "{\"id\": 17, \"name\": \"user17\", \"shell\": \"/bin/sh\"}\n";
+	pc_ctx_t *c = pc_new();
+	uint8_t obj[256];
+	size_t ol = sizeof (obj), pl = OUT_MAX;
+
+	if (c == NULL)
+		abort();
+	pc_set_log(c, quiet, NULL, PC_LOG_NONE);
+	if (pc_set_dict(c, d, n) == 0) {
+		if (pc_chunk_seal(c, text, sizeof (text), obj, &ol) != 0 ||
+		    pc_chunk_open(c, obj, ol, out, &pl) != 0 || pl != sizeof (text) ||
+		    memcmp(out, text, pl) != 0)
+			abort();
+	}
+	pc_free(c);
 }
 
 static int
@@ -111,29 +167,43 @@ fuzz_one(const uint8_t *data, size_t size)
 	switch (data[0] % 4) {
 	case 0:
 	case 1:
-		forged(data + 1, size - 1);
+		forged(data + 1, size - 1, data[0] & 8);
 		break;
 	case 2:
 		open_check(data[0] & 4 ? keyed_ctx : plain_ctx, data + 1, size - 1);
 		break;
 	case 3:
+		if (data[0] & 16) {
+			dict_check(data + 1, size - 1);
+			break;
+		}
 		/*
-		 * A key file with the right magic runs scrypt with the file's
-		 * own parameters, up to 512 MB and a second or more: far too
-		 * slow for fuzzing. Clamp N and r in a copy so the KDF stays
-		 * cheap; the parsing, the bounds checks around them and the
-		 * tag check are what is under test.
+		 * A key file with the right magic runs its KDF (scrypt or
+		 * Argon2id) with the file's own parameters, up to 512 MB or
+		 * 1 GiB and a second or more: far too slow for fuzzing. Clamp
+		 * the cost in a copy so the KDF stays cheap; the parsing, the
+		 * bounds checks around them and the tag check are what is
+		 * under test.
 		 */
 		if (size - 1 == pc_keyfile_size()) {
 			uint8_t kf[128];
 
 			memcpy(kf, data + 1, sizeof (kf));
-			if (kf[7] > 12)
-				kf[7] = 10 + kf[7] % 3;
-			kf[8] = 1 + kf[8] % 2;
-			kf[9] = kf[10] = kf[11] = 0;
-			if (kf[12] > 2)
-				kf[12] = 1 + kf[12] % 2;
+			if (kf[6] == 2) {	/* Argon2id: p, m (KiB), t */
+				if (kf[7] > 2)
+					kf[7] = 1 + kf[7] % 2;
+				kf[9] %= 2;	/* m up to 511 KiB */
+				kf[10] = kf[11] = 0;
+				if (kf[12] > 2)
+					kf[12] = 1 + kf[12] % 2;
+			} else {	/* scrypt: log2 N, r, p */
+				if (kf[7] > 12)
+					kf[7] = 10 + kf[7] % 3;
+				kf[8] = 1 + kf[8] % 2;
+				kf[9] = kf[10] = kf[11] = 0;
+				if (kf[12] > 2)
+					kf[12] = 1 + kf[12] % 2;
+			}
 			pc_keyfile_open(kf, sizeof (kf), "pw", 2, key);
 		} else {
 			pc_keyfile_open(data + 1, size - 1, "pw", 2, key);

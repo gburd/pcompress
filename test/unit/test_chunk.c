@@ -143,6 +143,218 @@ MU_TEST(test_compresses_and_falls_back)
 	free(b);
 }
 
+/*
+ * The incompressibility pre-test stores noise raw without the codec, and
+ * leaves near-random data that still compresses to the codec: text with
+ * one byte in four random, and noise over 128 byte values (7 bits each).
+ */
+MU_TEST(test_incompressible_skip)
+{
+	size_t n = 65536, i, ol;
+	unsigned char *b = malloc(n);
+	pc_ctx_t *c = ctx_with("lzma", 9, NULL);
+	unsigned char *obj = malloc(pc_chunk_seal_bound(n));
+
+	/* Noise: stored raw. */
+	fill(b, n, 1);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0x02, "noise not raw");
+	/* A quarter noise, three quarters text: compressed. */
+	fill(b, n, 0);
+	for (i = 0; i < n; i += 4)
+		b[i] = (unsigned char)rnd();
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n * 3 / 4, "mostly text stored raw");
+	/* Noise drawn from 128 byte values: 7 bits per byte, compressible. */
+	for (i = 0; i < n; i++)
+		b[i] = (unsigned char)(rnd() & 0x7f);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n * 15 / 16, "7-bit noise stored raw");
+	/* 0..255 repeated: every byte value equally often, yet compressible. */
+	for (i = 0; i < n; i++)
+		b[i] = (unsigned char)i;
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n / 16, "byte ramp stored raw");
+	pc_free(c);
+	free(b);
+	free(obj);
+
+	/*
+	 * A 4 MB chunk of noise with 64 KB of text where 64 samples spread
+	 * over the whole chunk would miss it: compressed.
+	 */
+	n = 4 << 20;
+	b = malloc(n);
+	obj = malloc(pc_chunk_seal_bound(n));
+	c = ctx_with("zstd", 3, NULL);
+	fill(b, n, 1);
+	fill(b + 30 * ((n - 128) / 63) + 256, 65536, 0);
+	ol = pc_chunk_seal_bound(n);
+	mu_assert_int_eq(0, pc_chunk_seal(c, b, n, obj, &ol));
+	mu_assert(obj[5] == 0 && ol < n - 32768, "text region in a large chunk stored raw");
+	pc_free(c);
+	free(b);
+	free(obj);
+}
+
+/* A small JSON-like record: shared structure, varying values. */
+static size_t
+record(char *b, size_t cap, unsigned i)
+{
+	return ((size_t)snprintf(b, cap, "{\"id\": %u, \"name\": \"user%u\", \"email\": "
+	    "\"user%u@example.org\", \"active\": %s, \"groups\": [\"staff\", \"wheel\"], "
+	    "\"shell\": \"/bin/sh\", \"home\": \"/home/user%u\", \"quota\": %u}\n",
+	    i, i * 7919 % 10007, i * 31 % 997, i % 3 ? "true" : "false", i, (i * 2654435761U) >> 20));
+}
+
+/*
+ * Dictionaries: training is deterministic, objects with one are smaller
+ * for small inputs, name the dictionary and need exactly it to open;
+ * objects without one open either way; raw objects carry none.
+ */
+MU_TEST(test_dict)
+{
+	size_t sizes[600], dl = 8192, dl2 = 8192, n = 0, ol, ol2, pl;
+	char *samples = malloc(600 * 256), rec[1024];
+	unsigned char *dict = malloc(dl), *dict2 = malloc(dl), obj[2048], obj2[2048], out[1024];
+	unsigned char key[32] = { 9 }, id[32], noise[300];
+	pc_ctx_t *c, *d;
+	unsigned i;
+
+	for (i = 0; i < 600; i++) {
+		sizes[i] = record(samples + n, 256, i);
+		n += sizes[i];
+	}
+	mu_assert_int_eq(0, pc_dict_train(samples, sizes, 600, dict, &dl));
+	mu_assert(dl > 0 && dl <= 8192, "dictionary size");
+	mu_assert_int_eq(0, pc_dict_train(samples, sizes, 600, dict2, &dl2));
+	mu_assert(dl == dl2 && memcmp(dict, dict2, dl) == 0, "training not deterministic");
+	mu_assert(pc_dict_train(samples, sizes, 0, dict2, &dl2) != 0, "no samples");
+
+	/* One record not among the samples: smaller with the dictionary. */
+	n = record(rec, sizeof (rec), 100000);
+	c = ctx_with("zstd", 3, NULL);
+	ol2 = sizeof (obj2);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj2, &ol2));
+	mu_assert_int_eq(0, pc_set_dict(c, dict, dl));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert(ol + 40 < ol2, "dictionary did not help a small record");
+	mu_assert(obj[5] == 0x04 && obj[6] == 1, "dictionary flag and zstd id");
+	mu_assert_int_eq(0, pc_dict_id(dict, dl, id));
+	mu_assert(memcmp(obj + 40, id, 32) == 0, "object names its dictionary");
+	mu_assert(pc_chunk_open_size(obj, ol) == n, "open_size");
+
+	/* Opens with the dictionary; PC_ERR_DICT without it or with another. */
+	d = ctx_with(NULL, 0, NULL);
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "opened without its dictionary");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(d));
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj2, ol2, out, &pl));
+	dict2[dl / 2] ^= 1;
+	mu_assert_int_eq(0, pc_set_dict(d, dict2, dl));
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "opened with another dictionary");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(d));
+	mu_assert_int_eq(0, pc_set_dict(d, dict, dl));
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, ol, out, &pl));
+	mu_assert(pl == n && memcmp(out, rec, n) == 0, "dictionary round trip");
+	pl = sizeof (out);
+	mu_assert_int_eq(0, pc_chunk_open(d, obj2, ol2, out, &pl));
+	mu_assert(pl == n && memcmp(out, rec, n) == 0, "plain object with a dictionary set");
+
+	/* The tag covers the dictionary id. */
+	obj[50] ^= 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "changed dictionary id accepted");
+	mu_assert_int_eq(PC_ERR_VERIFY, pc_last_error_code(d));
+
+	/* Chunks of 128 KB and more are plain zstd objects: no id, open anywhere. */
+	{
+		size_t bn = 128 * 1024, bl = pc_chunk_seal_bound(bn), bp = bn;
+		char *big = malloc(bn), *back = malloc(bn);
+		unsigned char *bobj = malloc(bl);
+		pc_ctx_t *g = ctx_with(NULL, 0, NULL);
+
+		for (i = 0, n = 0; n + 256 < bn; i++)
+			n += record(big + n, 256, i);
+		memset(big + n, ' ', bn - n);
+		mu_assert_int_eq(0, pc_chunk_seal(c, big, bn, bobj, &bl));
+		mu_assert(bobj[5] == 0 && bobj[6] == 1 && bl < bn / 2, "large chunk used the dictionary");
+		mu_assert_int_eq(0, pc_chunk_open(g, bobj, bl, back, &bp));
+		mu_assert(bp == bn && memcmp(back, big, bn) == 0, "large chunk round trip");
+		bl = pc_chunk_seal_bound(bn - 1);
+		mu_assert_int_eq(0, pc_chunk_seal(c, big, bn - 1, bobj, &bl));
+		mu_assert(bobj[5] == 0x04, "chunk under 128 KB without the dictionary");
+		pc_free(g);
+		free(big);
+		free(back);
+		free(bobj);
+		n = record(rec, sizeof (rec), 100000);
+	}
+
+	/* Noise and tiny inputs are stored raw, without the id. */
+	fill(noise, sizeof (noise), 1);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, noise, sizeof (noise), obj, &ol));
+	mu_assert(obj[5] == 0x02 && ol == pc_chunk_seal_bound(sizeof (noise)), "noise raw");
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, "tiny", 4, obj, &ol));
+	mu_assert(obj[5] == 0x02, "tiny raw");
+
+	/* Every level, with a key, through a fresh context. */
+	for (i = 1; i <= 14; i++) {
+		pc_ctx_t *e = ctx_with("zstd", (int)i, key), *f = ctx_with(NULL, 0, key);
+
+		pc_set_dict(e, dict, dl);
+		pc_set_dict(f, dict, dl);
+		ol = sizeof (obj);
+		mu_assert_int_eq(0, pc_chunk_seal(e, rec, n, obj, &ol));
+		mu_assert(obj[5] == 0x05, "encrypted dictionary object");
+		pl = sizeof (out);
+		mu_assert_int_eq(0, pc_chunk_open(f, obj, ol, out, &pl));
+		mu_assert(pl == n && memcmp(out, rec, n) == 0, "keyed dictionary round trip");
+		pc_free(e);
+		pc_free(f);
+	}
+
+	/* Only zstd takes a dictionary; clearing it restores other algorithms. */
+	mu_assert_int_eq(0, pc_set_algorithm(c, "lz4"));
+	ol = sizeof (obj);
+	mu_assert(pc_chunk_seal(c, rec, n, obj, &ol) != 0, "lz4 with a dictionary");
+	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(c));
+	mu_assert_int_eq(0, pc_set_dict(c, NULL, 0));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert_int_eq(0, pc_set_dict(c, dict, dl));
+	mu_assert(pc_set_dict(c, NULL, 5) != 0 && pc_set_dict(c, dict, 0) != 0, "bad pc_set_dict");
+	mu_assert_int_eq(PC_ERR_ARGS, pc_last_error_code(c));
+	/* A zstd dictionary with broken entropy tables is refused at once. */
+	memcpy(dict2, dict, dl);
+	memset(dict2 + 8, 0xff, 64);
+	mu_assert(pc_set_dict(c, dict2, dl) != 0, "malformed dictionary accepted");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(c));
+	mu_assert(pc_set_dict(c, dict, 64) != 0, "truncated dictionary accepted");
+	mu_assert_int_eq(PC_ERR_DICT, pc_last_error_code(c));
+	/* A failed pc_set_dict() keeps the dictionary the context had. */
+	mu_assert_int_eq(0, pc_set_algorithm(c, "zstd"));
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, rec, n, obj, &ol));
+	mu_assert(obj[5] == 0x04 && memcmp(obj + 40, id, 32) == 0, "dictionary lost");
+	mu_assert(pc_dict_id(NULL, 0, id) != 0, "pc_dict_id of nothing");
+	pc_free(c);
+	pc_free(d);
+	free(samples);
+	free(dict);
+	free(dict2);
+}
+
 /* Every one-byte change and every truncation of a small object fails. */
 static void
 tamper_all(const unsigned char *key, int kind)
@@ -243,7 +455,7 @@ MU_TEST(test_bad_args)
 	mu_assert(pc_chunk_open(c, obj, ol, out, &pl) != 0, "small plain buffer");
 	mu_assert(pc_chunk_open_size("not an object at all, really", 28) == (size_t)-1, "size of junk");
 	pl = sizeof (out);
-	mu_assert(pc_chunk_open(c, "PCK2junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk",
+	mu_assert(pc_chunk_open(c, "PCK9junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk",
 	    70, out, &pl) != 0, "bad magic");
 	mu_assert_int_eq(PC_ERR_FORMAT, pc_last_error_code(c));
 	pc_free(c);
@@ -271,6 +483,47 @@ MU_TEST(test_ids)
 		mu_assert_int_eq(0, pc_chunk_id("abc", 3, NULL, 0, id1));
 		mu_assert(memcmp(id1, kat, 32) == 0, "BLAKE2b-256(abc) known answer");
 	}
+}
+
+/*
+ * pc_chunk_id2(): PC_ID_BLAKE2B is pc_chunk_id(); PC_ID_BLAKE3 matches the
+ * official BLAKE3 vectors (test_vectors.json: input bytes i % 251, key
+ * "whats the Elvish word for friend"), keyed only with 32-byte keys.
+ */
+MU_TEST(test_chunk_id2)
+{
+	static const unsigned char h1025[32] = {
+		0xd0, 0x02, 0x78, 0xae, 0x47, 0xeb, 0x27, 0xb3, 0x4f, 0xae, 0xcf, 0x67,
+		0xb4, 0xfe, 0x26, 0x3f, 0x82, 0xd5, 0x41, 0x29, 0x16, 0xc1, 0xff, 0xd9,
+		0x7c, 0x8c, 0xb7, 0xfb, 0x81, 0x4b, 0x84, 0x44 };
+	static const unsigned char k102400[32] = {
+		0x1c, 0x35, 0xd1, 0xa5, 0x81, 0x10, 0x83, 0xfd, 0x71, 0x19, 0xf5, 0xd5,
+		0xd1, 0xba, 0x02, 0x7b, 0x4d, 0x01, 0xc0, 0xc6, 0xc4, 0x9f, 0xb6, 0xff,
+		0x2c, 0xf7, 0x53, 0x93, 0xea, 0x5d, 0xb4, 0xa7 };
+	static const unsigned char h0[32] = {
+		0xaf, 0x13, 0x49, 0xb9, 0xf5, 0xf9, 0xa1, 0xa6, 0xa0, 0x40, 0x4d, 0xea,
+		0x36, 0xdc, 0xc9, 0x49, 0x9b, 0xcb, 0x25, 0xc9, 0xad, 0xc1, 0x12, 0xb7,
+		0xcc, 0x9a, 0x93, 0xca, 0xe4, 0x1f, 0x32, 0x62 };
+	unsigned char *in = malloc(102400), id[32], id2[32];
+	const char *key = "whats the Elvish word for friend";
+	size_t i;
+
+	for (i = 0; i < 102400; i++)
+		in[i] = (unsigned char)(i % 251);
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, in, 1025, NULL, 0, id));
+	mu_assert(memcmp(id, h1025, 32) == 0, "BLAKE3 hash, 1025 bytes");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, in, 102400, key, 32, id));
+	mu_assert(memcmp(id, k102400, 32) == 0, "BLAKE3 keyed hash, 102400 bytes");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE3, NULL, 0, NULL, 0, id));
+	mu_assert(memcmp(id, h0, 32) == 0, "BLAKE3 hash, empty");
+	mu_assert_int_eq(0, pc_chunk_id2(PC_ID_BLAKE2B, in, 1000, key, 32, id));
+	mu_assert_int_eq(0, pc_chunk_id(in, 1000, key, 32, id2));
+	mu_assert(memcmp(id, id2, 32) == 0, "PC_ID_BLAKE2B is pc_chunk_id");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, in, 10, key, 16, id) != 0, "16-byte BLAKE3 key");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, in, 10, NULL, 32, id) != 0, "NULL key, length 32");
+	mu_assert(pc_chunk_id2(3, in, 10, NULL, 0, id) != 0, "unknown id algorithm");
+	mu_assert(pc_chunk_id2(PC_ID_BLAKE3, NULL, 10, NULL, 0, id) != 0, "NULL input");
+	free(in);
 }
 
 /*
@@ -425,15 +678,29 @@ MU_TEST(test_keyfile)
 	    strlen(pw), back) != 0, "wrong password accepted");
 	for (i = 0; i < 32; i++)
 		mu_assert(back[i] == 0, "key not zeroed on failure");
-	/* Any changed byte fails (sampled: each costs one scrypt). */
+	/* Any changed byte fails (sampled: each costs one KDF run). */
 	for (i = 0; i < n; i += 9) {
 		memcpy(kf2, kf, n);
 		kf2[i] ^= 0x40;
 		mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "modified keyfile accepted");
 	}
 	mu_assert(pc_keyfile_open(kf, n - 1, pw, strlen(pw), back) != 0, "short keyfile");
+	/* New files use Argon2id (KDF id 2) at 128 MiB, 4 passes, 4 lanes. */
+	mu_assert(kf[6] == 2 && kf[7] == 4 && kf[8] == 0 && kf[9] == 0 && kf[10] == 2 &&
+	    kf[12] == 4, "key file KDF and cost");
 	/* Absurd KDF parameters are refused before any work. */
 	memcpy(kf2, kf, n);
+	kf2[10] = 0x40;	/* 4 GiB */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "4 GiB Argon2 accepted");
+	memcpy(kf2, kf, n);
+	kf2[12] = 64;	/* passes */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "64 passes accepted");
+	memcpy(kf2, kf, n);
+	kf2[7] = 0;	/* lanes */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "0 lanes accepted");
+	memcpy(kf2, kf, n);
+	kf2[6] = 1;	/* scrypt with these bytes: log2 N 4 */
+	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 4 accepted");
 	kf2[7] = 40;
 	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "logN 40 accepted");
 	/* Each in range, together 16 GB (128 * r * N): refused before scrypt. */
@@ -441,6 +708,9 @@ MU_TEST(test_keyfile)
 	kf2[8] = 32; kf2[9] = kf2[10] = kf2[11] = 0;
 	kf2[12] = 16; kf2[13] = kf2[14] = kf2[15] = 0;
 	mu_assert(pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "16 GB scrypt accepted");
+	kf2[6] = 3;
+	mu_assert(pc_keyfile_open(kf, n, pw, strlen(pw), back) == 0 &&
+	    pc_keyfile_open(kf2, n, pw, strlen(pw), back) != 0, "unknown KDF id accepted");
 	/* Two key files: different keys and salts. */
 	mu_assert_int_eq(0, pc_keyfile_create(pw, strlen(pw), back, kf2));
 	mu_assert(memcmp(key, back, 32) != 0 && memcmp(kf, kf2, n) != 0, "key files repeat");
@@ -453,6 +723,35 @@ MU_TEST(test_keyfile)
 	mu_assert(pl == 15 && memcmp(out, "hello, key file", 15) == 0, "seal with keyfile key");
 	pc_free(c);
 	pc_free(d);
+}
+
+/*
+ * A scrypt key file (KDF id 1) written by pc_keyfile_create() of 4.4.0
+ * still opens, to the same key.
+ */
+MU_TEST(test_keyfile_scrypt)
+{
+	static const char kfhex[] =
+	    "50434b45593101110800000001000000b013aca55d5feadd5a1f4d27657fbdef"
+	    "5520298d55511fc87e025d2b3088b098cb1d075a0adbaee40000000000000000"
+	    "37d6cdc258df9fee5521f92f09e7a1b9259e8dc3fd8a9dd1b90a63d61bb46bf1"
+	    "2d7a2a52f717d62af3f24ab4032fa83318f0874baff3f1aa9716ede64316349e";
+	static const unsigned char want[32] = {
+		0x21, 0xdb, 0x0b, 0x2e, 0x5b, 0x3d, 0x8b, 0x55, 0x74, 0xa3, 0xc0, 0x01,
+		0x5b, 0x82, 0xb2, 0x35, 0x29, 0x2e, 0xf8, 0x97, 0xe3, 0xc4, 0x66, 0x7c,
+		0xfd, 0x33, 0xa2, 0xb8, 0x9c, 0x72, 0x4f, 0xe5 };
+	const char *pw = "key file from 4.4.0";
+	unsigned char kf[128], key[32];
+	unsigned int b, i;
+
+	for (i = 0; i < sizeof (kf); i++) {
+		sscanf(kfhex + 2 * i, "%2x", &b);
+		kf[i] = (unsigned char)b;
+	}
+	mu_assert_int_eq(0, pc_keyfile_open(kf, sizeof (kf), pw, strlen(pw), key));
+	mu_assert(memcmp(key, want, 32) == 0, "4.4.0 key file opens to its key");
+	mu_assert(pc_keyfile_open(kf, sizeof (kf), "key file from 4.4.1", strlen(pw), key) != 0,
+	    "wrong password on a scrypt key file");
 }
 
 MU_TEST(test_index)
@@ -557,6 +856,48 @@ MU_TEST(test_index)
 }
 
 /*
+ * The id filter never says "absent" for an id it was built from (with
+ * repeats in the input), says it for nearly all others, and handles the
+ * empty and one-id sets.
+ */
+MU_TEST(test_idfilter)
+{
+	size_t n = 200000, i, fp = 0;
+	uint8_t *ids = malloc(n * 32), id[32];
+	pc_idfilter_t *f;
+	uint64_t v;
+
+	mu_assert(ids != NULL, "malloc");
+	for (i = 0; i < n; i++) {
+		v = i % (n / 2);	/* every id twice */
+		pc_chunk_id(&v, sizeof (v), NULL, 0, ids + i * 32);
+	}
+	f = pc_idfilter_new(ids, n);
+	mu_assert(f != NULL, "build");
+	for (i = 0; i < n; i++)
+		mu_assert_int_eq(1, pc_idfilter_maybe(f, ids + i * 32));
+	for (i = 0; i < 100000; i++) {
+		v = n + i;
+		pc_chunk_id(&v, sizeof (v), NULL, 0, id);
+		fp += pc_idfilter_maybe(f, id);
+	}
+	mu_assert(fp < 1000, "false positives under 1%");
+	mu_assert(pc_idfilter_size(f) < n / 2 * 10 / 8 + 1024, "about 9 bits per id");
+	pc_idfilter_free(f);
+	f = pc_idfilter_new(ids, 1);
+	mu_assert(f != NULL && pc_idfilter_maybe(f, ids) == 1 &&
+	    pc_idfilter_maybe(f, ids + 32) == 0, "one id");
+	pc_idfilter_free(f);
+	f = pc_idfilter_new(NULL, 0);
+	mu_assert(f != NULL && pc_idfilter_maybe(f, ids) == 0, "empty set");
+	pc_idfilter_free(f);
+	mu_assert(pc_idfilter_new(NULL, 1) == NULL && pc_idfilter_maybe(NULL, ids) == -1,
+	    "bad arguments");
+	pc_idfilter_free(NULL);
+	free(ids);
+}
+
+/*
  * Paths given to the library are UTF-8 on every platform: an index whose
  * name has Japanese, Greek, and emoji characters opens, reopens with its
  * ids, and is found by that name.
@@ -592,7 +933,8 @@ MU_TEST(test_index_utf8_path)
 /*
  * Object names are keyed chunk ids, so they are public: no chunk id may
  * equal a subkey. Before the fix, the id of a chunk holding exactly the
- * MAC-key label was the MAC key; forge with it, and it must not open.
+ * MAC-key label was the MAC key; forge a version 1 keyed object (which
+ * still opens) with it, and it must not open.
  */
 MU_TEST(test_ids_do_not_leak_subkeys)
 {
@@ -605,13 +947,73 @@ MU_TEST(test_ids_do_not_leak_subkeys)
 		key[i] = (unsigned char)(i * 7 + 1);
 	c = ctx_with("none", 0, key);
 	mu_assert_int_eq(0, pc_chunk_seal(c, "attack at dawn", 14, obj, &ol));
-	clen = ol - 40 - 32;
-	mu_assert(clen == 14, "raw payload");
+	clen = ol - 40 - 16;
+	mu_assert(clen == 14 && memcmp(obj, "PCK2", 4) == 0, "raw v2 payload");
+	memcpy(obj, "PCK1", 4);
+	obj[4] = 1;
 	pc_chunk_id("pcompress chunk mac", 19, key, 32, mac);
-	obj[40] ^= 1;
 	pc_chunk_id(obj, 40 + clen, mac, 32, obj + 40 + clen);
+	ol = 40 + clen + 32;
 	mu_assert(pc_chunk_open(c, obj, ol, out, &pl) != 0, "object forged with a chunk id as MAC key");
 	pc_free(c);
+}
+
+/*
+ * Keyed objects: version 2 (PCK2, XChaCha20-Poly1305, 16-byte tag) since
+ * 4.5; a version 1 keyed object sealed by 4.4.0 (XSalsa20 and a keyed
+ * BLAKE2b tag) still opens. Unkeyed objects stay version 1.
+ */
+MU_TEST(test_object_versions)
+{
+	static const char v1hex[] =
+	    "50434b310103000020000000000000004b6d923565b2d801d96c8773992f86cf"
+	    "53b2f22a71812f0acba77e06fb42083a5a4f8744568c54f2491ea95b5fe56bec"
+	    "f9a01540b500530c57bcd5bbf7ed483baed91a725ce824e4e7bb73f8ddfb7b47"
+	    "5f56ef398d64970a";
+	const char *m = "sealed by 4.4.0 with a key, zstd";
+	unsigned char key[32], obj[200], out[100];
+	size_t ol, pl = sizeof (out), i;
+	unsigned int b;
+	pc_ctx_t *c, *d;
+
+	for (i = 0; i < 32; i++)
+		key[i] = (unsigned char)(i * 11 + 3);
+	for (i = 0; i < 104; i++) {
+		sscanf(v1hex + 2 * i, "%2x", &b);
+		obj[i] = (unsigned char)b;
+	}
+	d = ctx_with(NULL, 0, key);
+	mu_assert(pc_chunk_open_size(obj, 104) == strlen(m), "v1 object size");
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, 104, out, &pl));
+	mu_assert(pl == strlen(m) && memcmp(out, m, pl) == 0, "4.4.0 keyed object opens");
+	obj[50] ^= 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, 104, out, &pl) != 0, "changed v1 object opens");
+
+	c = ctx_with("zstd", 3, key);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, m, strlen(m), obj, &ol));
+	mu_assert(memcmp(obj, "PCK2", 4) == 0 && obj[4] == 2 && (obj[5] & 1), "keyed v2 header");
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open_size(obj, ol) == strlen(m), "v2 object size");
+	mu_assert_int_eq(0, pc_chunk_open(d, obj, ol, out, &pl));
+	mu_assert(pl == strlen(m) && memcmp(out, m, pl) == 0, "v2 round trip");
+	/* A v2 object claiming no encryption, or relabelled v1, is refused. */
+	obj[5] &= ~1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "unencrypted v2 opens");
+	obj[5] |= 1;
+	memcpy(obj, "PCK1", 4);
+	obj[4] = 1;
+	pl = sizeof (out);
+	mu_assert(pc_chunk_open(d, obj, ol, out, &pl) != 0, "v2 relabelled as v1 opens");
+	pc_free(c);
+	c = ctx_with("zstd", 3, NULL);
+	ol = sizeof (obj);
+	mu_assert_int_eq(0, pc_chunk_seal(c, m, strlen(m), obj, &ol));
+	mu_assert(memcmp(obj, "PCK1", 4) == 0 && obj[4] == 1, "unkeyed objects stay v1");
+	pc_free(c);
+	pc_free(d);
 }
 
 /* Build an unkeyed object around a hostile payload and open it. */
@@ -734,14 +1136,20 @@ MU_TEST_SUITE(suite_chunk)
 	MU_RUN_TEST(test_hostile_payloads);
 	MU_RUN_TEST(test_mutation_fuzz);
 	MU_RUN_TEST(test_ids_do_not_leak_subkeys);
+	MU_RUN_TEST(test_object_versions);
 	MU_RUN_TEST(test_index);
 	MU_RUN_TEST(test_index_utf8_path);
+	MU_RUN_TEST(test_idfilter);
 	MU_RUN_TEST(test_keyfile);
+	MU_RUN_TEST(test_keyfile_scrypt);
 	MU_RUN_TEST(test_ids);
+	MU_RUN_TEST(test_chunk_id2);
 	MU_RUN_TEST(test_derive_key);
 	MU_RUN_TEST(test_chunker);
 	MU_RUN_TEST(test_gear_chunker);
 	MU_RUN_TEST(test_compresses_and_falls_back);
+	MU_RUN_TEST(test_dict);
+	MU_RUN_TEST(test_incompressible_skip);
 	MU_RUN_TEST(test_keys);
 	MU_RUN_TEST(test_bad_args);
 	MU_RUN_TEST(test_tamper_rejected);

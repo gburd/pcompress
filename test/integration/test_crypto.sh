@@ -126,10 +126,10 @@ rm -f "$LTF" "$LTF.pz" "$LTF.out"
 
 echo ""
 echo "--- Key derivation cost in the header ---"
-# Encrypted files are format version 11 and record the scrypt cost; plain
-# files stay version 10. AES header: algorithm 8, version 2, flags 2, chunk
-# size 8, level 4, salt length 4, salt 32, nonce 8, key length 4, then KDF
-# id, log2 N, r and p (4 bytes each, big-endian), so log2 N ends at byte 79.
+# Encrypted files are format version 12 and record the Argon2id cost;
+# plain files stay version 10. Header: algorithm 8, version 2, flags 2,
+# chunk size 8, level 4, salt 32, then KDF id, memory (KiB), passes and
+# lanes (4 bytes each, big-endian) at bytes 56-71, then a 16-byte tag.
 # Numeric: illumos od pads with zeros ("011").
 byte_at() { echo $(( $(od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' ' | sed 's/^0*\(.\)/\1/') )); }
 KTF="${TMPDIR:-/tmp}/pc_kdf_$$"
@@ -137,10 +137,11 @@ head -c 50000 /dev/urandom > "$KTF"
 printf 'kdf-test-password\n' > "$PWFILE"
 rm -f "$KTF.pz"
 $PCOMPRESS -c zstd -l 3 -e AES -w "$PWFILE" "$KTF" 2>/dev/null
-if [ "$(byte_at "$KTF.pz" 9)" = 11 ] && [ "$(byte_at "$KTF.pz" 79)" = 17 ]; then
-	log_pass "encrypted file: version 11, log2 N 17 recorded"
+if [ "$(byte_at "$KTF.pz" 9)" = 12 ] && [ "$(byte_at "$KTF.pz" 59)" = 2 ] &&
+    [ "$(byte_at "$KTF.pz" 61)" = 2 ] && [ "$(byte_at "$KTF.pz" 67)" = 4 ]; then
+	log_pass "encrypted file: version 12, Argon2id 128 MiB t=4 recorded"
 else
-	log_fail "encrypted file: version $(byte_at "$KTF.pz" 9), log2 N $(byte_at "$KTF.pz" 79)"
+	log_fail "encrypted file: version $(byte_at "$KTF.pz" 9), KDF $(byte_at "$KTF.pz" 59)"
 fi
 cp "$KTF.pz" "$KTF.good"
 rm -f "$KTF.pz"
@@ -150,9 +151,20 @@ if [ "$(byte_at "$KTF.pz" 9)" = 10 ]; then
 else
 	log_fail "plain file: version $(byte_at "$KTF.pz" 9)"
 fi
-# log2 N 40 (2^40 * 1 KB of memory): refused before any work, not attempted.
+# A password with a plain file: refused, not silently decompressed (the
+# plain file could be anyone's substitute for the encrypted one).
+printf 'kdf-test-password\n' > "$PWFILE"
+rm -f "$KTF.out"
+if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
+	log_fail "password with a plain file accepted"
+elif echo "$msg" | grep -q 'file is not encrypted' && [ ! -s "$KTF.out" ]; then
+	log_pass "password with a plain file refused"
+else
+	log_fail "password with a plain file: $msg"
+fi
+# 1 TiB of memory: refused before any work, not attempted.
 cp "$KTF.good" "$KTF.pz"
-printf '\050' | dd of="$KTF.pz" bs=1 seek=79 conv=notrunc 2>/dev/null
+printf '\100' | dd of="$KTF.pz" bs=1 seek=60 conv=notrunc 2>/dev/null
 printf 'kdf-test-password\n' > "$PWFILE"
 rm -f "$KTF.out"
 if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
@@ -162,19 +174,107 @@ elif echo "$msg" | grep -q 'Invalid key derivation parameters'; then
 else
 	log_fail "hostile KDF cost: $msg"
 fi
-# A valid but changed cost is covered by the header HMAC.
+# A valid but changed cost (3 passes) is covered by the header tag.
 cp "$KTF.good" "$KTF.pz"
-printf '\020' | dd of="$KTF.pz" bs=1 seek=79 conv=notrunc 2>/dev/null
+printf '\003' | dd of="$KTF.pz" bs=1 seek=67 conv=notrunc 2>/dev/null
 printf 'kdf-test-password\n' > "$PWFILE"
 rm -f "$KTF.out"
 if msg=$($PCOMPRESS -d -w "$PWFILE" "$KTF.pz" "$KTF.out" 2>&1); then
 	log_fail "changed KDF cost accepted"
 elif echo "$msg" | grep -q 'Header verification failed'; then
-	log_pass "changed KDF cost fails the header HMAC"
+	log_pass "changed KDF cost fails the header tag"
 else
 	log_fail "changed KDF cost: $msg"
 fi
 rm -f "$KTF" "$KTF.pz" "$KTF.good" "$KTF.out"
+
+echo ""
+echo "--- Tampering (format version 12) ---"
+# Each change must fail decompression: a swapped, repeated or dropped
+# chunk, a cut-off end record, a changed header byte, payload byte or
+# metadata chunk. 4.4 accepted the swap, the drop and the cut (a chunk's
+# HMAC did not bind its position, and nothing recorded the count).
+TAMPER="$(cd "$(dirname "$0")/.." && pwd)/tools/pz_tamper.py"
+if command -v python3 >/dev/null 2>&1; then
+	TTF="${TMPDIR:-/tmp}/pc_tamper_$$"
+	head -c 3000000 /dev/urandom > "$TTF"
+	for alg in AES SALSA20; do
+		printf 'tamper-pw\n' > "$PWFILE"
+		rm -f "$TTF.pz"
+		$PCOMPRESS -c zstd -l 3 -s 1m -e $alg -w "$PWFILE" "$TTF" 2>/dev/null
+		for op in reorder dup drop-last cut-end header payload; do
+			python3 "$TAMPER" "$TTF.pz" "$TTF.bad.pz" $op
+			printf 'tamper-pw\n' > "$PWFILE"
+			rm -f "$TTF.out"
+			if $PCOMPRESS -d -w "$PWFILE" "$TTF.bad.pz" "$TTF.out" 2>/dev/null; then
+				log_fail "$alg: $op accepted"
+			elif [ -e "$TTF.out" ]; then
+				log_fail "$alg: $op refused, partial output left"
+			else
+				log_pass "$alg: $op refused, no output"
+			fi
+		done
+	done
+	# After the end record: only EOF, or a region ending in the seek
+	# index trailer magic (the index reader checks the rest).
+	for tail in junk seek short; do
+		cp "$TTF.pz" "$TTF.bad.pz"
+		case $tail in
+		junk) printf 'appended' >> "$TTF.bad.pz" ;;
+		seek) printf 'an index body, then PCSEEK01' >> "$TTF.bad.pz" ;;
+		short) printf 'SEEK01' >> "$TTF.bad.pz" ;;
+		esac
+		printf 'tamper-pw\n' > "$PWFILE"
+		rm -f "$TTF.out"
+		$PCOMPRESS -d -w "$PWFILE" "$TTF.bad.pz" "$TTF.out" 2>/dev/null
+		st=$?
+		if [ $tail = seek ] && [ $st -eq 0 ] && cmp -s "$TTF" "$TTF.out"; then
+			log_pass "bytes after the end record: seek index trailer allowed"
+		elif [ $tail != seek ] && [ $st -ne 0 ] && [ ! -e "$TTF.out" ]; then
+			log_pass "bytes after the end record: $tail refused"
+		else
+			log_fail "bytes after the end record: $tail, status $st"
+		fi
+	done
+	# Archive with a metadata stream: a changed metadata chunk, a lost chunk.
+	TD="${TTF}.d"; TX="${TTF}.x"
+	mkdir -p "$TD/sub"
+	head -c 1500000 "$TTF" > "$TD/sub/a"; echo small > "$TD/b"
+	printf 'tamper-pw\n' > "$PWFILE"
+	rm -f "$TTF.a.pz"
+	$PCOMPRESS -a -c zstd -l 3 -s 1m -e SALSA20 -w "$PWFILE" "$TD" "$TTF.a" 2>/dev/null
+	for op in meta drop-last; do
+		find "$TX" -depth -delete 2>/dev/null
+		mkdir -p "$TX"
+		python3 "$TAMPER" "$TTF.a.pz" "$TTF.bad.pz" $op
+		printf 'tamper-pw\n' > "$PWFILE"
+		if $PCOMPRESS -d -w "$PWFILE" "$TTF.bad.pz" "$TX" 2>/dev/null; then
+			log_fail "archive: $op accepted"
+		else
+			log_pass "archive: $op refused"
+		fi
+	done
+	find "$TD" "$TX" -depth -delete 2>/dev/null
+	rm -f "$TTF" "$TTF.pz" "$TTF.bad.pz" "$TTF.out" "$TTF.a.pz"
+else
+	log_skip "tampering (no python3)"
+fi
+
+# 4.4 wrote past its header buffer encrypting a 1- or 2-byte file.
+OTF="${TMPDIR:-/tmp}/pc_one_$$"
+for n in 1 2; do
+	head -c $n /dev/urandom > "$OTF"
+	rm -f "$OTF.pz" "$OTF.out"
+	printf 'tiny-pw\n' > "$PWFILE"
+	if $PCOMPRESS -c zstd -l 3 -e AES -w "$PWFILE" "$OTF" 2>/dev/null &&
+	    printf 'tiny-pw\n' > "$PWFILE" &&
+	    $PCOMPRESS -d -w "$PWFILE" "$OTF.pz" "$OTF.out" 2>/dev/null && cmp -s "$OTF" "$OTF.out"; then
+		log_pass "$n-byte file round trip"
+	else
+		log_fail "$n-byte file round trip"
+	fi
+done
+rm -f "$OTF" "$OTF.pz" "$OTF.out"
 
 rm -f "$PWFILE"
 

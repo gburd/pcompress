@@ -42,9 +42,10 @@ one() {
 		    cmp -s "$W/in" "$W/out"; then ok "$label"; return; fi
 	fi
 	# Releases before 4.3 cannot read encrypted files from 4.3 on (format
-	# version 11): from those, only a clean refusal counts as a pass.
+	# version 11), nor releases before 4.5 those from 4.5 on (version 12):
+	# from those, only a clean refusal counts as a pass.
 	if [ "$w" = "$NEW" ] && [ -n "$extra" ] &&
-	    grep -q 'Cannot handle newer archive version 11' "$W/err"; then
+	    grep -Eq 'Cannot handle newer archive version (11|12)' "$W/err"; then
 		ok "$label (refused: older release)"; return
 	fi
 	no "$label"
@@ -61,6 +62,13 @@ for dir in new-old old-new; do
 	one "$w" "$r" "$dir lzma -G" -c lzma -l6 -s 2m -G
 	one "$w" "$r" "$dir zstd AES" -c zstd -l6 -s 1m -e AES
 	one "$w" "$r" "$dir zstd SALSA20" -c zstd -l6 -s 1m -e SALSA20
+	# A seek index and repair data (4.5 on): older readers stop before them.
+	if [ "$w" = "$NEW" ]; then
+		one "$w" "$r" "$dir zstd -X" -c zstd -l6 -s 256k -X
+		one "$w" "$r" "$dir zstd -X AES" -c zstd -l6 -s 256k -X -e AES
+		one "$w" "$r" "$dir zstd -Y" -c zstd -l6 -s 256k -Y 10
+		one "$w" "$r" "$dir zstd -X -Y" -c zstd -l6 -s 256k -X -Y 10
+	fi
 
 	# Pipe mode.
 	rm -f "$W/p.pz" "$W/out" "$W/err"
@@ -74,11 +82,15 @@ for dir in new-old old-new; do
 	mkdir -p "$t/sub/deep" "$x"
 	cp "$W/in" "$t/big"; printf 'x' > "$t/one"; : > "$t/empty"
 	head -c 70000 "$W/in" > "$t/sub/deep/part"; ln -s ../one "$t/sub/link"
-	rm -f "$W/a.pz" "$W/err"
-	if "$w" -a -c zstd -l6 "$t" "$W/a" > /dev/null 2> "$W/err" &&
-	    "$r" -d "$W/a.pz" "$x" > /dev/null 2>> "$W/err" &&
-	    diff -r "$t" "$x/${t#/}" > /dev/null 2>&1; then
-		ok "$dir archive"; else no "$dir archive"; fi
+	for xo in "" -X; do
+		[ -n "$xo" ] && [ "$w" != "$NEW" ] && continue
+		find "$x" -mindepth 1 -delete 2>/dev/null
+		rm -f "$W/a.pz" "$W/err"
+		if "$w" -a -c zstd -l6 $xo "$t" "$W/a" > /dev/null 2> "$W/err" &&
+		    "$r" -d "$W/a.pz" "$x" > /dev/null 2>> "$W/err" &&
+		    diff -r "$t" "$x/${t#/}" > /dev/null 2>&1; then
+			ok "$dir archive $xo"; else no "$dir archive $xo"; fi
+	done
 done
 
 find "$W" -depth -delete 2>/dev/null

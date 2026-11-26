@@ -25,11 +25,14 @@
 #include <crypto_xsalsa20.h>
 #include <rabin_dedup.h>
 #include <crypto_scrypt.h>
+#include <aead.h>
+#include <monocypher/monocypher.h>
+#include <blake3.h>
 
 /* --- Content-defined chunker ------------------------------------------- */
 
 /*
- * The rolling hash is dedupe_compress()'s: a 16-byte window, multiplier
+ * The Rabin rolling hash: a 16-byte window, multiplier
  * RAB_POLYNOMIAL_CONST, and the ir[]/out[] tables. A boundary is placed
  * after byte i when at least min bytes are in the chunk and
  * ((roll ^ ir[pushed_out]) & mask) == 0, or when the chunk reaches max.
@@ -61,8 +64,8 @@ struct pc_chunker {
 #define	PC_CHUNK_MAX_LIMIT	(64UL * 1024 * 1024)
 
 /* The gear table: splitmix64 seeded with "pcompres". */
-static void
-gear_table(uint64_t g[256])
+void
+pc_gear_table(uint64_t g[256])
 {
 	uint64_t s = 0x70636f6d70726573ULL, z;
 	int i;
@@ -103,7 +106,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 	if ((algo != PC_CHUNKER_RABIN && algo != PC_CHUNKER_GEAR) ||
 	    a < 256 || min < 64 || min > a || max < a || max > PC_CHUNK_MAX_LIMIT)
 		return (NULL);
-	if ((c = calloc(1, sizeof (*c))) == NULL)
+	if ((c = pc_calloc(1, sizeof (*c))) == NULL)
 		return (NULL);
 	c->algo = algo;
 	c->min = min;
@@ -114,7 +117,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 		/* Expected gap past min is about avg - min; keep the mask at avg. */
 		c->mask = a - 1;
 	} else {
-		gear_table(c->gear);
+		pc_gear_table(c->gear);
 		c->mask_s = ~(uint64_t)0 << (64 - (bits + 2));
 		c->mask_l = ~(uint64_t)0 << (64 - (bits - 2));
 	}
@@ -124,7 +127,7 @@ pc_chunker_new2(int algo, size_t avg, size_t min, size_t max)
 void DLL_EXPORT
 pc_chunker_free(pc_chunker_t *c)
 {
-	free(c);
+	pc_mfree(c);
 }
 
 static void
@@ -259,6 +262,28 @@ pc_chunk_id(const void *buf, size_t len, const void *key, size_t keylen, uint8_t
 	return (blake2b_keyed2(id, 32, key, (int)keylen, buf, len, NULL, 0));
 }
 
+int DLL_EXPORT
+pc_chunk_id2(int alg, const void *buf, size_t len, const void *key, size_t keylen,
+    uint8_t id[32])
+{
+	blake3_hasher h;
+
+	if (alg == PC_ID_BLAKE2B)
+		return (pc_chunk_id(buf, len, key, keylen, id));
+	if (alg != PC_ID_BLAKE3 || (buf == NULL && len > 0) || id == NULL ||
+	    (key == NULL ? keylen != 0 : keylen != BLAKE3_KEY_LEN))
+		return (-1);
+	if (key != NULL)
+		blake3_hasher_init_keyed(&h, key);
+	else
+		blake3_hasher_init(&h);
+	blake3_hasher_update(&h, buf, len);
+	blake3_hasher_finalize(&h, id, 32);
+	/* The state holds the key's chaining values. */
+	memset(&h, 0, sizeof (h));
+	return (0);
+}
+
 /*
  * A 256-bit key for one purpose from a master key: BLAKE2b keyed with the
  * master over "pcompress derive", one length byte and the purpose. The
@@ -284,7 +309,7 @@ pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32])
 	    (const uchar_t *)purpose, plen);
 	if (rv == 0)
 		memcpy(out, k, 32);
-	memset(k, 0, sizeof (k));
+	pcmono_wipe(k, sizeof (k));
 	return (rv);
 }
 
@@ -300,22 +325,46 @@ pc_derive_key(const uint8_t master[32], const char *purpose, uint8_t out[32])
  *   7   1  level
  *   8   8  plaintext length
  *  16  24  nonce (random when encrypted, else zero)
- *  40   n  payload: compressed (or raw) bytes, encrypted when PCK_ENCRYPTED
- *  40+n 32 tag: BLAKE2b-256 over bytes [0, 40+n), keyed with the MAC
+ *  40  32  with PCK_DICT only: the dictionary's id (pc_dict_id())
+ *  h    n  payload: compressed (or raw) bytes, encrypted when PCK_ENCRYPTED;
+ *          h is 72 with PCK_DICT, else 40
+ *  h+n 32  tag: BLAKE2b-256 over bytes [0, h+n), keyed with the MAC
  *          subkey when encrypted, unkeyed (an integrity check) otherwise
  *
  * Encrypt-then-MAC: the tag covers the header, so nothing in it can be
  * changed. open() checks the tag before it decrypts or decompresses.
  * Keys: enc || mac = BLAKE2b-512(key, "pcompress chunk subkeys"); see
  * subkeys() for why not two BLAKE2b-256 values.
+ *
+ * PCK_DICT (since 4.5): the payload is a zstd frame made with the
+ * dictionary the id names. Only zstd objects carry it, never raw ones, so
+ * objects sealed without a dictionary are what older versions write, and
+ * those versions refuse PCK_DICT objects (an unknown flag) as corrupt.
+ *
+ * Object v2 (since 4.5), for every object sealed with a key: magic
+ * "PCK2", version 2, the same header (PCK_ENCRYPTED always set, the
+ * nonce random), and in place of the BLAKE2b tag a 16-byte
+ * XChaCha20-Poly1305 tag (crypto/aead.c) over the payload, with header
+ * bytes [0, h) as associated data. The AEAD key is the first half of
+ * BLAKE2b-512(key, "pcompress chunk aead"), a 64-byte digest for the
+ * reason subkeys() gives. A 192-bit random nonce per object makes a
+ * repeat negligible (2^-96 after 2^48 objects under one key). Version 1
+ * objects with a key still open; 4.4 and earlier refuse v2 (unknown
+ * magic).
  */
 #define	PCK_MAGIC	"PCK1"
 #define	PCK_VERSION	1
+#define	PCK2_MAGIC	"PCK2"
+#define	PCK2_VERSION	2
 #define	PCK_HDR		40
+#define	PCK_DICTID	32
 #define	PCK_TAG		32
+#define	PCK2_TAG	AEAD_TAGLEN
 #define	PCK_ENCRYPTED	0x01
 #define	PCK_RAW		0x02
-#define	PCK_FLAGS	(PCK_ENCRYPTED | PCK_RAW)
+#define	PCK_DICT	0x04
+#define	PCK_FLAGS	(PCK_ENCRYPTED | PCK_RAW | PCK_DICT)
+#define	PCK_ZSTD	1	/* algo_ids[] index of "zstd" */
 /* Largest plaintext open() accepts, whatever the header says. */
 #define	PCK_MAX_PLAIN	(1ULL << 32)
 
@@ -380,7 +429,21 @@ subkeys(pc_ctx_t *ctx, uchar_t enc[32], uchar_t mac[32])
 		return (-1);
 	memcpy(enc, k, 32);
 	memcpy(mac, k + 32, 32);
-	memset(k, 0, sizeof (k));
+	pcmono_wipe(k, sizeof (k));
+	return (0);
+}
+
+/* The v2 AEAD key from the context's key (see the object comment). */
+static int
+aead_subkey(pc_ctx_t *ctx, uchar_t k[32])
+{
+	static const uchar_t d[] = "pcompress chunk aead";
+	uchar_t w[64];
+
+	if (blake2b_keyed2(w, 64, ctx->chunk_key, 32, d, sizeof (d) - 1, NULL, 0) != 0)
+		return (-1);
+	memcpy(k, w, 32);
+	pcmono_wipe(w, sizeof (w));
 	return (0);
 }
 
@@ -460,18 +523,18 @@ codec_get(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op_
 		return (&c->k);
 	if (c != NULL) {
 		codec_close(&c->k);
-		free(c);
+		pc_mfree(c);
 		*slot = NULL;
 	}
 	while (cap < len && cap < ((uint64_t)1 << 30))
 		cap <<= 1;
 	if (cap < len)
 		cap = len;	/* past 1 GB: exact, codecs have limits near 2 GB */
-	if ((c = calloc(1, sizeof (*c))) == NULL)
+	if ((c = pc_calloc(1, sizeof (*c))) == NULL)
 		return (NULL);
 	if (codec_open(ctx, algo, level, cap, op, &c->k) != 0) {
 		codec_close(&c->k);
-		free(c);
+		pc_mfree(c);
 		return (NULL);
 	}
 	snprintf(c->algo, sizeof (c->algo), "%s", algo);
@@ -481,18 +544,21 @@ codec_get(pc_ctx_t *ctx, const char *algo, int level, uint64_t len, compress_op_
 	return (&c->k);
 }
 
-/* Free the codec state pc_chunk_seal()/pc_chunk_open() kept in ctx. */
+static void chunk_dict_free(pc_ctx_t *ctx);
+
+/* Free the codec state and dictionary pc_chunk_seal()/pc_chunk_open() kept in ctx. */
 void
 chunk_codecs_free(pc_ctx_t *ctx)
 {
 	int i;
 
+	chunk_dict_free(ctx);
 	for (i = 0; i < 2; i++) {
 		struct codec_cache *c = (struct codec_cache *)ctx->chunk_codec[i];
 
 		if (c != NULL) {
 			codec_close(&c->k);
-			free(c);
+			pc_mfree(c);
 			ctx->chunk_codec[i] = NULL;
 		}
 	}
@@ -517,6 +583,158 @@ seal_err(pc_ctx_t *ctx, pc_error_t code, const char *msg)
 	log_bind(prev);
 	return (-1);
 }
+
+/* --- Dictionaries ------------------------------------------------------- */
+
+/*
+ * The context's pc_set_dict() dictionary: its bytes and id, and zstd's
+ * digested forms, made by pc_set_dict(). The compressing one is for one
+ * level and remade when the level changes; the decompressing one serves
+ * every level.
+ */
+struct chunk_dict {
+	uint8_t id[32];
+	void *cdict, *ddict;
+	int clevel;		/* the level cdict was made for */
+	size_t len;
+	uchar_t bytes[];
+};
+
+/* A dictionary larger than this is refused (zstd's trainer makes ~100 KB). */
+#define	PCK_DICT_MAX	(16 * 1024 * 1024)
+
+/*
+ * Chunks this size or larger are sealed without the dictionary, as plain
+ * zstd objects. The digested dictionary carries match-finder tables
+ * sized for small inputs, and zstd compresses the whole source with
+ * them: a 4 MB chunk at level 12 came out 8% larger than without the
+ * dictionary, and a 1 MB one at level 3 1% larger and 7% slower. Below
+ * 128 KB it makes text 3 to 25% smaller, and on gear chunks (avg 64 KB)
+ * the cutoff gives up less than 0.1% of that. Letting zstd size the
+ * tables for each chunk (a CDict that keeps its level) digests the
+ * dictionary again for every large chunk: zstd:3 on 1 MB chunks ran 20
+ * to 40% slower than with no dictionary, for 0 to 3% smaller output.
+ */
+#define	PCK_DICT_CHUNK	(128 * 1024)
+
+/* Free a dictionary pc_set_dict() made; NULL is ignored. */
+static void
+dict_destroy(struct chunk_dict *d)
+{
+	if (d == NULL)
+		return;
+#ifdef ENABLE_PC_ZSTD
+	if (d->cdict != NULL)
+		zstd_cdict_free(d->cdict);
+	if (d->ddict != NULL)
+		zstd_ddict_free(d->ddict);
+#endif
+	memset(d->bytes, 0, d->len);
+	pc_mfree(d);
+}
+
+static void
+chunk_dict_free(pc_ctx_t *ctx)
+{
+	dict_destroy((struct chunk_dict *)ctx->chunk_dict);
+	ctx->chunk_dict = NULL;
+}
+
+int DLL_EXPORT
+pc_dict_id(const void *dict, size_t len, uint8_t id[32])
+{
+	if (dict == NULL || len == 0 || id == NULL)
+		return (-1);
+	return (blake2b_keyed2(id, 32, NULL, 0, dict, len, NULL, 0));
+}
+
+int DLL_EXPORT
+pc_dict_train(const void *samples, const size_t *sizes, unsigned n, void *dict,
+    size_t *dictlen)
+{
+	if (samples == NULL || sizes == NULL || n == 0 || dict == NULL ||
+	    dictlen == NULL || *dictlen == 0)
+		return (-1);
+#ifdef ENABLE_PC_ZSTD
+	return (zstd_train_dict(dict, dictlen, samples, sizes, n));
+#else
+	return (-1);
+#endif
+}
+
+int DLL_EXPORT
+pc_set_dict(pc_ctx_t *ctx, const void *dict, size_t len)
+{
+#ifdef ENABLE_PC_ZSTD
+	struct chunk_dict *d;
+	int err;
+#endif
+
+	if (ctx == NULL)
+		return (-1);
+	if (dict == NULL && len == 0) {
+		chunk_dict_free(ctx);
+		return (0);
+	}
+#ifndef ENABLE_PC_ZSTD
+	return (seal_err(ctx, PC_ERR_ARGS, "pc_set_dict: this build has no zstd"));
+#else
+	/* Make the new one completely before dropping the old: a failure keeps it. */
+	if (dict == NULL || len == 0 || len > PCK_DICT_MAX)
+		return (seal_err(ctx, PC_ERR_ARGS, "pc_set_dict: bad dictionary size"));
+	if ((d = pc_calloc(1, sizeof (*d) + len)) == NULL)
+		return (seal_err(ctx, PC_ERR_NOMEM, "pc_set_dict: out of memory"));
+	memcpy(d->bytes, dict, len);
+	d->len = len;
+	if (pc_dict_id(dict, len, d->id) != 0) {
+		dict_destroy(d);
+		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_set_dict: hash failure"));
+	}
+	/* Digest it now: a dictionary zstd refuses fails here, not at seal or open. */
+	d->clevel = ctx->level >= 1 ? ctx->level : 6;
+	if ((err = zstd_dict_new(d->bytes, len, d->clevel, &d->cdict, &d->ddict)) != 0) {
+		dict_destroy(d);
+		return (seal_err(ctx, (pc_error_t)err, err == PC_ERR_NOMEM ?
+		    "pc_set_dict: out of memory" : "pc_set_dict: malformed zstd dictionary"));
+	}
+	chunk_dict_free(ctx);
+	ctx->chunk_dict = d;
+	return (0);
+#endif
+}
+
+#ifdef ENABLE_PC_ZSTD
+/*
+ * Compress in to payload with the context's dictionary: 0 and *clen set,
+ * or -1 to store the chunk raw instead (too small to pay for the id, did
+ * not shrink enough, or no memory for the digested dictionary). The
+ * object grows by the 32-byte id, so the payload must be at least that
+ * much smaller than the input: then pc_chunk_seal_bound() still holds.
+ */
+static int
+dict_compress(pc_ctx_t *ctx, const void *in, size_t len, int level, uchar_t *payload,
+    uint64_t *clen)
+{
+	struct chunk_dict *d = (struct chunk_dict *)ctx->chunk_dict;
+	struct codec *k;
+
+	if (len <= PCK_DICTID + 1)
+		return (-1);
+	if ((k = codec_get(ctx, "zstd", level, len, COMPRESS)) == NULL)
+		return (-1);
+	if (d->cdict == NULL || d->clevel != k->level) {
+		if (d->cdict != NULL)
+			zstd_cdict_free(d->cdict);
+		d->clevel = k->level;
+		if ((d->cdict = zstd_cdict_new(d->bytes, d->len, k->level)) == NULL)
+			return (-1);
+	}
+	*clen = len - PCK_DICTID - 1;
+	if (zstd_compress_dict((void *)in, len, payload, clen, k->level, d->cdict, k->data) != 0)
+		return (-1);
+	return (0);
+}
+#endif
 
 static int chunk_seal(pc_ctx_t *, const void *, size_t, void *, size_t *);
 static int chunk_open(pc_ctx_t *, const void *, size_t, void *, size_t *);
@@ -553,15 +771,179 @@ pc_chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *out
 	return (rv);
 }
 
+/*
+ * The chi-square statistic against uniform of a byte histogram of n
+ * bytes counted in four tables: 256 * sum(count^2) / n - n.
+ */
+static uint64_t
+chi2_of(uint32_t count[4][256], uint64_t n)
+{
+	uint64_t sq = 0;
+	int i;
+
+	for (i = 0; i < 256; i++) {
+		uint64_t c = (uint64_t)count[0][i] + count[1][i] + count[2][i] + count[3][i];
+
+		sq += c * c;
+	}
+	return (sq * 256 / n - n);
+}
+
+/*
+ * The chi-square statistic of the byte histogram of runs runs of
+ * PCK_SAMPLE_RUN bytes spread evenly over p, against uniform. Random
+ * bytes give 255 on average (standard deviation 23) whatever the sample
+ * size; text and code give thousands to millions. With delta non-NULL,
+ * *delta is the same statistic for the differences between neighbouring
+ * bytes in each run (all but the first four): random bytes give 255
+ * there too, while ramps, counters, permutation tables and smooth
+ * signals, whose byte values can be spread evenly, give far more.
+ */
+#define	PCK_SAMPLE_RUN	128
+
+static uint64_t
+sample_chi2(const uchar_t *p, size_t len, int runs, uint64_t *delta)
+{
+	uint32_t count[4][256], dcount[4][256];
+	size_t step = (len - PCK_SAMPLE_RUN) / (runs - 1);
+	int r, i;
+
+	memset(count, 0, sizeof (count));
+	if (delta != NULL)
+		memset(dcount, 0, sizeof (dcount));
+	for (r = 0; r < runs; r++) {
+		const uchar_t *q = p + r * step;
+
+		/* Four tables: runs of one byte value would serialize on one counter. */
+		for (i = 0; i < PCK_SAMPLE_RUN; i += 4) {
+			count[0][q[i]]++;
+			count[1][q[i + 1]]++;
+			count[2][q[i + 2]]++;
+			count[3][q[i + 3]]++;
+		}
+		for (i = 4; delta != NULL && i < PCK_SAMPLE_RUN; i += 4) {
+			dcount[0][(uchar_t)(q[i] - q[i - 1])]++;
+			dcount[1][(uchar_t)(q[i + 1] - q[i])]++;
+			dcount[2][(uchar_t)(q[i + 2] - q[i + 1])]++;
+			dcount[3][(uchar_t)(q[i + 3] - q[i + 2])]++;
+		}
+	}
+	if (delta != NULL)
+		*delta = chi2_of(dcount, (uint64_t)runs * (PCK_SAMPLE_RUN - 4));
+	return (chi2_of(count, (uint64_t)runs * PCK_SAMPLE_RUN));
+}
+
+/*
+ * Whether a chunk looks incompressible, so pc_chunk_seal() stores it raw
+ * without running the codec. A 2 KB sample (16 runs) far from uniform
+ * settles it cheaply for most compressible data. Otherwise each 256 KB
+ * segment of the chunk (the whole chunk if smaller) is sampled with 64
+ * runs, 8 KB, and every segment must score below 350 both on its bytes
+ * and on the differences between neighbouring bytes. The second test
+ * catches data with evenly spread byte values that still compresses:
+ * 0..255 ramps, lookup tables, counters. Testing per segment keeps a
+ * compressible region of a 4 MB chunk from hiding between the samples.
+ * Measured on gear chunks (avg 64 KB) and on 1 MB and 4 MB pieces (EC2
+ * Xeon 8488C), against what zstd -19 (pieces: -9) would have saved on
+ * the chunks it skips:
+ *
+ *	random, H.264 video	88-100% skipped, nothing lost
+ *	.gz/.xz/.zst files	77% of gear chunks skipped, 0.03% of the
+ *				input lost; 42% / 9% of 1 / 4 MB, nothing lost
+ *	PNG files		41% of gear chunks, 0.004% lost
+ *	JPEG files		 2% of gear chunks, 0.01% lost
+ *	tar of /usr/share/doc	13% of gear chunks (its .gz members), 0.004%
+ *	enwik8, /usr/lib, /usr/bin, ramps, permutations, counters,
+ *	dithered gradients, raw RGB test images	nothing skipped
+ *	random with one 16 or 64 KB text region per 4 MB	nothing lost
+ *
+ * The worst chunk skipped would have shrunk 4.6%. Byte statistics cannot
+ * see a repeated random block (each copy looks random): such a chunk is
+ * stored raw where an LZ coder would have found the repeat. Chunks under
+ * 16 KB are not tested; the sample would be most of them.
+ */
+#define	PCK_SAMPLE_MIN	(16 * 1024)
+#define	PCK_SAMPLE_SEG	(256 * 1024)
+#define	PCK_CHI2_QUICK	1000
+#define	PCK_CHI2_RAW	350
+
+static int
+looks_incompressible(const uchar_t *p, size_t len)
+{
+	size_t nseg, seg, s;
+	uint64_t delta;
+
+	if (len < PCK_SAMPLE_MIN || sample_chi2(p, len, 16, NULL) >= PCK_CHI2_QUICK)
+		return (0);
+	nseg = (len + PCK_SAMPLE_SEG - 1) / PCK_SAMPLE_SEG;
+	seg = len / nseg;
+	for (s = 0; s < nseg; s++) {
+		size_t n = s == nseg - 1 ? len - s * seg : seg;
+
+		if (sample_chi2(p + s * seg, n, 64, &delta) >= PCK_CHI2_RAW ||
+		    delta >= PCK_CHI2_RAW)
+			return (0);
+	}
+	return (1);
+}
+
+/*
+ * Compress in into the object at o for chunk_seal(): sets the payload
+ * (at o + *hdr), *clen and the level byte o[7], and returns the flags;
+ * *id becomes 0 when the chunk is stored raw, as it is when it does not
+ * shrink or looks incompressible. With a dictionary set (zstd only),
+ * chunks under PCK_DICT_CHUNK use it and the payload follows its id.
+ */
+static uchar_t
+seal_payload(pc_ctx_t *ctx, const void *in, size_t len, uchar_t *o, uint64_t *clen,
+    size_t *hdr, int *id)
+{
+	const char *algo = ctx->algo ? ctx->algo : "zstd";
+	int level = ctx->level >= 1 ? ctx->level : 6;
+
+	*hdr = PCK_HDR;
+	*clen = 0;
+	if (len == 0 || *id == 0 || looks_incompressible(in, len)) {
+		/* Stored raw. */
+#ifdef ENABLE_PC_ZSTD
+	} else if (ctx->chunk_dict != NULL && len < PCK_DICT_CHUNK) {
+		if (dict_compress(ctx, in, len, level, o + PCK_HDR + PCK_DICTID, clen) == 0) {
+			memcpy(o + PCK_HDR, ((struct chunk_dict *)ctx->chunk_dict)->id, PCK_DICTID);
+			*hdr = PCK_HDR + PCK_DICTID;
+			o[7] = (uchar_t)level;
+			return (PCK_DICT);
+		}
+#endif
+	} else {
+		struct codec *k = codec_get(ctx, algo, level, len, COMPRESS);
+		int crv;
+
+		/* Must not grow: else store raw. */
+		*clen = len;
+		if (k != NULL && (crv = k->comp((void *)in, len, o + PCK_HDR, clen, k->level, 0,
+		    TYPE_UNKNOWN, k->data)) >= 0 && *clen > 0 && *clen < len) {
+			/* adapt* return the sub-algorithm, kept in the level's high nibble. */
+			o[7] = (uchar_t)(crv > 0 ? (level & 0x0f) | ((crv & 0x0f) << 4) : level);
+			return (0);
+		}
+	}
+	if (len > 0)
+		memcpy(o + PCK_HDR, in, len);
+	*clen = len;
+	*id = 0;
+	o[7] = 0;
+	return (PCK_RAW);
+}
+
 static int
 chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen)
 {
-	uchar_t *o = (uchar_t *)outp, enc[32], mac[32];
+	uchar_t *o = (uchar_t *)outp, enc[32];
 	const char *algo = ctx->algo ? ctx->algo : "zstd";
 	int id = strcmp(algo, "none") == 0 ? 0 : algo_id(algo);	/* none: raw */
-	int level = ctx->level >= 1 ? ctx->level : 6;
 	uint64_t clen = 0;
-	uchar_t flags = 0, *payload;
+	size_t hdr;
+	uchar_t flags, *payload;
 	int rv = -1;
 
 	if (in == NULL && len > 0)
@@ -571,68 +953,58 @@ chunk_seal(pc_ctx_t *ctx, const void *in, size_t len, void *outp, size_t *outlen
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: output buffer too small"));
 	if (id < 0)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: algorithm has no object id"));
+	if (ctx->chunk_dict != NULL && id != PCK_ZSTD)
+		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: a dictionary needs zstd"));
 	if ((uint64_t)len > PCK_MAX_PLAIN)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_seal: chunk larger than 4 GB"));
 	log_reset(&ctx->log);
-	payload = o + PCK_HDR;
+	flags = seal_payload(ctx, in, len, o, &clen, &hdr, &id);
+	payload = o + hdr;
 
-	/* Compress into the payload area; fall back to raw if it does not shrink. */
-	if (len > 0 && strcmp(algo, "none") != 0) {
-		struct codec *k = codec_get(ctx, algo, level, len, COMPRESS);
-
-		if (k != NULL) {
-			int crv;
-
-			clen = len;	/* must not grow: else store raw */
-			crv = k->comp((void *)in, len, payload, &clen, k->level, 0, TYPE_UNKNOWN, k->data);
-			if (crv < 0 || clen == 0 || clen >= len) {
-				clen = 0;
-			} else {
-				/* adapt* return the sub-algorithm, needed to decompress. */
-				o[7] = (uchar_t)level;
-				if (crv > 0) {
-					/* Keep it in the level byte's high nibble. */
-					o[7] = (uchar_t)((level & 0x0f) | ((crv & 0x0f) << 4));
-				}
-			}
-		}
-	}
-	if (clen == 0) {
-		flags |= PCK_RAW;
-		if (len > 0)
-			memcpy(payload, in, len);
-		clen = len;
-		id = 0;
-		o[7] = 0;
-	}
-
-	memcpy(o, PCK_MAGIC, 4);
-	o[4] = PCK_VERSION;
 	o[6] = (uchar_t)id;
 	put_le64(o + 8, len);
 	memset(o + 16, 0, 24);
 	if (ctx->chunk_key_set) {
-		flags |= PCK_ENCRYPTED;
+		/* v2: XChaCha20-Poly1305, the header as associated data. */
+		memcpy(o, PCK2_MAGIC, 4);
+		o[4] = PCK2_VERSION;
+		o[5] = flags | PCK_ENCRYPTED;
 		if (geturandom_bytes(o + 16, 24) != 0) {
-			memset(o, 0, PCK_HDR + clen);
+			memset(o, 0, hdr + clen);
 			return (seal_err(ctx, PC_ERR_CRYPTO, "pc_chunk_seal: no random bytes"));
 		}
-		if (subkeys(ctx, enc, mac) != 0 ||
-		    xsalsa20_xor(payload, payload, clen, o + 16, enc) != 0)
+		if (aead_subkey(ctx, enc) != 0 || pc_aead_seal(AEAD_XCHACHA20, enc, o + 16, o, hdr,
+		    payload, payload, clen, payload + clen) != 0)
 			goto out;
+		*outlen = hdr + clen + PCK2_TAG;
+	} else {
+		memcpy(o, PCK_MAGIC, 4);
+		o[4] = PCK_VERSION;
+		o[5] = flags;
+		if (blake2b_keyed2(payload + clen, PCK_TAG, NULL, 0, o, hdr + clen, NULL, 0) != 0)
+			goto out;
+		*outlen = hdr + clen + PCK_TAG;
 	}
-	o[5] = flags;
-	if (blake2b_keyed2(payload + clen, PCK_TAG, ctx->chunk_key_set ? mac : NULL,
-	    ctx->chunk_key_set ? 32 : 0, o, PCK_HDR + clen, NULL, 0) != 0)
-		goto out;
-	*outlen = PCK_HDR + clen + PCK_TAG;
 	rv = 0;
 out:
-	memset(enc, 0, sizeof (enc));
-	memset(mac, 0, sizeof (mac));
+	pcmono_wipe(enc, sizeof (enc));
 	if (rv != 0)
 		return (seal_err(ctx, PC_ERR_INTERNAL, "pc_chunk_seal: crypto failure"));
 	return (0);
+}
+
+/* Bytes before the payload: the fixed header, and the dictionary id if any. */
+static size_t
+header_len(const uchar_t *p)
+{
+	return ((p[5] & PCK_DICT) ? PCK_HDR + PCK_DICTID : PCK_HDR);
+}
+
+/* The tag length of an object: v1 or v2 (check_header() checked the magic). */
+static size_t
+tag_len(const uchar_t *p)
+{
+	return (p[4] == PCK2_VERSION ? PCK2_TAG : PCK_TAG);
 }
 
 /* Header checks shared by open() and open_size(). Returns plaintext size or -1. */
@@ -640,16 +1012,31 @@ static int64_t
 check_header(const uchar_t *p, size_t len)
 {
 	uint64_t plain;
+	size_t tl;
 
-	if (len < PCK_HDR + PCK_TAG || memcmp(p, PCK_MAGIC, 4) != 0 || p[4] != PCK_VERSION ||
-	    (p[5] & ~PCK_FLAGS) != 0)
+	if (len >= 5 && memcmp(p, PCK2_MAGIC, 4) == 0 && p[4] == PCK2_VERSION) {
+		tl = PCK2_TAG;
+		/* Only ever sealed with a key. */
+		if (len < PCK_HDR + tl || !(p[5] & PCK_ENCRYPTED))
+			return (-1);
+	} else if (len >= 5 && memcmp(p, PCK_MAGIC, 4) == 0 && p[4] == PCK_VERSION) {
+		tl = PCK_TAG;
+		if (len < PCK_HDR + tl)
+			return (-1);
+	} else {
+		return (-1);
+	}
+	if ((p[5] & ~PCK_FLAGS) != 0)
 		return (-1);
 	if ((p[5] & PCK_RAW) ? p[6] != 0 : (p[6] == 0 || p[6] >= sizeof (algo_ids) / sizeof (algo_ids[0]) - 1))
+		return (-1);
+	/* A dictionary object is zstd, never raw, and has room for the id. */
+	if ((p[5] & PCK_DICT) && (p[6] != PCK_ZSTD || len < PCK_HDR + PCK_DICTID + tl))
 		return (-1);
 	plain = get_le64(p + 8);
 	if (plain > PCK_MAX_PLAIN)
 		return (-1);
-	if ((p[5] & PCK_RAW) && plain != len - PCK_HDR - PCK_TAG)
+	if ((p[5] & PCK_RAW) && plain != len - PCK_HDR - tl)
 		return (-1);
 	return ((int64_t)plain);
 }
@@ -663,12 +1050,81 @@ pc_chunk_open_size(const void *obj, size_t len)
 	return (n < 0 || (uint64_t)n >= SIZE_MAX ? (size_t)-1 : (size_t)n);
 }
 
+/*
+ * Decompress an authenticated, decrypted payload of clen bytes at src to
+ * exactly plain bytes at out, for chunk_open(). 0, or -1 with *why and
+ * *msg set.
+ */
+static int
+open_payload(pc_ctx_t *ctx, const uchar_t *p, const uchar_t *src, uint64_t clen,
+    uint64_t plain, void *out, pc_error_t *why, const char **msg)
+{
+	struct codec *k;
+	uint64_t dl = plain;
+	uchar_t lv = p[7] & 0x0f, chdr = p[7] & 0xf0;
+	int drv;
+
+	if ((k = codec_get(ctx, algo_ids[p[6]], lv ? lv : 6, plain, DECOMPRESS)) == NULL) {
+		*why = PC_ERR_INTERNAL;
+		*msg = "pc_chunk_open: algorithm not available in this build";
+		return (-1);
+	}
+	if (p[5] & PCK_DICT) {
+#ifdef ENABLE_PC_ZSTD
+		struct chunk_dict *d = (struct chunk_dict *)ctx->chunk_dict;
+
+		if (d == NULL || memcmp(d->id, p + PCK_HDR, PCK_DICTID) != 0) {
+			*why = PC_ERR_DICT;
+			*msg = d == NULL ? "pc_chunk_open: object needs a dictionary, none set" :
+			    "pc_chunk_open: object needs a different dictionary";
+			return (-1);
+		}
+		drv = zstd_decompress_dict((void *)src, clen, out, &dl, d->ddict, k->data);
+#else
+		drv = -1;	/* not reached: codec_get() has no zstd */
+#endif
+	} else {
+		drv = k->decomp((void *)src, clen, out, &dl, k->level, chdr, TYPE_UNKNOWN, k->data);
+	}
+	if (drv < 0 || dl != plain)
+		return (-1);	/* authenticated but undecodable: corrupt at seal time */
+	return (0);
+}
+
+/*
+ * Authenticate and decrypt the payload of a keyed object at p (header of
+ * hdr bytes, clen payload bytes, then the tag) into buf: v2 with the
+ * AEAD, v1 by checking the BLAKE2b tag first and then XSalsa20. 0, or -1
+ * if the tag does not match.
+ */
+static int
+open_keyed(pc_ctx_t *ctx, const uchar_t *p, size_t hdr, uint64_t clen, uchar_t *buf)
+{
+	uchar_t enc[32], mac[32], tag[PCK_TAG];
+	int rv = -1;
+
+	if (p[4] == PCK2_VERSION) {
+		if (aead_subkey(ctx, enc) == 0 && pc_aead_open(AEAD_XCHACHA20, enc, p + 16, p, hdr,
+		    p + hdr, buf, clen, p + hdr + clen) == 0)
+			rv = 0;
+	} else if (subkeys(ctx, enc, mac) == 0 &&
+	    blake2b_keyed2(tag, PCK_TAG, mac, 32, p, hdr + clen, NULL, 0) == 0 &&
+	    ct_equal(tag, p + hdr + clen, PCK_TAG) &&
+	    xsalsa20_xor(buf, p + hdr, clen, p + 16, enc) == 0) {
+		rv = 0;
+	}
+	pcmono_wipe(enc, sizeof (enc));
+	pcmono_wipe(mac, sizeof (mac));
+	return (rv);
+}
+
 static int
 chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen)
 {
 	const uchar_t *p = (const uchar_t *)inp;
-	uchar_t tag[PCK_TAG], enc[32], mac[32], *buf = NULL;
-	uint64_t clen, plain;
+	uchar_t tag[PCK_TAG], *buf = NULL;
+	uint64_t clen = 0, plain;
+	size_t hdr;
 	int64_t n;
 	int encrypted, rv = -1;
 	pc_error_t why = PC_ERR_CORRUPT;
@@ -677,8 +1133,9 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	if (inp == NULL || out == NULL || outlen == NULL)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_open: NULL argument"));
 	if ((n = check_header(p, len)) < 0)
-		return (seal_err(ctx, len >= 4 && memcmp(p, PCK_MAGIC, 4) == 0 ?
-		    PC_ERR_CORRUPT : PC_ERR_FORMAT, "pc_chunk_open: not a valid chunk object"));
+		return (seal_err(ctx, len >= 4 && (memcmp(p, PCK_MAGIC, 4) == 0 ||
+		    memcmp(p, PCK2_MAGIC, 4) == 0) ? PC_ERR_CORRUPT : PC_ERR_FORMAT,
+		    "pc_chunk_open: not a valid chunk object"));
 	plain = (uint64_t)n;
 	if (*outlen < plain)
 		return (seal_err(ctx, PC_ERR_ARGS, "pc_chunk_open: output buffer too small"));
@@ -688,61 +1145,43 @@ chunk_open(pc_ctx_t *ctx, const void *inp, size_t len, void *out, size_t *outlen
 	if (!encrypted && ctx->chunk_key_set)
 		return (seal_err(ctx, PC_ERR_VERIFY, "pc_chunk_open: object is not encrypted but a key is set"));
 	log_reset(&ctx->log);
-	clen = len - PCK_HDR - PCK_TAG;
+	hdr = header_len(p);
+	clen = len - hdr - tag_len(p);
 
-	/* 1. Verify the tag before touching the payload. */
-	if (encrypted && subkeys(ctx, enc, mac) != 0)
-		goto out;
-	if (blake2b_keyed2(tag, PCK_TAG, encrypted ? mac : NULL, encrypted ? 32 : 0,
-	    p, PCK_HDR + clen, NULL, 0) != 0)
-		goto out;
-	if (!ct_equal(tag, p + PCK_HDR + clen, PCK_TAG)) {
-		why = PC_ERR_VERIFY;
-		msg = encrypted ? "pc_chunk_open: authentication failed (wrong key or tampered)" :
-		    "pc_chunk_open: checksum mismatch";
-		goto out;
-	}
-
-	/* 2. Decrypt (into a scratch copy: the input is const). */
+	/*
+	 * 1. Authenticate before touching the payload; a keyed object is
+	 * decrypted into a scratch copy (the input is const).
+	 */
 	if (encrypted) {
-		if ((buf = malloc(clen ? clen : 1)) == NULL) {
+		if ((buf = pc_malloc(clen ? clen : 1)) == NULL) {
 			why = PC_ERR_NOMEM;
 			msg = "pc_chunk_open: out of memory";
 			goto out;
 		}
-		if (xsalsa20_xor(buf, p + PCK_HDR, clen, p + 16, enc) != 0) {
-			why = PC_ERR_INTERNAL;
+		if (open_keyed(ctx, p, hdr, clen, buf) != 0) {
+			why = PC_ERR_VERIFY;
+			msg = "pc_chunk_open: authentication failed (wrong key or tampered)";
 			goto out;
 		}
+	} else if (blake2b_keyed2(tag, PCK_TAG, NULL, 0, p, hdr + clen, NULL, 0) != 0) {
+		goto out;
+	} else if (!ct_equal(tag, p + hdr + clen, PCK_TAG)) {
+		why = PC_ERR_VERIFY;
+		msg = "pc_chunk_open: checksum mismatch";
+		goto out;
 	}
 
-	/* 3. Decompress to exactly the stated length. */
-	if (p[5] & PCK_RAW) {
-		memcpy(out, encrypted ? buf : p + PCK_HDR, clen);
-	} else {
-		struct codec *k;
-		uint64_t dl = plain;
-		uchar_t lv = p[7] & 0x0f, chdr = p[7] & 0xf0;
-		int drv;
-
-		if ((k = codec_get(ctx, algo_ids[p[6]], lv ? lv : 6, plain, DECOMPRESS)) == NULL) {
-			why = PC_ERR_INTERNAL;
-			msg = "pc_chunk_open: algorithm not available in this build";
-			goto out;
-		}
-		drv = k->decomp(encrypted ? buf : (void *)(p + PCK_HDR), clen, out, &dl,
-		    k->level, chdr, TYPE_UNKNOWN, k->data);
-		if (drv < 0 || dl != plain)
-			goto out;	/* authenticated but undecodable: corrupt at seal time */
-	}
+	/* 2. Decompress to exactly the stated length. */
+	if (p[5] & PCK_RAW)
+		memcpy(out, encrypted ? buf : p + hdr, clen);
+	else if (open_payload(ctx, p, encrypted ? buf : p + hdr, clen, plain, out, &why, &msg) != 0)
+		goto out;
 	*outlen = plain;
 	rv = 0;
 out:
-	memset(enc, 0, sizeof (enc));
-	memset(mac, 0, sizeof (mac));
 	if (buf != NULL) {
-		memset(buf, 0, clen);
-		free(buf);
+		pcmono_wipe(buf, clen);
+		pc_mfree(buf);
 	}
 	if (rv != 0)
 		return (seal_err(ctx, why, msg));
@@ -752,7 +1191,7 @@ out:
 int DLL_EXPORT
 pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen)
 {
-	memset(ctx->chunk_key, 0, sizeof (ctx->chunk_key));
+	pcmono_wipe(ctx->chunk_key, sizeof (ctx->chunk_key));
 	ctx->chunk_key_set = 0;
 	if (key == NULL && keylen == 0)
 		return (0);
@@ -767,29 +1206,32 @@ pc_set_key(pc_ctx_t *ctx, const void *key, size_t keylen)
 
 /*
  * A key file holds a random 256-bit master key wrapped with a key derived
- * from a password of any length (ROADMAP Phase 4). 96 bytes, little-endian:
+ * from a password of any length (ROADMAP Phase 4). 128 bytes,
+ * little-endian:
  *
  *   0  6  magic "PCKEY1"
- *   6  1  KDF id: 1 = scrypt
- *   7  1  log2 N (scrypt work factor)
- *   8  4  r
- *  12  4  p
+ *   6  1  KDF id: 1 = scrypt, 2 = Argon2id (since 4.5)
+ *   7  1  scrypt: log2 N; Argon2id: lanes (p)
+ *   8  4  scrypt: r; Argon2id: memory in KiB (m)
+ *  12  4  scrypt: p; Argon2id: passes (t)
  *  16 16  salt
  *  32 24  nonce
  *  56  8  reserved, 0
  *  64 32  the wrapped key (XSalsa20 with the first half of the KDF output)
  *  96 32  tag: BLAKE2b-256 keyed with a MAC key from the KDF, over [0, 96)
  *
- * (128 bytes in all.) The KDF output is 64 bytes: the first 32 encrypt,
- * the last 32 authenticate. A wrong password fails the tag. The KDF and
- * its parameters are in the file, so they can change without breaking old
- * files; open refuses parameters outside sane bounds (a crafted file must
- * not make it allocate gigabytes).
+ * The KDF output is 64 bytes: the first 32 encrypt, the last 32
+ * authenticate. A wrong password fails the tag. The KDF and its
+ * parameters are in the file, so they can change without breaking old
+ * files; open refuses parameters outside sane bounds before any work (a
+ * crafted file must not make it allocate gigabytes). New files use
+ * Argon2id; 4.4 and earlier refuse those (an unknown KDF id), as they
+ * refuse a wrong password.
  */
 #define	PCK_KF_MAGIC	"PCKEY1"
 #define	PCK_KF_SIZE	128
 #define	PCK_KF_SCRYPT	1
-#define	PCK_KF_LOGN	17	/* 128 MB, about 0.3 s: interactive use */
+#define	PCK_KF_ARGON2ID	2
 
 static void
 put_le32(uchar_t *p, uint32_t v)
@@ -805,19 +1247,34 @@ get_le32(const uchar_t *p)
 	    (uint32_t)p[3] << 24);
 }
 
+/*
+ * The key-file KDF named in hdr, with the parameters stored there, into
+ * dk. Parameters outside scrypt_params_ok() or pc_argon2_params_ok() are
+ * refused before any work. 0, or -1 (unknown KDF, bad cost, failure).
+ */
 static int
 kf_derive(const void *pw, size_t pwlen, const uchar_t *hdr, uchar_t dk[64])
 {
-	uint32_t logn = hdr[7], r = get_le32(hdr + 8), p = get_le32(hdr + 12);
-	scrypt_params_t kp;
+	if (hdr[6] == PCK_KF_SCRYPT) {
+		scrypt_params_t kp;
 
-	/* Bounds checked before any work (scrypt_params_ok(): at most 512 MB). */
-	kp.logn = (int)logn;
-	kp.r = r;
-	kp.p = p;
-	if (hdr[6] != PCK_KF_SCRYPT || !scrypt_params_ok(&kp))
-		return (-1);
-	return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << logn, r, p, dk, 64));
+		kp.logn = hdr[7];
+		kp.r = get_le32(hdr + 8);
+		kp.p = get_le32(hdr + 12);
+		if (!scrypt_params_ok(&kp))
+			return (-1);
+		return (crypto_scrypt(pw, pwlen, hdr + 16, 16, (uint64_t)1 << kp.logn, kp.r,
+		    kp.p, dk, 64));
+	}
+	if (hdr[6] == PCK_KF_ARGON2ID) {
+		argon2_params_t ap;
+
+		ap.p = hdr[7];
+		ap.m_kib = get_le32(hdr + 8);
+		ap.t = get_le32(hdr + 12);
+		return (pc_argon2id_derive(pw, pwlen, hdr + 16, 16, &ap, dk, 64));
+	}
+	return (-1);
 }
 
 size_t DLL_EXPORT
@@ -836,10 +1293,10 @@ pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out)
 		return (-1);
 	memset(o, 0, PCK_KF_SIZE);
 	memcpy(o, PCK_KF_MAGIC, 6);
-	o[6] = PCK_KF_SCRYPT;
-	o[7] = PCK_KF_LOGN;
-	put_le32(o + 8, 8);
-	put_le32(o + 12, 1);
+	o[6] = PCK_KF_ARGON2ID;
+	o[7] = ARGON2_PZ_P;
+	put_le32(o + 8, ARGON2_PZ_M);
+	put_le32(o + 12, ARGON2_PZ_T);
 	if (geturandom_bytes(o + 16, 16 + 24) != 0 || geturandom_bytes(key, 32) != 0)
 		goto out;
 	if (kf_derive(pw, pwlen, o, dk) != 0 ||
@@ -848,7 +1305,7 @@ pc_keyfile_create(const void *pw, size_t pwlen, uint8_t key[32], void *out)
 		goto out;
 	rv = 0;
 out:
-	memset(dk, 0, sizeof (dk));
+	pcmono_wipe(dk, sizeof (dk));
 	if (rv != 0) {
 		memset(o, 0, PCK_KF_SIZE);
 		memset(key, 0, 32);
@@ -875,7 +1332,7 @@ pc_keyfile_open(const void *in, size_t len, const void *pw, size_t pwlen, uint8_
 		goto out;
 	rv = 0;
 out:
-	memset(dk, 0, sizeof (dk));
+	pcmono_wipe(dk, sizeof (dk));
 	if (rv != 0)
 		memset(key, 0, 32);
 	return (rv);
@@ -983,10 +1440,10 @@ pci_grow(pc_index_t *x)
 	uint32_t *h, *r;
 
 	/* Up to 2^32 slots: the hash is 32 bits (PCI_MAXREC keeps it there). */
-	if (ns > SIZE_MAX / sizeof (*h) || (h = malloc(ns * sizeof (*h))) == NULL)
+	if (ns > SIZE_MAX / sizeof (*h) || (h = pc_malloc(ns * sizeof (*h))) == NULL)
 		return (-1);
-	if ((r = calloc(ns, sizeof (*r))) == NULL) {
-		free(h);
+	if ((r = pc_calloc(ns, sizeof (*r))) == NULL) {
+		pc_mfree(h);
 		return (-1);
 	}
 	for (i = 0; i < x->nslots; i++) {
@@ -999,8 +1456,8 @@ pci_grow(pc_index_t *x)
 		h[s] = x->hash[i];
 		r[s] = x->rec[i];
 	}
-	free(x->hash);
-	free(x->rec);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
 	x->hash = h;
 	x->rec = r;
 	x->nslots = ns;
@@ -1070,7 +1527,7 @@ pc_index_open(const char *path)
 	uchar_t hdr[PCI_HDR];
 	off_t sz, end, pos;
 
-	if (path == NULL || (x = calloc(1, sizeof (*x))) == NULL)
+	if (path == NULL || (x = pc_calloc(1, sizeof (*x))) == NULL)
 		return (NULL);
 	/* O_APPEND: whole-record appends from two processes cannot overlap. */
 	x->fd = -1;
@@ -1110,9 +1567,9 @@ pc_index_open(const char *path)
 fail:
 	if (x->fd != -1)
 		close(x->fd);
-	free(x->hash);
-	free(x->rec);
-	free(x);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
+	pc_mfree(x);
 	return (NULL);
 }
 
@@ -1167,8 +1624,8 @@ pc_index_close(pc_index_t *x)
 	rv = pc_index_sync(x);
 	if (close(x->fd) != 0)
 		rv = -1;
-	free(x->hash);
-	free(x->rec);
-	free(x);
+	pc_mfree(x->hash);
+	pc_mfree(x->rec);
+	pc_mfree(x);
 	return (rv);
 }

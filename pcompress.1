@@ -27,7 +27,7 @@
 .Fl a
 .Op Fl c Ar algorithm
 .Op Fl l Ar level
-.Op Fl jnTvx
+.Op Fl jnTvxZ
 .Op Ar options
 .Ar path ...
 .Ar archive | Fl
@@ -40,6 +40,10 @@
 .Nm
 .Fl i
 .Ar archive
+.Nm
+.Fl y
+.Ar file
+.Op Ar target
 .Nm
 .Fl h | Fl V
 .Sh DESCRIPTION
@@ -103,12 +107,32 @@ appended.
 When the input is
 .Fl
 and no target is given, output goes to standard output.
+If decompression fails (a damaged, truncated or tampered file), the
+output file is removed.
 For an archive,
 .Ar target
 is the directory to extract into, created if necessary; it defaults
 to the current directory.
 .It Fl i
 List the members of an archive without extracting them.
+.It Fl y
+Check a
+.Ar file
+written with
+.Fl Y
+against its repair data and rebuild the blocks that are damaged, in
+place
+.Pq through a temporary file renamed over it
+or into
+.Ar target ,
+which must not exist.
+It needs no password.
+It fails, changing nothing, if a file has no repair data or more
+damage than its parity can rebuild.
+A repaired file replacing
+.Ar file
+keeps its mode and, where the user may set it, its owner; ACLs and
+extended attributes are not kept.
 .It Fl h
 Print usage and exit.
 .It Fl V
@@ -145,8 +169,7 @@ or
 .Cm CRC64
 cannot be used with deduplication.
 .It Fl D
-Deduplicate variable-sized blocks within each chunk, using Rabin
-fingerprinting.
+Deduplicate variable-sized, content-defined blocks within each chunk.
 .It Fl F
 Deduplicate fixed-size blocks.
 Cannot be combined with
@@ -177,14 +200,98 @@ LZP pre-compression.
 .It Fl P
 Adaptive delta encoding of numeric tables.
 .It Fl x
-Dispack filter for 32-bit x86 Windows executables
-.Pq archive mode only .
+Executable filters
+.Pq archive mode only ;
+on by default from level 9 :
+Dispack for 32-bit x86 Windows executables, and the XZ Utils branch
+filters for ARM64 and RISC-V code
+.Pq ELF, PE and Mach-O .
+An archive with members that went through the ARM64 or RISC-V filter is
+written as format version 13, which pcompress 4.4 and older cannot read.
 .It Fl j
 PackJPG and PackPNM filters for JPEG and PNM images, and WavPack for
 WAV audio if built in
 .Pq archive mode only .
+.It Fl Z
+Store the deflate streams in zip containers (zip, jar, odt, docx, xlsx,
+apk and the like), gzip files and PNG images inflated, so they compress
+and deduplicate with the rest, and deflate them again bit for bit on
+extraction
+.Pq archive mode only .
+A stream is kept only if pcompress's own copy of zlib reproduces it
+exactly, which is the case for most Java and LibreOffice files and
+rarely for those made by Microsoft Office, 7-Zip or GNU gzip; others
+are stored as they are.
+Archives of jar files shrink by 40 to 50%, of office documents by 4 to
+7%; compressing takes several times longer, most where few streams
+match.
+Readers before 4.5 refuse the archive.
 .It Fl T
 Do not store archive metadata in a separate stream.
+.It Fl X
+Append a seek index to the compressed file, so that
+.Fl r
+and
+.Fl R
+can later read part of it without decompressing what comes before.
+It costs about 0.5% in size on an archive of /usr/lib and nothing
+measurable in time.
+It turns off the separate metadata stream
+.Pq as Fl T
+and the global deduplication otherwise chosen at levels above 3,
+and cannot be combined with
+.Fl G :
+a globally deduplicated chunk can refer to any chunk before it.
+Readers before 4.5 read such a file as any other and ignore the index.
+.It Fl Y Ar percent
+Append repair data: Reed-Solomon parity of
+.Ar percent
+.Pq 1 to 50
+of the compressed file, from which
+.Fl y
+can rebuild damaged blocks.
+Blocks are 4 KB and interleaved, so at 10 a run of 1 MB of damage is
+repaired wherever it falls; scattered damage is repaired while no
+stripe of 4 KB blocks loses more than its share.
+The file grows by the percent given; compressing takes about 0.4 s
+longer per GB of output.
+The output must be a file, not standard output.
+Readers before 4.5 read such a file as any other and ignore the repair
+data.
+.It Fl r Ar offset : Ns Op Ar length
+With
+.Fl d ,
+write only
+.Ar length
+bytes
+.Pq to the end if omitted
+starting at byte
+.Ar offset
+of a compressed single file.
+Both take the
+.Fl s
+suffixes.
+.It Fl R Ar member
+With
+.Fl d ,
+extract only
+.Ar member ,
+a path as
+.Fl i
+lists it, from an archive.
+.Pp
+.Fl r
+and
+.Fl R
+need a file written with
+.Fl X ,
+read from a file, not standard input.
+A job takes one of them, once.
+They read the index, check its tag (the file's checksum, or its
+authentication tag when encrypted) and decode only the chunks that hold
+the range; each of those must match the index's record of it, and when
+encrypted is authenticated as it is read.
+A file without an index is refused, not decoded in full.
 .It Fl n
 Do not sort archive members by type before archiving.
 .It Fl v
@@ -196,21 +303,33 @@ ownership is restored only when run as root.
 On extraction do not overwrite files that are newer than the archived
 copy.
 .It Fl e Ar cipher
-Encrypt with
+Encrypt with an authenticated cipher:
 .Cm AES
-or
+is AES-256-GCM,
 .Cm SALSA20
-in counter mode, keyed by scrypt from a password.
-Every chunk and the header are authenticated with an HMAC.
-A new key is derived for every run.
+is XChaCha20-Poly1305.
+The key is derived from a password with Argon2id (128 MiB, 4 passes) and
+a random salt, so it is new for every run.
+Every chunk is bound to its position, and the file ends with an
+authenticated chunk count: a changed, reordered or missing chunk, or a
+wrong password, fails decompression.
+Files encrypted by 4.4 and earlier (AES or Salsa20 in counter mode with
+an HMAC, keyed by scrypt) still decompress; 4.4 and earlier cannot read
+files encrypted by this version.
 .It Fl w Ar pwfile
 Read the password from
 .Ar pwfile ,
 which is overwritten with zeros afterwards.
 Otherwise the password is prompted for on the terminal.
 Required in pipe mode.
+With
+.Fl d ,
+a file that is not encrypted is refused: given a password, pcompress
+does not decompress data nothing authenticates.
 .It Fl k Ar keylen
 Key length in bytes, 16 or 32; default 32.
+Accepted for compatibility: the authenticated ciphers always use 32-byte
+keys.
 .It Fl C
 Print compression statistics.
 .Fl CC
@@ -305,6 +424,12 @@ A corrupt or truncated input, a failed checksum or HMAC, and any write
 or extraction error are reported and make
 .Nm
 exit with status 1.
+So does an archive member that a filter
+.Pq Fl Z , No packJPG and the others
+cannot decode: it is written as stored, the extraction goes on, and
+its path is listed in
+.Pa filter_failures.txt
+in the target directory.
 .Sh EXAMPLES
 Compress a file with zstd at level 9 and restore it:
 .Bd -literal -offset indent

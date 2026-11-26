@@ -28,8 +28,9 @@
  * @brief Allocation wrappers (malloc/calloc/free).
  *
  * The slab_* names are kept from the old slab allocator, removed in 4.1;
- * they now call the system allocator. The zlib-style first argument is
- * ignored.
+ * they now call pc_malloc(), pc_calloc() and pc_mfree() (utils/pc_alloc.h),
+ * so the memory goes through pc_set_allocator()'s allocator. The
+ * zlib-style first argument is ignored.
  */
 
 #ifndef __ALLOCATOR_H__
@@ -45,7 +46,7 @@ void slab_init(void);
 void slab_cleanup(int quiet);
 
 /**
- * malloc().
+ * pc_malloc().
  * @param p     Unused (for API compatibility with zlib-style allocators).
  * @param size  Number of bytes to allocate.
  * @return Pointer to allocated memory, or NULL on failure.
@@ -53,7 +54,7 @@ void slab_cleanup(int quiet);
 void *slab_alloc(void *p, size_t size);
 
 /**
- * calloc().
+ * pc_calloc().
  * @param p      Unused.
  * @param items  Number of elements.
  * @param size   Size of each element.
@@ -62,14 +63,14 @@ void *slab_alloc(void *p, size_t size);
 void *slab_calloc(void *p, size_t items, size_t size);
 
 /**
- * free().
+ * pc_mfree().
  * @param p        Unused.
  * @param address  Pointer previously returned by slab_alloc/slab_calloc.
  */
 void slab_free(void *p, void *address);
 
 /**
- * free().
+ * pc_mfree().
  * @param p        Unused.
  * @param address  Pointer previously returned by slab_alloc/slab_calloc.
  */

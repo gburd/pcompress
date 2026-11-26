@@ -30,6 +30,7 @@
 #include <arpa/inet.h>
 /* Public types (pc_ctx_t, pc_error_t, pc_log_fn, PC_LOG_*): one definition. */
 #include "../include/pcompress/pcompress.h"
+#include "pc_alloc.h"
 #include <sys/types.h>
 
 #ifndef __STDC_FORMAT_MACROS
@@ -332,7 +333,7 @@ typedef enum {
 	/*
 	 * Sub-types.
 	 */
-#define	NUM_SUB_TYPES	35
+#define	NUM_SUB_TYPES	37
 	TYPE_EXE32 = 8,
 	TYPE_JPEG = 16,
 	TYPE_MARKUP = 24,
@@ -367,7 +368,9 @@ typedef enum {
 	TYPE_WAV = 256,
 	TYPE_ENGLISH = 264,
 	TYPE_MEDIA_BSC = 272,
-	TYPE_EXE32_PE = 280
+	TYPE_EXE32_PE = 280,
+	TYPE_EXE_ARM64 = 288,
+	TYPE_EXE_RISCV = 296
 } data_type_t;
 
 /*
@@ -482,6 +485,9 @@ typedef struct log_state {
 	pc_error_t code;	/* first error class since the last log_reset() */
 	char last_error[256];
 } log_state_t;
+
+/* Every library thread starts here (pc_set_thread_hooks()). */
+int pc_thread_create(pthread_t *thr, const char *name, void *(*fn)(void *), void *arg);
 
 void log_bind(log_state_t *ls);
 log_state_t *log_bound(void);

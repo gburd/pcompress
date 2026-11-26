@@ -99,9 +99,11 @@ run_benchmarks() {
 # --- Fuzz Smoke Test ---
 run_fuzz_smoke() {
 	fuzz_time="${FUZZ_SECONDS:-60}"
-	for target in fuzz_decompress fuzz_compress fuzz_crc fuzz_chunk fuzz_manifest; do
-		# fuzz_chunk and fuzz_manifest start from the seeds fuzz-build wrote;
-		# new inputs go to a scratch corpus, never into the seed directory.
+	for target in fuzz_decompress fuzz_compress fuzz_crc fuzz_chunk fuzz_manifest \
+	    fuzz_seek_index fuzz_repair fuzz_reflate fuzz_dedupe; do
+		# fuzz_chunk, fuzz_manifest, fuzz_seek_index and fuzz_dedupe start from the
+		# seeds fuzz-build wrote; new inputs go to a scratch corpus, never
+		# into the seed directory.
 		seeds="${BUILD_DIR}/buildtmp/fuzz-seeds/${target#fuzz_}"
 		corpus="${BUILD_DIR}/buildtmp/fuzz-corpus/${target}"
 		mkdir -p "$corpus"

@@ -153,6 +153,24 @@ set of files with every algorithm, checksum and cipher on one host
 (ideally big-endian), then decompress them on another. The same is done
 for an archive containing a symlink.
 
+### Cross-version differential fuzzing
+
+`ci/difffuzz.sh <new-build> <old-build> [seeds] [first-seed]` compares
+two built trees, normally this one and the previous release. For each
+seed, `test/tools/xver_model.py` makes a random input (text, random
+bytes, zeros, repeats; 0 to 3 MB) and a random single-file option set
+the old release understands (algorithm, level, chunk size, -D/-E/-F/-G,
+-B, -L, -P, -S, -e, -t, pipe mode). It compresses with each build and
+decompresses with the other, and with itself. The library checks run
+`test/tools/xver_drv.c`, built against each library, and compare gear
+chunk boundaries, plain and keyed chunk ids, a random PCMF2 manifest,
+and the PCIDX1 index file with an independent Python model written from
+DESIGN.md, and with each other. They also re-encode each build's
+manifest with the other, and open each build's sealed objects with the
+other. A case only the old release gets wrong prints as `OLDBUG`. One
+seed always replays the same case. The nightly job runs 300 seeds
+against 4.4.0, built from the release tarball (about 4 minutes).
+
 ### Running Integration Tests
 
 ```sh
@@ -258,6 +276,7 @@ fuzzer coverage.
 | `fuzz_crc`          | `test/fuzz/fuzz_crc.c`       | CRC functions with random input |
 | `fuzz_chunk`        | `test/fuzz/fuzz_chunk.c`     | `pc_chunk_open()` on objects with a valid forged tag and on raw input; `pc_keyfile_open()` |
 | `fuzz_manifest`     | `test/fuzz/fuzz_manifest.c`  | `pc_manifest_decode()`; anything accepted must re-encode to the same bytes |
+| `fuzz_dedupe`       | `test/fuzz/fuzz_dedupe.c`    | `dedupe_decompress()` on deduplicated chunks (`-D`, `-F`, `-G`) |
 
 `fuzz_chunk` and `fuzz_manifest` use only the public API and link the
 shared library. `make fuzz-build` also writes seed inputs for them to
@@ -348,6 +367,19 @@ Benchmarks run on two synthetic patterns:
 For representative real-world results, benchmark with the Silesia corpus
 (200MB mixed data). Place the corpus files in `test/datafiles/` and update
 `bench_algos.c` to read them.
+
+### Benchmark tracking
+
+`ci/bench.py run PCOMPRESS CORPUS BENCH_CHUNK OUT.json` compresses and
+decompresses a corpus with zstd 3 and 9, lz4 1, lzma 6, libbsc 6 and
+adapt2 6 (8 MB chunks, best of three), runs `bench_chunk 64`, and writes
+the ratios and MB/s as JSON. `ci/bench.py compare OLD.json NEW.json`
+prints one against the other and exits 1 if a ratio fell by more than
+0.1% or a case is missing; a speed drop of more than 25% is only a
+warning. The nightly workflow's "Benchmark tracking" job runs it on
+enwik8 (downloaded once, checked by sha256, cached) and compares with
+the result of the last successful nightly on the branch, which it keeps
+as the `bench` artifact.
 
 ## Test Infrastructure
 

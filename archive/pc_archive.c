@@ -57,6 +57,7 @@
 #include <phash/standard.h>
 #include "archive/pc_archive.h"
 #include "meta_stream.h"
+#include "utils/pc_cache.h"
 
 #include <ftw.h>
 #include <locale.h>
@@ -67,10 +68,11 @@
 
 static int inited = 0;
 static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* A static table: a process-wide allocation would outlive every context. */
 static struct ext_hash_entry {
 	uint64_t extnum;
 	int type;
-} *exthtab = NULL;
+} exthtab[PHASHNKEYS];
 
 /* No filters: used when a context has no table. */
 static struct type_data no_filters[NUM_SUB_TYPES+1];
@@ -113,6 +115,7 @@ static struct arc_list_state {
 	int fd;
 	struct sort_buf *srt, *head;
 	int srt_pos;
+	int bcj_probe, bcj_found;	/* look for ARM64/RISC-V members */
 } a_state;
 
 pthread_mutex_t nftw_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -120,6 +123,8 @@ pthread_mutex_t nftw_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int detect_type_by_ext(const char *path, int pathlen);
 static int detect_type_from_ext(const char *ext, int len);
 static int detect_type_by_data(uchar_t *buf, size_t len);
+static int detect_deflate_container(const uchar_t *buf, size_t len);
+static int64_t filter_orig_size(struct archive_entry *entry);
 
 /*
  * Archive writer callback routines for archive creation operation.
@@ -251,7 +256,7 @@ creat_write_callback(struct archive *arc, void *ctx, const void *buf, size_t len
 			break;
 		}
 	}
-
+	pctx->arc_spos += len - remaining;	/* only this thread writes it */
 	return (len - remaining);
 }
 
@@ -389,6 +394,20 @@ archiver_write(void *ctx, void *buf, uint64_t count)
 	pc_ctx_t *pctx = (pc_ctx_t *)ctx;
 
 	if (__atomic_load_n(&pctx->arc_closed, __ATOMIC_RELAXED)) {
+		uchar_t *b = (uchar_t *)buf;
+		uint64_t i;
+
+		/*
+		 * libarchive stops reading at the end-of-archive blocks, but the
+		 * tar stream goes on with zero padding to its record size, which
+		 * can fill a later chunk. Zeros after a clean end are that
+		 * padding: take them. Anything else is data the extractor never
+		 * read.
+		 */
+		for (i = 0; pctx->arc_eof && i < count && b[i] == 0; i++)
+			;
+		if (pctx->arc_eof && i == count)
+			return ((int64_t)count);
 		log_msg(LOG_WARN, 0, "Archive extractor closed unexpectedly");
 		return (0);
 	}
@@ -543,10 +562,10 @@ read_next_path(pc_ctx_t *pctx, char *fpath, char **namechars, int *fpathlen)
 		if (srt1->pos > srt1->max) {
 			if (srt1 == pctx->archive_sort_buf) {
 				pctx->archive_sort_buf = srt1->next;
-				free(srt1);
+				pc_mfree(srt1);
 			} else {
 				psrt1->next = srt1->next;
-				free(srt1);
+				pc_mfree(srt1);
 			}
 		}
 	}
@@ -643,6 +662,40 @@ do_mmap:
 /*
  * Build list of pathnames in a temp file.
  */
+/*
+ * During the scan, until one is found: would the archiver hand this file
+ * to the ARM64/RISC-V branch filter? The same tests it makes (size,
+ * extension, then the magic bytes), so the header can say in advance
+ * whether the archive needs format version 13 (FLAG_BCJ_ARM).
+ */
+static void
+bcj_probe(const char *fpath, const struct stat *sb, int tflag)
+{
+	uchar_t buf[512];
+	ssize_t n;
+	int fd, typ;
+
+	if (!a_state.bcj_probe || a_state.bcj_found || tflag != FTW_F ||
+	    !S_ISREG(sb->st_mode) || sb->st_size < BCJ_FILE_SIZE_MIN ||
+	    sb->st_size > BCJ_FILE_SIZE_LIMIT ||
+	    detect_type_by_ext(fpath, strlen(fpath)) != TYPE_UNKNOWN)
+		return;
+	/* O_NONBLOCK: a file swapped for a FIFO since the walk must not block. */
+#ifdef O_NONBLOCK
+	if ((fd = open(fpath, O_RDONLY | O_NONBLOCK)) == -1)
+#else
+	if ((fd = open(fpath, O_RDONLY)) == -1)
+#endif
+		return;
+	n = read(fd, buf, sizeof (buf));
+	close(fd);
+	if (n < (ssize_t)sizeof (buf))
+		return;
+	typ = PC_SUBTYPE(detect_type_by_data(buf, sizeof (buf)));
+	if (typ == TYPE_EXE_ARM64 || typ == TYPE_EXE_RISCV)
+		a_state.bcj_found = 1;
+}
+
 static int
 add_pathname(const char *fpath, const struct stat *sb,
                     int tflag, struct FTW *ftwbuf)
@@ -661,6 +714,7 @@ add_pathname(const char *fpath, const struct stat *sb,
 	 * buffer is then flushed to disk. This is for decent performance.
 	 */
 	a_state.arc_size += (sb->st_size + ARC_ENTRY_OVRHEAD);
+	bcj_probe(fpath, sb, tflag);
 	len = strlen(fpath);
 	if (a_state.bufpos + len + 14 > a_state.bufsiz) {
 		ssize_t wrtn = Write(a_state.fd, a_state.pbuf, a_state.bufpos);
@@ -697,14 +751,14 @@ add_pathname(const char *fpath, const struct stat *sb,
 			 * Sort Buffer is full so sort it. Sorting is done by file extension and size.
 			 * If file has no extension then an algorithm is used, described below.
 			 */
-			srt = (struct sort_buf *)malloc(sizeof (struct sort_buf));
+			srt = (struct sort_buf *)pc_malloc(sizeof (struct sort_buf));
 			if (srt == NULL) {
 				log_msg(LOG_WARN, 0, "Out of memory for sort buffer. Continuing without sorting.");
 				a_state.srt = a_state.head;
 				while (a_state.srt) {
 					struct sort_buf *srt;
 					srt = a_state.srt->next;
-					free(a_state.srt);
+					pc_mfree(a_state.srt);
 					a_state.srt = srt;
 					goto cont;
 				}
@@ -732,7 +786,7 @@ add_pathname(const char *fpath, const struct stat *sb,
 			while (a_state.srt) {
 				struct sort_buf *srt;
 				srt = a_state.srt->next;
-				free(a_state.srt);
+				pc_mfree(a_state.srt);
 				a_state.srt = srt;
 				goto cont;
 			}
@@ -862,7 +916,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	 */
 	if (pctx->enable_archive_sort) {
 		struct sort_buf *srt;
-		srt = (struct sort_buf *)malloc(sizeof (struct sort_buf));
+		srt = (struct sort_buf *)pc_malloc(sizeof (struct sort_buf));
 		if (srt == NULL) {
 			log_msg(LOG_ERR, 0, "Out of memory.");
 			return (-1);
@@ -879,7 +933,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	tmpfile = pctx->archive_members_file;
 	tmp = get_temp_dir();
 	strcpy(tmpfile, tmp);
-	free(tmp);
+	pc_mfree(tmp);
 
 	strcat(tmpfile, "/.pcompXXXXXX");
 	if ((fd = mkstemp(tmpfile)) == -1) {
@@ -888,10 +942,10 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	}
 
 	add_fname(tmpfile);
-	pbuf = malloc(pctx->chunksize);
+	pbuf = pc_malloc(pctx->chunksize);
 	if (pbuf == NULL) {
 		log_msg(LOG_ERR, 0, "Out of memory.");
-		close(fd);  unlink(tmpfile);
+		close(fd);  unlink(tmpfile);  rm_fname(tmpfile);
 		return (-1);
 	}
 
@@ -920,6 +974,9 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	a_state.srt_pos = 0;
 	a_state.head = a_state.srt;
 	a_state.pathlist_size = 0;
+	a_state.bcj_probe = pctx->exe_preprocess &&
+	    FILTERS(pctx)[TYPE_EXE_ARM64 >> 3].filter_func != NULL;
+	a_state.bcj_found = 0;
 
 	while (fn) {
 		struct stat sb;
@@ -963,7 +1020,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 			ssize_t wrtn = Write(a_state.fd, a_state.pbuf, a_state.bufpos);
 			if (wrtn < a_state.bufpos) {
 				log_msg(LOG_ERR, 1, "Write failed.");
-				close(fd);  unlink(tmpfile);
+				close(fd);  unlink(tmpfile);  rm_fname(tmpfile);
 				return (-1);
 			}
 			a_state.bufpos = 0;
@@ -984,9 +1041,21 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 	}
 	pthread_mutex_unlock(&nftw_mutex);
 
+	/*
+	 * The header is written before any member is read: it claims
+	 * FLAG_BCJ_ARM only when the scan found a member for the filter.
+	 * Otherwise the filter is switched off, so a file that changed since
+	 * the scan cannot be filtered in an archive 4.4 would misread.
+	 */
+	pctx->bcj_used = a_state.bcj_found;
+	if (!pctx->bcj_used && pctx->filter_table != NULL) {
+		FILTERS(pctx)[TYPE_EXE_ARM64 >> 3].filter_func = NULL;
+		FILTERS(pctx)[TYPE_EXE_RISCV >> 3].filter_func = NULL;
+	}
+
 	sbuf->st_size = pctx->archive_size;
 	lseek(fd, 0, SEEK_SET);
-	free(pbuf);
+	pc_mfree(pbuf);
 	sbuf->st_uid = geteuid();
 	sbuf->st_gid = getegid();
 	sbuf->st_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
@@ -996,6 +1065,7 @@ setup_archiver(pc_ctx_t *pctx, struct stat *sbuf)
 		log_msg(LOG_ERR, 1, "Unable to create libarchive context.\n");
 		close(fd);
 		unlink(tmpfile);
+		rm_fname(tmpfile);
 		return (-1);
 	}
 
@@ -1068,6 +1138,7 @@ process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
 	int64_t wrtn;
 
 	fout->hdr_valid = 1;
+	fout->grown = 0;
 	fi.source_arc = source_arc;
 	fi.target_arc = target_arc;
 	fi.entry = entry;
@@ -1089,11 +1160,20 @@ process_by_filter(pc_ctx_t *pctx, int fd, int *typ, struct archive *target_arc,
 	return (wrtn);
 }
 
+/*
+ * Write an entry's header. With a seek index (-X), first record where
+ * the entry starts in the PAX stream: after finishing the previous entry,
+ * whose padding archive_write_header() would otherwise write first.
+ */
 static int
-write_header(struct archive *arc, struct archive_entry *entry)
+write_header(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry)
 {
 	int rv;
 
+	if (pctx->sx_w != NULL) {
+		(void) archive_write_finish_entry(arc);
+		sx_add_member(pctx->sx_w, archive_entry_pathname(entry), pctx->arc_spos);
+	}
 	rv = archive_write_header(arc, entry);
 	if (rv != ARCHIVE_OK) {
 		if (rv == ARCHIVE_FATAL || rv == ARCHIVE_FAILED) {
@@ -1106,6 +1186,27 @@ write_header(struct archive *arc, struct archive_entry *entry)
 		}
 	}
 	return (0);
+}
+
+/*
+ * A filter whose output is larger than the member (reflate): the entry
+ * is stored with the output's size, and the original size goes in an
+ * xattr for extraction to restore (archive_extract_entry()).
+ */
+static void
+filter_resize(struct archive_entry *entry, const filter_output_t *fout)
+{
+	unsigned char b[8];
+	uint64_t sz = archive_entry_size(entry);
+	int i;
+
+	if (!fout->grown)
+		return;
+	for (i = 0; i < 8; i++)
+		b[i] = (unsigned char)(sz >> (8 * i));
+	archive_entry_xattr_add_entry(entry, FILTER_XATTR_SIZE, b, sizeof (b));
+	archive_entry_set_size(entry, (fout->hdr_valid ? sizeof (fout->hdr) : 0) +
+	    fout->out_size);
 }
 
 /*
@@ -1133,6 +1234,9 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 		log_msg(LOG_ERR, 1, "Failed to open %s.", fpath);
 		return (-1);
 	}
+#ifdef POSIX_FADV_SEQUENTIAL
+	(void) posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 
 	if (typ != TYPE_UNKNOWN) {
 		if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
@@ -1147,7 +1251,8 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 				if (fout.output_type == FILTER_OUTPUT_MEM) {
 					archive_entry_xattr_add_entry(entry, FILTER_XATTR_ENTRY,
 								      fname, strlen(fname));
-					if (write_header(arc, entry) == -1) {
+					filter_resize(entry, &fout);
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1159,7 +1264,7 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 					}
 					rv = archive_write_data(arc, fout.out,
 								fout.out_size);
-					free(fout.out);
+					pc_mfree(fout.out);
 					close(fd);
 					if (rv != fout.out_size)
 						return (ARCHIVE_FATAL);
@@ -1172,12 +1277,12 @@ copy_file_data(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry,
 					return (ARCHIVE_FATAL);
 				}
 			}
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
 		} else {
-			if (write_header(arc, entry) == -1) {
+			if (write_header(pctx, arc, entry) == -1) {
 				close(fd);
 				return (-1);
 			}
@@ -1210,7 +1315,13 @@ do_map:
 		wlen = len;
 
 		if (typ == TYPE_UNKNOWN) {
+			int by_magic = 0;
+
 			pctx->ctype = detect_type_by_data(src, len);
+			if (pctx->ctype == TYPE_UNKNOWN && pctx->enable_reflate) {
+				pctx->ctype = detect_deflate_container(src, len);
+				by_magic = pctx->ctype != TYPE_UNKNOWN;
+			}
 			typ = pctx->ctype;
 			if (typ != TYPE_UNKNOWN) {
 				if (FILTERS(pctx)[(typ >> 3)].filter_func != NULL) {
@@ -1226,7 +1337,8 @@ do_map:
 							archive_entry_xattr_add_entry(entry,
 										      FILTER_XATTR_ENTRY,
 										      fname, strlen(fname));
-							if (write_header(arc, entry) == -1) {
+							filter_resize(entry, &fout);
+							if (write_header(pctx, arc, entry) == -1) {
 								close(fd);
 								return (-1);
 							}
@@ -1238,7 +1350,7 @@ do_map:
 							}
 							rv = archive_write_data(arc, fout.out,
 										fout.out_size);
-							free(fout.out);
+							pc_mfree(fout.out);
 							close(fd);
 							if (rv != fout.out_size)
 								return (ARCHIVE_FATAL);
@@ -1251,7 +1363,13 @@ do_map:
 							return (ARCHIVE_FATAL);
 						}
 					}
-					if (write_header(arc, entry) == -1) {
+					/*
+					 * Not reflated: typed as it would be without -Z,
+					 * header included (a type change ends a chunk).
+					 */
+					if (by_magic)
+						pctx->ctype = TYPE_UNKNOWN;
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
@@ -1260,13 +1378,13 @@ do_map:
 					offset = 0;
 					goto do_map;
 				} else {
-					if (write_header(arc, entry) == -1) {
+					if (write_header(pctx, arc, entry) == -1) {
 						close(fd);
 						return (-1);
 					}
 				}
 			} else {
-				if (write_header(arc, entry) == -1) {
+				if (write_header(pctx, arc, entry) == -1) {
 					close(fd);
 					return (-1);
 				}
@@ -1287,6 +1405,8 @@ do_map:
 		bytes_to_write -= wrtn;
 		if (rv == -1) break;
 		munmap(mapbuf, len);
+		/* Each member is read once: its pages need not stay cached. */
+		pc_cache_drop(fd, offset - len, len);
 	}
 	close(fd);
 
@@ -1303,7 +1423,7 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
 	if (archive_entry_size(entry) > 0) {
 		return (copy_file_data(pctx, arc, entry, typ));
 	} else {
-		if (write_header(arc, entry) == -1)
+		if (write_header(pctx, arc, entry) == -1)
 			return (-1);
 	}
 
@@ -1323,6 +1443,28 @@ write_entry(pc_ctx_t *pctx, struct archive *arc, struct archive_entry *entry, in
  * arc_utf8_end() before the thread returns. Where no UTF-8 locale exists
  * the locale is left alone (names then go out as raw bytes, as before).
  */
+#ifndef _WIN32
+/*
+ * One UTF-8 locale for the whole process, made once and never freed: a
+ * locale_t may be used by several threads at once, and a newlocale() and
+ * freelocale() per thread made glibc load and unload its locale data
+ * concurrently (synchronised by a lock inside glibc that ThreadSanitizer
+ * cannot see, so it reported races there).
+ */
+static pthread_once_t utf8_once = PTHREAD_ONCE_INIT;
+static locale_t utf8_loc = (locale_t)0;
+
+static void
+utf8_locale_init(void)
+{
+	static const char *names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
+	size_t i;
+
+	for (i = 0; i < sizeof (names) / sizeof (names[0]) && utf8_loc == (locale_t)0; i++)
+		utf8_loc = newlocale(LC_CTYPE_MASK, names[i], (locale_t)0);
+}
+#endif
+
 static void *
 arc_utf8_begin(void)
 {
@@ -1331,15 +1473,10 @@ arc_utf8_begin(void)
 	(void) setlocale(LC_CTYPE, ".UTF-8");
 	return (NULL);
 #else
-	static const char *names[] = { "C.UTF-8", "C.utf8", "en_US.UTF-8", "UTF-8" };
-	locale_t loc = (locale_t)0;
-	size_t i;
-
-	for (i = 0; i < sizeof (names) / sizeof (names[0]) && loc == (locale_t)0; i++)
-		loc = newlocale(LC_CTYPE_MASK, names[i], (locale_t)0);
-	if (loc != (locale_t)0)
-		(void) uselocale(loc);
-	return ((void *)loc);
+	pthread_once(&utf8_once, utf8_locale_init);
+	if (utf8_loc != (locale_t)0)
+		(void) uselocale(utf8_loc);
+	return ((void *)utf8_loc);
 #endif
 }
 
@@ -1350,10 +1487,8 @@ arc_utf8_end(void *loc)
 #ifdef _WIN32
 	(void) loc;
 #else
-	if (loc != NULL) {
+	if (loc != NULL)
 		(void) uselocale(LC_GLOBAL_LOCALE);
-		freelocale((locale_t)loc);
-	}
 #endif
 }
 
@@ -1373,6 +1508,7 @@ archiver_thread_func(void *dat) {
 	loc = arc_utf8_begin();
 	rv = archiver_thread_run(pctx);
 	arc_utf8_end(loc);
+	arc_filter_thread_done();
 	return (rv);
 }
 
@@ -1513,6 +1649,11 @@ archiver_thread_run(pc_ctx_t *pctx) {
 	}
 
 done:
+	if (pctx->sx_w != NULL) {
+		/* The last member ends before the end-of-archive blocks. */
+		(void) archive_write_finish_entry(arc);
+		sx_end_member(pctx->sx_w, pctx->arc_spos);
+	}
 	if (pctx->temp_mmap_len > 0)
 		munmap(pctx->temp_mmap_buf, pctx->temp_mmap_len);
 	archive_entry_free(entry);
@@ -1521,12 +1662,13 @@ done:
 	archive_write_free(arc);
 	close(pctx->archive_members_fd);
 	unlink(pctx->archive_members_file);
+	rm_fname(pctx->archive_members_file);
 	return (NULL);
 }
 
 int
 start_archiver(pc_ctx_t *pctx) {
-	if (pthread_create(&(pctx->archive_thread), NULL, archiver_thread_func, (void *)pctx) != 0)
+	if (pc_thread_create(&(pctx->archive_thread), "pc-archive", archiver_thread_func, (void *)pctx) != 0)
 		return (-1);
 	pctx->archive_thread_started = 1;
 	return (0);
@@ -1583,7 +1725,7 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 			if (fout.output_type == FILTER_OUTPUT_MEM) {
 				int rv;
 				rv = archive_write_data(aw, fout.out, fout.out_size);
-				free(fout.out);
+				pc_mfree(fout.out);
 				if (rv < ret)
 					ret = rv;
 				return (ret);
@@ -1614,6 +1756,23 @@ copy_data_out(struct archive *ar, struct archive *aw, struct archive_entry *entr
 	return (ret);
 }
 
+/* The size filter_resize() recorded, or -1 if the entry has none. */
+static int64_t
+filter_orig_size(struct archive_entry *entry)
+{
+	const unsigned char *b;
+	int64_t v = 0;
+	size_t n;
+	int i;
+
+	if (!archive_entry_has_xattr(entry, FILTER_XATTR_SIZE, (const void **)&b, &n) ||
+	    n != 8)
+		return (-1);
+	for (i = 7; i >= 0; i--)
+		v = (v << 8) | b[i];
+	return (v < 0 ? -1 : v);
+}
+
 static int
 archive_extract_entry(struct archive *a, struct archive_entry *entry,
     struct archive *ad, int typ, pc_ctx_t *pctx)
@@ -1621,6 +1780,7 @@ archive_extract_entry(struct archive *a, struct archive_entry *entry,
 	int r, r2;
 	char *filter_name;
 	size_t name_size;
+	int64_t stored = archive_entry_size(entry), orig;
 
 	/*
 	 * If the entry is tagged with our custom xattr we get the filter which
@@ -1632,7 +1792,18 @@ archive_extract_entry(struct archive *a, struct archive_entry *entry,
 		typ = type_tag_from_filter_name(FILTERS(pctx), filter_name, name_size);
 		archive_entry_xattr_delete_entry(entry, FILTER_XATTR_ENTRY);
 	}
+	/*
+	 * A filter stored more than the member's size (filter_resize()):
+	 * the disk writer gets the original size, which it cuts the file
+	 * to; the filter still reads the stored bytes.
+	 */
+	if ((orig = filter_orig_size(entry)) >= 0) {
+		archive_entry_xattr_delete_entry(entry, FILTER_XATTR_SIZE);
+		archive_entry_set_size(entry, orig);
+	}
 	r = archive_write_header(ad, entry);
+	if (orig >= 0)
+		archive_entry_set_size(entry, stored);	/* the writer took a copy */
 	if (r < ARCHIVE_WARN)
 		r = ARCHIVE_WARN;
 	if (r != ARCHIVE_OK) {
@@ -1704,8 +1875,10 @@ archive_list_entry(struct archive *a, struct archive_entry *entry, int typ)
 	}
 
 	if (archive_entry_size_is_set(entry)) {
-		int64_t sz = archive_entry_size(entry);
-		printf("%12" PRId64 " %13s %s\n", sz, strtm, archive_entry_pathname(entry));
+		int64_t sz = archive_entry_size(entry), shown = filter_orig_size(entry);
+
+		printf("%12" PRId64 " %13s %s\n", shown >= 0 ? shown : sz, strtm,
+		    archive_entry_pathname(entry));
 		if (sz > 0)
 			return (copy_data_skip(a, entry, typ));
 	} else {
@@ -1759,6 +1932,7 @@ extractor_thread_func(void *dat) {
 	loc = arc_utf8_begin();
 	rv = extractor_thread_run(pctx);
 	arc_utf8_end(loc);
+	arc_filter_thread_done();
 	return (rv);
 }
 
@@ -1837,6 +2011,8 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	/*
 	 * Read archive entries and extract to disk.
 	 */
+	pctx->arc_eof = 0;
+	pctx->errored_count = 0;
 	while ((rv = archive_read_next_header(arc, &entry)) != ARCHIVE_EOF) {
 #ifndef	__APPLE__
 		const char *xt_name, *xt_value;
@@ -1911,11 +2087,14 @@ extractor_thread_run(pc_ctx_t *pctx) {
 	}
 
 	if (!pctx->list_mode) {
+		/* Those members hold their stored bytes, not the originals: a failure. */
 		if (pctx->errored_count > 0) {
-			log_msg(LOG_WARN, 0, "WARN: %d pathnames failed filter decoding.");
+			log_error_code(PC_ERR_CORRUPT);
+			log_msg(LOG_ERR, 0, "%u pathnames failed filter decoding and were "
+			    "written as stored.", pctx->errored_count);
 			if (pctx->err_paths_fd) {
 				fclose(pctx->err_paths_fd);
-				log_msg(LOG_WARN, 0, "Please see file filter_failures.txt.");
+				log_msg(LOG_ERR, 0, "Please see file filter_failures.txt.");
 			}
 		} else {
 			if (pctx->err_paths_fd) {
@@ -1924,6 +2103,9 @@ extractor_thread_run(pc_ctx_t *pctx) {
 			}
 		}
 	}
+	/* A clean end of the archive: trailing zero padding may follow. */
+	if (rv == ARCHIVE_EOF)
+		__atomic_store_n(&pctx->arc_eof, 1, __ATOMIC_RELAXED);
 	archive_read_free(arc);
 	archive_write_free(awd);
 
@@ -1933,7 +2115,7 @@ done:
 
 int
 start_extractor(pc_ctx_t *pctx) {
-	if (pthread_create(&(pctx->archive_thread), NULL, extractor_thread_func, (void *)pctx) != 0)
+	if (pc_thread_create(&(pctx->archive_thread), "pc-extract", extractor_thread_func, (void *)pctx) != 0)
 		return (-1);
 	pctx->archive_thread_started = 1;
 	return (0);
@@ -1952,28 +2134,22 @@ init_archive_mod(void) {
 	if (!inited) {
 		int i, j;
 
-		exthtab = malloc(PHASHNKEYS * sizeof (struct ext_hash_entry));
-		if (exthtab != NULL) {
-			for (i = 0; i < PHASHNKEYS; i++) {
-				uint64_t extnum;
-				ub4 slot = phash(extlist[i].ext, extlist[i].len);
-				extnum = 0;
+		for (i = 0; i < PHASHNKEYS; i++) {
+			uint64_t extnum;
+			ub4 slot = phash(extlist[i].ext, extlist[i].len);
+			extnum = 0;
 
-				/*
-				 * Since extensions are less than 8 bytes (or truncated otherwise),
-				 * each extension string is packed into a 64-bit integer for quick
-				 * comparison.
-				 */
-				for (j = 0; j < extlist[i].len; j++)
-					extnum = (extnum << 8) | extlist[i].ext[j];
-				exthtab[slot].extnum = extnum;
-				exthtab[slot].type = extlist[i].type;
-			}
-
-			inited = 1;
-		} else {
-			rv = 1;
+			/*
+			 * Since extensions are less than 8 bytes (or truncated otherwise),
+			 * each extension string is packed into a 64-bit integer for quick
+			 * comparison.
+			 */
+			for (j = 0; j < extlist[i].len; j++)
+				extnum = (extnum << 8) | extlist[i].ext[j];
+			exthtab[slot].extnum = extnum;
+			exthtab[slot].type = extlist[i].type;
 		}
+		inited = 1;
 	}
 	pthread_mutex_unlock(&init_mutex);
 	return (rv);
@@ -1982,7 +2158,7 @@ init_archive_mod(void) {
 void
 free_filters(pc_ctx_t *pctx)
 {
-	free(pctx->filter_table);
+	pc_mfree(pctx->filter_table);
 	pctx->filter_table = NULL;
 }
 
@@ -1997,7 +2173,7 @@ init_filters(pc_ctx_t *pctx, struct filter_flags *ff)
 	struct type_data *t;
 
 	free_filters(pctx);
-	t = calloc(NUM_SUB_TYPES + 1, sizeof (struct type_data));
+	t = pc_calloc(NUM_SUB_TYPES + 1, sizeof (struct type_data));
 	if (t == NULL)
 		return;	/* no filters: entries are stored unfiltered */
 	add_filters_by_type(t, ff);
@@ -2093,9 +2269,31 @@ out:
 #	define COM_MAGIC	(0x21cd)
 #endif
 
+/* ELF e_machine values (the ELF gABI). */
+#define	EM_AARCH64	183
+#define	EM_RISCV	243
+
 /*
  * Detect a few file types from looking at magic signatures.
  */
+/*
+ * -Z: deflate containers whatever their extension (docx, xlsx, ott, apk
+ * ...), as the types the extension table gives zip, gz and png. Only
+ * for the reflate filter: without it these members stay TYPE_UNKNOWN,
+ * as they always were, and are typed by the analyzer.
+ */
+static int
+detect_deflate_container(const uchar_t *buf, size_t len)
+{
+	if (len >= 8 && memcmp(buf, "PK\003\004", 4) == 0)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_ZIP);
+	if (len >= 8 && buf[0] == 0x1f && buf[1] == 0x8b && buf[2] == 8)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_GZ);
+	if (len >= 8 && memcmp(buf, "\211PNG\r\n\032\n", 8) == 0)
+		return (TYPE_BINARY|TYPE_COMPRESSED|TYPE_COMPRESSED_GZ);
+	return (TYPE_UNKNOWN);
+}
+
 static int
 detect_type_by_data(uchar_t *buf, size_t len)
 {
@@ -2148,6 +2346,11 @@ detect_type_by_data(uchar_t *buf, size_t len)
 
 	if (U32_P(buf) == ELFINT) {  // Regular ELF, check for 32/64-bit, core dump
 		if (*(buf + 16) != 4) {
+			/* Little-endian ARM64 and RISC-V code: the BCJ filter. */
+			if (buf[5] == 1 && LE16(U16_P(buf + 18)) == EM_AARCH64)
+				return (TYPE_BINARY|TYPE_EXE_ARM64);
+			if (buf[5] == 1 && LE16(U16_P(buf + 18)) == EM_RISCV)
+				return (TYPE_BINARY|TYPE_EXE_RISCV);
 			if (*(buf + 4) == 2) {
 				return (TYPE_BINARY|TYPE_EXE64);
 			} else {
@@ -2184,6 +2387,8 @@ detect_type_by_data(uchar_t *buf, size_t len)
 							id = LE16(U16_P(buf + off));
 							if (id == 0x8664) {
 								return (TYPE_BINARY|TYPE_EXE64);
+							} else if (id == 0xaa64) {
+								return (TYPE_BINARY|TYPE_EXE_ARM64);
 							} else {
 								return (TYPE_BINARY|TYPE_EXE32_PE);
 							}
@@ -2197,6 +2402,10 @@ detect_type_by_data(uchar_t *buf, size_t len)
 			}
 		}
 	}
+
+	// 64-bit Mach-O for ARM64 (MH_MAGIC_64, CPU_TYPE_ARM64)
+	if (LE32(U32_P(buf)) == 0xfeedfacfU && LE32(U32_P(buf + 4)) == 0x0100000cU)
+		return (TYPE_BINARY|TYPE_EXE_ARM64);
 
 	// BMP Files
 	if (buf[0] == 'B' && buf[1] == 'M') {

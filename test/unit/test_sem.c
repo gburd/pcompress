@@ -31,13 +31,15 @@ main(void)
 
 static Sem_t sem;
 static volatile int woke;		/* set by the waiter once Sem_Wait returns */
-static volatile sig_atomic_t hits;	/* signals the waiter has handled */
+static int hits;			/* signals the waiter handled; atomic (TSan) */
 
 static void
 on_usr1(int signo)
 {
 	(void) signo;
-	hits++;
+	/* Written in a handler on the waiter thread, read by the main thread:
+	 * atomic so ThreadSanitizer sees the two accesses as ordered. */
+	__atomic_add_fetch(&hits, 1, __ATOMIC_RELAXED);
 }
 
 static void *
@@ -78,7 +80,8 @@ MU_TEST(test_sem_wait_survives_signals)
 		pthread_kill(t, SIGUSR1);
 	}
 	nap(50);
-	mu_assert(hits > 0, "the signal never reached the waiting thread");
+	mu_assert(__atomic_load_n(&hits, __ATOMIC_RELAXED) > 0,
+	    "the signal never reached the waiting thread");
 	mu_assert(!__atomic_load_n(&woke, __ATOMIC_ACQUIRE),
 	    "Sem_Wait returned on a signal without a post");
 

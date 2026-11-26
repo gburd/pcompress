@@ -14,6 +14,11 @@ dependencies managed as git submodules and any API changes required.
 | libbsc         | bsc/                                | 3.3.12   | Submodule  | github.com/IlyaGrebnov/libbsc |
 | Zstandard      | zstd/                               | HEAD     | Submodule  | github.com/facebook/zstd      |
 | WavPack        | wavpack/                            | HEAD     | Submodule  | github.com/dbry/WavPack       |
+| BLAKE3         | crypto/blake3/                      | 1.8.7    | Vendored   | github.com/BLAKE3-team/BLAKE3 |
+| Monocypher     | crypto/monocypher/                  | 4.0.2    | Vendored   | monocypher.org                |
+| zlib (deflate) | filters/reflate/zlib/               | 1.3.1    | Vendored   | zlib.net; pinned, never update|
+| XZ Utils BCJ   | filters/bcj/                        | 5.8.1    | Vendored   | tukaani.org/xz (ARM64, RISC-V)|
+| Binary Fuse    | utils/binaryfusefilter.h            | f6f09de  | Vendored   | FastFilter/xor_singleheader|
 
 ---
 
@@ -289,6 +294,20 @@ is not needed.
 
 ---
 
+## Vendored: packJPG (filters/packjpg/)
+
+packJPG 2.5i is vendored with pcompress's stream interface.  One fix
+to the original code:
+
+- `DEVLI(s, n)` decodes a JPEG coefficient of size category `s`.  For
+  `s == 0` it shifted by -1, which is undefined (UBSan: "shift exponent
+  -1 is negative" in `jpg_decode_block_seq()`).  Category 0 is a
+  zero-length value, so `n` is 0 and the macro now returns it without
+  the shift.  That is what x86-64 and ARM64 computed before, so output
+  is unchanged.
+
+---
+
 ## Initializing Submodules
 
 After cloning the repository, initialize submodules:
@@ -299,3 +318,105 @@ git submodule update --init --recursive
 
 The `config` script does this automatically if submodules are not yet
 initialized.
+
+---
+
+## Vendored: BLAKE3 (crypto/blake3/)
+
+**Upstream**: https://github.com/BLAKE3-team/BLAKE3, tag 1.8.7
+(release tarball sha256
+c6782a28842b1c0478524ac06a4f2ede784038ee298d6e2162c0b089c4306a3c).
+**License**: CC0 1.0, or Apache-2.0, or Apache-2.0 with LLVM exception, at
+the user's choice; the three license files are kept next to the sources.
+**Modifications**: none. The files are upstream's `c/` directory, minus
+the assembly (`*.S`, `*.asm`), the TBB, CMake and test files.
+
+`blake3_dispatch.c` picks the code at run time from CPUID (SSE2, SSE4.1,
+AVX2, AVX-512) on x86-64. `./config` builds the four x86 intrinsics files
+there, each with only its own `-m` flag, `blake3_neon.c` on ARM64, and
+just the portable code elsewhere. The intrinsics files are used rather
+than the assembly so the same sources build with gcc and clang on Linux,
+macOS, the BSDs, illumos and MinGW.
+
+To update: copy the same files from the new tag's `c/` directory, update
+the version here and in the Makefile.in comment, and run `test_blake3`
+and `test_chunk` (both pin the official `test_vectors.json` values).
+
+## Vendored: Monocypher (crypto/monocypher/)
+
+**Upstream**: https://monocypher.org, release 4.0.2 (tarball sha512
+bf275d4c53ff94af6cdc723a4e002e9f080f4d1436c86c76bb37870b34807f1d7b32331d8ff8a1aeb369e946f3769021e03e63efac25b82efc5abf54dc084714,
+the value monocypher.org publishes).
+**License**: BSD-2-Clause or CC0 1.0, at the user's choice (`LICENCE.md`).
+**Modifications**: only the prefix. `src/monocypher.c` and
+`src/monocypher.h` had `crypto_` replaced by `pcmono_` (upstream's
+`change-prefix.sh pcmono` does the same), and `CRYPTO_ARGON2_*` and the
+include guard `MONOCYPHER_H` became `PCMONO_ARGON2_*` and `PCMONO_H`, so
+neither the symbols nor the macros clash with a host program's own
+Monocypher or libsodium. With the prefixes put back the files are
+byte-identical to upstream's.
+
+Used for two things only (`crypto/aead.c`): HChaCha20, for the
+XChaCha20-Poly1305 extended nonce (the AEAD itself is OpenSSL's
+ChaCha20-Poly1305, 9 times as fast as Monocypher's portable C on x86-64),
+and Argon2id, which OpenSSL has only from 3.2. `test/unit/test_crypto.c`
+pins both to the published vectors (draft-irtf-cfrg-xchacha-03, RFC 9106).
+
+---
+
+## Vendored: zlib 1.3.1 deflate (filters/reflate/zlib/)
+
+**Source**: https://zlib.net/fossils/zlib-1.3.1.tar.gz (sha256
+9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23), files
+deflate.c, deflate.h, trees.c, trees.h, adler32.c, zutil.c, zutil.h,
+zlib.h, zconf.h and LICENSE, unchanged except zconf.h.
+
+**Why**: the reflate filter (-Z) must re-create deflate streams bit for
+bit at extraction, forever; zlib does not promise the same output across
+versions. Do not update this copy: archives depend on its exact output.
+
+**Patch**: zconf.h's Z_PREFIX block is always on, with the prefix pcz_
+instead of z_ (plus z_errmsg), so these symbols never collide with the
+system zlib that the rest of pcompress (and the filter's inflate) uses;
+the renames of the deflateInit/inflateInit macros are dropped, since
+rf_deflate.c calls deflateInit2_() directly. Built with -DZ_SOLO
+-DNO_GZIP.
+
+---
+
+## Vendored: XZ Utils BCJ filters (filters/bcj/)
+
+**Upstream**: https://github.com/tukaani-project/xz, release 5.8.1
+(xz-5.8.1.tar.gz sha256
+507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543), files
+`src/liblzma/simple/arm64.c` (sha256 e4efa467...a01154) and `riscv.c`
+(sha256 5962ff33...2fe97).
+**License**: 0BSD (the SPDX line at the top of `bcj.c`).
+**Modifications**: `bcj.c` holds the three coders `arm64_code()`,
+`riscv_encode()` and `riscv_decode()` with their comments, unchanged, and
+drops the liblzma glue around them: the `HAVE_ENCODER_*` guards, the
+`lzma_simple_*_init()` and `lzma_bcj_*()` wrappers and
+`simple_private.h`, whose `read32le()` and friends are written out at the
+top. `bcj_arm64_encode()` and the other three entry points at the end call
+the coders on a whole buffer from offset 0.
+
+Archives hold the coders' output, so it must never change. To update,
+replace the coder bodies from the new release only if they still produce
+the same bytes: `test_filters` pins both against xz 5.8.1's own output.
+
+---
+
+## Vendored: Binary Fuse filter (utils/binaryfusefilter.h)
+
+**Upstream**: https://github.com/FastFilter/xor_singleheader,
+`include/binaryfusefilter.h` at commit f6f09ded055001a673f5570041607753c75b3d36
+(after tag v2.2.1; file sha256
+3ea8d9ac122dec9b55de0bad7516806ab744e6060130cae5fb1dda29ced62667).
+**License**: Apache-2.0 (`utils/LICENSE.binaryfusefilter`).
+**Modifications**: none. `idfilter.c` includes it with `malloc`,
+`calloc` and `free` defined to the library allocator, and sorts and
+deduplicates the keys itself before populating (upstream's fallback
+duplicate removal compares keys by a truncated difference).
+
+To update: copy the file from the new commit, update the hash here, and
+run `test_chunk` (`test_idfilter`).

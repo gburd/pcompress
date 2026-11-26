@@ -62,9 +62,9 @@ Each piece has a libpcompress equivalent:
 |---|---|
 | chunker (`chunkerVersion`) | `pc_chunker_*` (content-defined, deterministic) |
 | blob id (SHA-256 of plaintext) | `pc_chunk_id`, keyed BLAKE2b-256: the store cannot confirm guessed content |
-| blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XSalsa20 + BLAKE2b (encrypt-then-MAC) |
+| blob (LZ4, then AES-CBC + HMAC-SHA256) | `pc_chunk_seal`: any algorithm, then XChaCha20-Poly1305 |
 | tree / node | `pc_manifest_*`, one per directory, linked by `subtree` ids |
-| encryptedkeyset.dat | `pc_keyfile_*` (scrypt-wrapped 256-bit key) |
+| encryptedkeyset.dat | `pc_keyfile_*` (Argon2id-wrapped 256-bit key) |
 | local blob cache / "already uploaded?" | `pc_index_*` |
 | pack files, BlobLoc | **not provided**: the caller's choice (see Argh! below) |
 
@@ -128,12 +128,25 @@ and the repository's lifecycle.
   objects and `pc_derive_key(master, "seal")` seals them; the master key
   itself (from the key file) is used for nothing else. Pick the purpose
   names once per repository format and never change them.
-- **Identity:** `pc_chunk_id` keyed with the derived id key. Object names
+- **Identity:** `pc_chunk_id` keyed with the derived id key, or for a new
+  repository `pc_chunk_id2(PC_ID_BLAKE3, ...)`: keyed BLAKE3 named 64 KB
+  chunks at 4420 MB/s against 820 for keyed BLAKE2b on one core of an
+  EC2 Xeon 8488C. The choice is recorded in the repository config and
+  never changes. Object names
   then reveal nothing about content to the storage provider.
 - **Objects:** `pc_chunk_seal`/`pc_chunk_open` for every chunk and every
   manifest, with `pc_set_algorithm` chosen per repository (zstd by
   default). On restore, compare `pc_chunk_id` of the opened object with
   the name it was fetched by.
+- **Small objects:** a zstd dictionary per repository
+  (`pc_dict_train` on a few thousand small files or manifests, stored as
+  an object of its own and named in the repository config, then
+  `pc_set_dict` on every context). On pieces under 8 KB it cut stored
+  size by 30 to 40% (small `/usr/share/doc` files: ratio 1.89 to 2.96;
+  per-directory manifests of `/usr`: 1.75 to 2.46), and it costs
+  nothing on 64 KB chunks, where it also gains nothing. A dictionary
+  object must never be pruned while any object names it; a new
+  dictionary applies to new objects only.
 - **Keys:** `pc_keyfile_create` at `argh init`, `pc_keyfile_open` at
   each run. The password changes by rewrapping the same key in a new key
   file, with no re-encryption of the data. A second key file can wrap the
@@ -142,6 +155,18 @@ and the repository's lifecycle.
 - **Local cache:** `pc_index_*` in `arghd`'s cache directory. It is only
   a cache: losing it costs one extra lookup per chunk, never a wrong
   backup.
+- **Large repositories:** `pc_index` keeps 11 to 21 bytes per id in
+  memory. To keep memory nearly independent of repository size, keep the
+  stored ids in a file sorted by id, and in memory only a
+  `pc_idfilter_t` built from them plus a fence (the first 8 bytes of
+  every 128th id, 0.06 bytes per id). A lookup asks the filter first;
+  only a "maybe" binary-searches the fence and reads one 4 KB block of
+  the file. Ids stored since the file was last sorted go in a small
+  `pc_index` (or an in-memory set) checked as well, and are merged into
+  the sorted file at the end of the run, when the filter is rebuilt.
+  Measured with 10M ids (a Xeon 8488C, page cache warm): 1.2 bytes per
+  id in memory against 13.4 for `pc_index`, 0.004 reads per absent id,
+  one read per present id, and 0.9M present lookups/s against 1.6M.
 - **Many jobs in one process:** `arghd` can back up several folders at
   once. Every libpcompress call takes its own context, and the library
   is reentrant (ROADMAP Phase 1).
@@ -203,5 +228,5 @@ because a sealed object is opaque but its bytes are fixed once written:
 - **Keys:** the master key comes from the client's key file and never
   reaches the server. Derive one key per purpose with `pc_derive_key`.
   If the key file is stored with the service (so a user can restore
-  from a new machine with only a password), it is protected by scrypt
+  from a new machine with only a password), it is protected by Argon2id
   alone, and the password's strength is the whole defence.
