@@ -697,7 +697,8 @@ redo:
 	 * thread on write_done_sem (~2% of decompressions of a corrupt file).
 	 */
 	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || __atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))) {
-		tdat->len_cmp = 0;
+		/* The writer may read len_cmp released by the shutdown post: atomic. */
+		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 		Sem_Post(&tdat->cmp_done_sem);
 		return (NULL);
 	}
@@ -2835,6 +2836,8 @@ uncomp_done:
 	 * their slots were freed below.
 	 */
 	if (thread) {
+		/* See start_compress_impl: stop the writer before any post. */
+		__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 		for (i = 0; i < started; i++) {
 			struct cmp_data *tdat = dary[i];
 
@@ -2908,8 +2911,15 @@ perform_compress(void *dat) {
 	pctx = tdat->pctx;
 redo:
 	Sem_Wait(&tdat->start_sem);
-	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED))) {	/* may race the writer's cancel */
-		tdat->len_cmp = 0;
+	if (unlikely(__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED))) {
+		/*
+		 * Shutdown posts cmp_done_sem from the main thread while this
+		 * worker, released by the matching start_sem post, is here, so
+		 * len_cmp is read by the writer and written here with no
+		 * semaphore between: both accesses on the cancel path are
+		 * atomic (the writer short-circuits on cancel anyway).
+		 */
+		__atomic_store_n(&tdat->len_cmp, 0, __ATOMIC_RELAXED);
 		Sem_Post(&tdat->cmp_done_sem);
 		return (0);
 	}
@@ -3319,7 +3329,7 @@ writer_thread(void *dat) {
 	int p;
 	struct wdata *w = (struct wdata *)dat;
 	struct cmp_data *tdat;
-	int64_t wbytes;
+	int64_t wbytes, len_cmp;
 	uint64_t wlen, skip;
 	uchar_t *wbuf;
 	pc_ctx_t *pctx;
@@ -3331,25 +3341,34 @@ repeat:
 		tdat = w->dary[p];
 		Sem_Wait(&tdat->cmp_done_sem);
 		/*
-		 * cancel first: at shutdown the main thread posts cmp_done_sem
-		 * itself, and len_cmp may then still be in a worker's hands.
-		 * Otherwise the post came from the worker and len_cmp is ready.
+		 * Cancel before touching the chunk. At shutdown the main thread
+		 * sets cancel (or main_cancel) and then posts cmp_done_sem
+		 * itself; a worker still finishing an in-flight chunk writes
+		 * len_cmp with no semaphore ordering this read, so this must not
+		 * read len_cmp once either flag is set. A normal chunk's len_cmp
+		 * was published by the worker's own post that this wait acquired,
+		 * so reading it below is ordered.
 		 */
-		if (__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) || tdat->len_cmp == 0) {
+		if (__atomic_load_n(&tdat->cancel, __ATOMIC_RELAXED) ||
+		    __atomic_load_n(&pctx->main_cancel, __ATOMIC_RELAXED))
 			goto do_cancel;
-		}
+		/* Atomic: a cancelled worker may store 0 here (atomically) with
+		 * no semaphore ordering this read when shutdown double-posts. */
+		len_cmp = __atomic_load_n(&tdat->len_cmp, __ATOMIC_RELAXED);
+		if (len_cmp == 0)
+			goto do_cancel;
 
 		if (pctx->do_compress) {
-			if (tdat->len_cmp > pctx->largest_chunk)
-				pctx->largest_chunk = tdat->len_cmp;
-			if (tdat->len_cmp < pctx->smallest_chunk)
-				pctx->smallest_chunk = tdat->len_cmp;
-			pctx->avg_chunk += tdat->len_cmp;
+			if ((uint64_t)len_cmp > pctx->largest_chunk)
+				pctx->largest_chunk = len_cmp;
+			if ((uint64_t)len_cmp < pctx->smallest_chunk)
+				pctx->smallest_chunk = len_cmp;
+			pctx->avg_chunk += len_cmp;
 		}
 
 		/* What to write: all of it, or a random read's part of it. */
 		wbuf = tdat->cmp_seg;
-		wlen = tdat->len_cmp;
+		wlen = len_cmp;
 		if (pctx->sx_mode && tdat->decompressing) {
 			if (sx_clip(pctx, tdat, &skip, &wlen) != 0) {
 				__atomic_store_n(&pctx->t_errored, 1, __ATOMIC_RELAXED);
@@ -4127,6 +4146,9 @@ comp_done:
 		archiver_close(pctx);
 
 	if (thread) {
+		/* Before any cmp_done_sem post: the writer stops without
+		 * reading a chunk a still-running worker is writing. */
+		__atomic_store_n(&pctx->main_cancel, 1, __ATOMIC_RELAXED);
 		for (i = 0; i < started; i++) {
 			tdat = dary[i];
 			__atomic_store_n(&tdat->cancel, 1, __ATOMIC_RELAXED);
