@@ -94,7 +94,7 @@ extern "C" {
 #define	FLAG_SINGLE_CHUNK	4 /**< File flag: entire file in one chunk. */
 #define FLAG_META_STREAM	4096 /**< File flag: metadata streams present. */
 #define	FLAG_ARCHIVE	2048    /**< File flag: archive mode (PAX). */
-#define	UTILITY_VERSION	"4.4.0"   /**< Human-readable utility version string. */
+#define	UTILITY_VERSION	"4.5.0"   /**< Human-readable utility version string. */
 #define	MASK_CRYPTO_ALG	0x30    /**< Bitmask for crypto algorithm in flags. */
 /**
  * The header flag bits of versions 10 to 12 (0x700 is the checksum id,

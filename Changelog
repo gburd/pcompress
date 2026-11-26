@@ -1,4 +1,4 @@
-== Unreleased ==
+== 4.5.0 Release ==
 Change: extracting an archive exits with status 1 (PC_ERR_CORRUPT) if
   a filter (packJPG, packPNM, Dispack, WavPack, -Z) could not decode a
   member. Such a member is still written as stored and listed in
