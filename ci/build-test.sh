@@ -35,7 +35,11 @@ $MAKE --version 2>&1 | head -1
 set -- --disable-wavpack "$@"
 [ -n "${OPENSSL_PREFIX:-}" ] && set -- "$@" --with-openssl="$OPENSSL_PREFIX"
 if [ "${PCOMPRESS_SANITIZE:-0}" = 1 ]; then
-	CFLAGS="${CFLAGS:-} -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+	# -fno-sanitize=function: the bundled LZMA SDK (lzma/) calls through
+	# function pointers whose declared type differs from the target's, a
+	# C idiom clang's UBSan "function" check flags but gcc's does not. It
+	# is vendored and not a real bug, and halt_on_error would abort on it.
+	CFLAGS="${CFLAGS:-} -fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g"
 	LDFLAGS="${LDFLAGS:-} -fsanitize=address,undefined"
 	export CFLAGS LDFLAGS
 	# Configure-time probes (libarchive's autoconf) also link ASan and
